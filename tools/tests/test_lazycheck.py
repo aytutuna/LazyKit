@@ -173,6 +173,11 @@ class LanguageTableTests(unittest.TestCase):
                  "l10n/lang/de.json": json.dumps({"strings": {"One": "Eins"}}), "mac/x": ""}
         self.assertTrue(any("de is missing 1 of 2" in f.text for f in run(files, "languages", "scan")))
 
+    def test_catalog_groups_are_not_texts(self):
+        files = {"l10n/shared.json": json.dumps({"One": {}, "infoplist": {"ios": {"Key": "x"}}}),
+                 "l10n/lang/de.json": json.dumps({"strings": {"One": "Eins"}}), "mac/x": ""}
+        self.assertFalse([f for f in run(files, "languages", "scan") if "missing" in f.text])
+
     def test_malformed_json_is_a_finding_not_a_crash(self):
         found = run({"ios/Localizable.xcstrings": "{nope"}, "languages")
         self.assertTrue(any("cannot read" in f.text for f in found))

@@ -300,7 +300,9 @@ def catalog(repo, found):
         table = tag and repo.json(name, found, "languages")
         if isinstance(table, dict):
             langs[tag] = set(table.get("strings", {}))
-    return set(data), langs
+    # a non-empty value that names no language is a group of texts (Lazy Scan's infoplist), not one text
+    keys = {k for k, v in data.items() if not (isinstance(v, dict) and v and not any(row_for(c, rows) for c in v))}
+    return keys, langs
 
 
 def rule_languages(repo):
