@@ -3,7 +3,7 @@
     python lazycheck.py REPO [REPO ...] [--fail rule,rule] [--report FILE]
 
 Every rule only reports unless it is named in --fail; then a finding makes the exit code 1.
-The app is taken from the folder name (LazyPrint is print); --app overrides it.
+The app is taken from the resolved folder name (LazyPrint is print, alazy is the site); --app overrides it.
 """
 import argparse
 import json
@@ -21,7 +21,9 @@ Finding = namedtuple("Finding", "rule path line text")
 APPS = {"lazyscan": "scan", "lazyprint": "print", "lazypdf": "pdf", "lazysend": "send", "lazycollect": "collect"}
 PORTS = {"scan": 52731, "print": 52732, "pdf": 52733, "send": 52734}
 NOTICE = "Required Notice: Copyright (c) 2026 ALAZY INC. (https://alazy.app)"
-SKIP_DIRS = {".git", ".wt", ".scratch", "node_modules", "Vendor", "build", "out", ".build", "Pods", "bin", "obj", "fonts", "dist"}
+SKIP_DIRS = {".git", ".wt", ".scratch", "node_modules", "Vendor", "fonts"}
+# build output is skipped only when walking an unversioned folder; a tracked l10n/out is real
+BUILD_DIRS = {"build", "out", ".build", "Pods", "bin", "obj", "dist"}
 LANGUAGES = Path(__file__).resolve().parent.parent / "testdata" / "languages.json"
 
 PAGES = {".html", ".resx", ".xcstrings", ".strings", ".plist", ".xaml"}
@@ -30,7 +32,8 @@ CODE = {".swift", ".cs", ".kt", ".ts", ".tsx", ".js"}
 
 class Repo:
     def __init__(self, root, app=None):
-        self.root = Path(root)
+        self.root = Path(root).resolve()
+        self.site = self.root.name.lower() == "alazy" and app is None
         self.app = app or APPS.get(self.root.name.lower())
         self.files = self._list()
 
@@ -41,13 +44,25 @@ class Repo:
             names = [n for n in out.split("\0") if n]
         else:
             names = [p.relative_to(self.root).as_posix() for p in self.root.rglob("*") if p.is_file()]
+            names = [n for n in names if not set(n.split("/")[:-1]) & BUILD_DIRS]
         return sorted(n for n in names if not set(n.split("/")[:-1]) & SKIP_DIRS and (self.root / n).is_file())
 
     def text(self, name):
         path = self.root / name
         if path.stat().st_size > 2_000_000:
             return ""
-        return path.read_text(encoding="utf8", errors="replace")
+        raw = path.read_bytes()
+        if raw.startswith((b"\xff\xfe", b"\xfe\xff")):
+            return raw.decode("utf-16", errors="replace")
+        return raw.decode("utf-8-sig", errors="replace")
+
+    def json(self, name, found, rule):
+        """Parsed JSON, or None after adding a finding when the file cannot be read."""
+        try:
+            return json.loads(self.text(name))
+        except ValueError as e:
+            found.append(Finding(rule, name, 0, f"cannot read: {e}"))
+            return None
 
     def lines(self, name):
         return enumerate(self.text(name).splitlines(), 1)
@@ -58,7 +73,7 @@ class Repo:
 
 def is_test(name):
     low = name.lower()
-    return bool(re.search(r"(^|/)(tests?|fixtures|reports|research_notes)(/|$)|\.tests?/|test\.", low))
+    return bool(re.search(r"(^|/)(tests?|fixtures|reports|research_notes)(/|$)|\.tests?/|(^|[/._-])tests?\.[a-z]+$|tests?\.(swift|kt|cs)$", low))
 
 
 def is_notice(name):
@@ -69,7 +84,7 @@ def is_notice(name):
 def rule_licence(repo):
     names = [n for n in repo.files if re.fullmatch(r"LICENSE(\.md|\.txt)?", n)]
     if not names:
-        return [] if repo.app is None else [Finding("licence", "LICENSE", 0, "no LICENSE file")]
+        return [] if repo.site else [Finding("licence", "LICENSE", 0, "no LICENSE file")]
     text = repo.text(names[0])
     found = []
     if "PolyForm Noncommercial License 1.0.0" not in text:
@@ -475,7 +490,10 @@ def check(root, app=None, only=None):
     found = []
     for rule, fn in CHECKS.items():
         if only is None or rule in only:
-            found += fn(repo)
+            try:
+                found += fn(repo)
+            except Exception as e:
+                found.append(Finding(rule, "", 0, f"rule failed: {type(e).__name__}: {e}"))
     return found
 
 
@@ -513,7 +531,12 @@ def main(argv=None):
     unknown = fail - set(CHECKS)
     if unknown:
         ap.error("unknown rule: " + ", ".join(sorted(unknown)))
-    results = {Path(r).name: check(r, args.app) for r in args.repos}
+    results = {}
+    for r in args.repos:
+        repo = Repo(r, args.app)
+        if repo.app is None and not repo.site:
+            ap.error(f"cannot tell which app {repo.root.name} is; pass --app scan, print, pdf, send or collect")
+        results[repo.root.name] = check(r, args.app)
     text = report(results)
     print(text)
     if args.report:

@@ -111,7 +111,60 @@ class RuleTests(unittest.TestCase):
         self.green({"windows/Directory.Build.props": "<Version>1.0.0</Version>", "ios/project.yml": 'MARKETING_VERSION: "1.0"'}, "version")
 
 
+class RobustnessTests(unittest.TestCase):
+    def test_bom_and_utf16_files_are_read(self):
+        bom = bytes([0xEF, 0xBB, 0xBF])
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp) / "LazyPrint"
+            root.mkdir()
+            (root / "a.xcstrings").write_bytes(bom + xcstrings(en="Hello").encode())
+            (root / "VERSION").write_bytes(bom + b"1.0")
+            (root / "b.strings").write_text('"a" = "b";', encoding="utf-16")
+            repo = lazycheck.Repo(root)
+            self.assertEqual(repo.json("a.xcstrings", [], "x")["sourceLanguage"], "en")
+            self.assertIn("a", repo.text("b.strings"))
+            self.assertEqual(lazycheck.check(root, only={"languages", "version"}), [])
+
+    def test_a_rule_that_raises_is_reported(self):
+        original = lazycheck.CHECKS["contracts"]
+        lazycheck.CHECKS["contracts"] = lambda repo: 1 / 0
+        try:
+            found = run({}, "contracts")
+        finally:
+            lazycheck.CHECKS["contracts"] = original
+        self.assertIn("rule failed", found[0].text)
+
+    def test_names_that_only_end_in_test_are_not_tests(self):
+        self.assertFalse(lazycheck.is_test("server/src/attest.ts"))
+        self.assertFalse(lazycheck.is_test("web/latest.json"))
+        self.assertTrue(lazycheck.is_test("web/src/format.test.ts"))
+        self.assertTrue(lazycheck.is_test("Tests/Foo/BarTests.swift"))
+        self.assertTrue(lazycheck.is_test("windows/LazyPrint.App.Tests/X.cs"))
+
+
 class CommandLineTests(unittest.TestCase):
+    def test_dot_and_worktree_names(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp) / "LazyPrint"
+            root.mkdir()
+            here = Path.cwd()
+            try:
+                import os
+                os.chdir(root)
+                self.assertEqual(lazycheck.Repo(".").app, "print")
+            finally:
+                os.chdir(here)
+            self.assertIsNone(lazycheck.Repo(Path(tmp)).app)
+
+    def test_unknown_app_is_an_error(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp) / "print-slice1"
+            root.mkdir()
+            with contextlib.redirect_stderr(io.StringIO()), self.assertRaises(SystemExit):
+                lazycheck.main([str(root)])
+            with contextlib.redirect_stdout(io.StringIO()):
+                self.assertEqual(lazycheck.main([str(root), "--app", "print"]), 0)
+
     def test_fail_list_sets_the_exit_code(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp) / "LazyPrint"
