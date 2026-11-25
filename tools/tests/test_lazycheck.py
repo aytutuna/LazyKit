@@ -111,6 +111,77 @@ class RuleTests(unittest.TestCase):
         self.green({"windows/Directory.Build.props": "<Version>1.0.0</Version>", "ios/project.yml": 'MARKETING_VERSION: "1.0"'}, "version")
 
 
+class LanguageTableTests(unittest.TestCase):
+    base = '<resources><string name="a">A</string><string name="b">B</string></resources>'
+    part = '<resources><string name="a">A</string></resources>'
+    res = "android/app/src/main/res/"
+
+    def test_android_standard_folder_is_compared(self):
+        files = {self.res + "values/strings.xml": self.base, self.res + "values-tr/strings.xml": self.part}
+        found = run(files, "languages")
+        self.assertTrue(any("missing 1 of 2" in f.text for f in found), found)
+
+    def test_android_bplus_folder_is_compared(self):
+        files = {self.res + "values/strings.xml": self.base, self.res + "values-b+tr/strings.xml": self.part}
+        self.assertTrue(any("missing 1 of 2" in f.text for f in run(files, "languages")))
+
+    def test_android_complete_table_is_green(self):
+        files = {self.res + "values/strings.xml": self.base, self.res + "values-tr/strings.xml": self.base}
+        self.assertEqual(run(files, "languages"), [])
+
+    def test_android_old_hebrew_code_and_other_qualifiers(self):
+        files = {self.res + "values/strings.xml": self.base, self.res + "values-iw/strings.xml": self.base,
+                 self.res + "values-car/strings.xml": self.part, self.res + "values-night/strings.xml": self.part}
+        found = run(files, "languages")
+        self.assertFalse([f for f in found if "unknown" in f.text or "missing" in f.text], found)
+
+    def test_legacy_chinese_folder_is_a_known_language(self):
+        files = {self.res + "values/strings.xml": self.base, self.res + "values-zh-rTW/strings.xml": self.base}
+        self.assertFalse([f for f in run(files, "languages") if "unknown" in f.text])
+
+    def test_base_lproj_is_not_a_language(self):
+        self.assertEqual(run({"ios/Base.lproj/Main.strings": '"a" = "A";'}, "languages"), [])
+
+    def test_resx_behind_its_base(self):
+        base = '<root><data name="a"/><data name="b"/></root>'
+        found = run({"windows/Core/Strings.resx": base, "windows/Core/Strings.tr.resx": '<root><data name="a"/></root>'}, "languages")
+        self.assertTrue(any("missing 1 of 2" in f.text for f in found), found)
+
+    def test_resx_with_an_empty_base_is_not_complete_or_wrong(self):
+        found = run({"windows/Core/Strings.resx": "<root/>", "windows/Core/Strings.tr.resx": '<root><data name="a"/></root>'}, "languages")
+        self.assertFalse([f for f in found if "missing" in f.text])
+
+    def test_strings_file_behind_its_base(self):
+        files = {"ios/en.lproj/Kit.strings": '"a" = "A";\n"b" = "B";\n', "ios/tr.lproj/Kit.strings": '"a" = "A";\n'}
+        self.assertTrue(any("missing 1 of 2" in f.text for f in run(files, "languages")))
+
+    def test_web_table_behind_en(self):
+        files = {"web/src/i18n/en.json": '{"a": "A", "b": "B"}', "web/src/i18n/fr-CA.json": '{"a": "A"}'}
+        self.assertTrue(any("missing 1 of 2" in f.text for f in run(files, "languages", "collect")))
+        files["web/src/i18n/fr-CA.json"] = '{"a": "A", "b": "B"}'
+        self.assertFalse([f for f in run(files, "languages", "collect") if "missing" in f.text])
+
+    def test_catalog_with_languages_per_key(self):
+        shared = json.dumps({"One": {"tr": "Bir"}, "Two": {}})
+        files = {"l10n/shared.json": shared, "ios/App.xcassets/x": "", "android/app/src/main/res/values/strings.xml": self.base}
+        found = run(files, "languages", "pdf")
+        self.assertTrue(any("tr is missing 1 of 2" in f.text for f in found), found)
+        self.assertTrue(any(f.path == "android" and "tr" in f.text for f in found), found)
+
+    def test_catalog_with_language_files(self):
+        files = {"l10n/shared.json": json.dumps({"One": {}, "Two": {}}),
+                 "l10n/lang/de.json": json.dumps({"strings": {"One": "Eins"}}), "mac/x": ""}
+        self.assertTrue(any("de is missing 1 of 2" in f.text for f in run(files, "languages", "scan")))
+
+    def test_malformed_json_is_a_finding_not_a_crash(self):
+        found = run({"ios/Localizable.xcstrings": "{nope"}, "languages")
+        self.assertTrue(any("cannot read" in f.text for f in found))
+
+    def test_spelling_reads_the_catalog_keys(self):
+        self.assertTrue(run({"l10n/shared.json": json.dumps({"The scan was cancelled.": {}})}, "spelling"))
+        self.assertEqual(run({"l10n/shared.json": json.dumps({"The scan was canceled.": {}})}, "spelling"), [])
+
+
 class RobustnessTests(unittest.TestCase):
     def test_bom_and_utf16_files_are_read(self):
         bom = bytes([0xEF, 0xBB, 0xBF])

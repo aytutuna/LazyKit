@@ -180,23 +180,38 @@ def rule_accent(repo):
     return found
 
 
+ALIASES = {"in": "id", "iw": "he", "ji": "yi", "jw": "jv"}
+CHINESE = {"zh-CN": "zh-Hans", "zh-SG": "zh-Hans", "zh-TW": "zh-Hant", "zh-HK": "zh-Hant", "zh-MO": "zh-Hant"}
+_rows = []
+
+
 def lang_rows():
-    return json.loads(LANGUAGES.read_text(encoding="utf8"))
+    if not _rows:
+        _rows.extend(json.loads(LANGUAGES.read_text(encoding="utf8")))
+    return _rows
 
 
 def row_for(code, rows):
+    code = ALIASES.get(code, code)
+    code = CHINESE.get(code, code)
     for r in rows:
         if code in (r["apple"], r["web"], r["windows"]) or code == r["android"]:
             return r["web"]
     return None
 
 
+def is_language(code):
+    first = code.split("-")[0]
+    return ALIASES.get(first, first) in {r["web"].split("-")[0] for r in lang_rows()}
+
+
 def android_tag(folder):
+    """The language a values folder holds, or None when it is some other qualifier (night, car, v26)."""
     m = re.fullmatch(r"values-b\+([A-Za-z0-9+]+)", folder)
     if m:
         return m.group(1).replace("+", "-")
     m = re.fullmatch(r"values-([a-z]{2,3})(?:-r([A-Z]{2}))?", folder)
-    if m and m.group(1) not in ("night", "land", "port"):
+    if m and is_language(m.group(1)):
         return m.group(1) + ("-" + m.group(2) if m.group(2) else "")
     return None
 
@@ -207,6 +222,34 @@ def xml_names(text):
 
 def resx_names(text):
     return {m.group(1) for m in re.finditer(r'<data\s+name="([^"]+)"', text)}
+
+
+def strings_keys(text):
+    return set(re.findall(r'^\s*"((?:[^"\\]|\\.)*)"\s*=', text, re.M))
+
+
+def catalog(repo, found):
+    """Lazy Scan and Lazy PDF keep their texts in l10n/shared.json (and l10n/lang/*.json); the tables
+    the apps load are made from it at build time. Returns (English keys, {tag: keys translated}) or None."""
+    if "l10n/shared.json" not in repo.files:
+        return None
+    data = repo.json("l10n/shared.json", found, "languages")
+    if not isinstance(data, dict):
+        return None
+    rows = lang_rows()
+    langs = {}
+    for key, value in data.items():
+        for code in value if isinstance(value, dict) else ():
+            tag = row_for(code, rows)
+            if tag:
+                langs.setdefault(tag, set()).add(key)
+    for name in repo.files:
+        m = re.fullmatch(r"l10n/lang/([A-Za-z-]+)\.json", name)
+        tag = m and row_for(m.group(1), rows)
+        table = tag and repo.json(name, found, "languages")
+        if isinstance(table, dict):
+            langs[tag] = set(table.get("strings", {}))
+    return set(data), langs
 
 
 def rule_languages(repo):
@@ -224,10 +267,10 @@ def rule_languages(repo):
     for name in repo.files:
         parts = name.split("/")
         for p in parts[:-1]:
-            if p.endswith(".lproj"):
+            if p.endswith(".lproj") and p != "Base.lproj":
                 add("apple", p[:-6], name)
         if name.endswith(".xcstrings"):
-            data = json.loads(repo.text(name))
+            data = repo.json(name, found, "languages") or {}
             for code in {c for v in data.get("strings", {}).values() for c in v.get("localizations", {})}:
                 add("apple", code, name)
         if name.endswith("/strings.xml") and len(parts) > 1 and parts[-2].startswith("values"):
@@ -235,27 +278,39 @@ def rule_languages(repo):
             if tag:
                 add("android", tag, name)
         m = re.fullmatch(r"(.+)\.([a-z]{2,3}(?:-[A-Za-z0-9]+)?)\.resx", Path(name).name)
-        if m and not name.startswith("l10n/"):
+        if m and is_language(m.group(2)):
             add("windows", m.group(2), name)
         if re.search(r"i18n/[A-Za-z-]+\.json$", name):
             add("web", Path(name).stem, name)
 
-    base = {"apple": any(n.endswith(".xcstrings") or ".lproj/" in n for n in repo.files),
+    made = catalog(repo, found)
+    made_langs = set(made[1]) if made else set()
+    base = {"apple": any(n.endswith(".xcstrings") or ".lproj/" in n for n in repo.files)
+            or bool(made and any(n.startswith(("ios/", "mac/")) for n in repo.files)),
             "android": any(n.endswith("res/values/strings.xml") for n in repo.files),
             "windows": any(re.search(r"/Strings\.resx$", n) for n in repo.files),
             "web": any(n.endswith("i18n/en.json") for n in repo.files)}
     shipped = {}
     for platform, present in base.items():
         if present:
-            shipped[platform] = set(platforms.get(platform, {})) | {"en-US"}
+            extra = made_langs if platform in ("apple", "windows") else set()
+            shipped[platform] = set(platforms.get(platform, {})) | extra | {"en-US"}
     union = set().union(*shipped.values()) if shipped else set()
     for platform, langs in shipped.items():
         for tag in sorted(union - langs):
             found.append(Finding("languages", platform, 0, f"{platform} does not ship {tag}"))
 
+    if made:
+        keys, langs = made
+        for tag, have in sorted(langs.items()):
+            missing = sorted(keys - have)
+            if missing:
+                found.append(Finding("languages", "l10n/shared.json", 0, f"{tag} is missing {len(missing)} of {len(keys)} texts, first: {missing[0][:60]}"))
     found += complete_xcstrings(repo, shipped.get("apple", set()))
-    found += complete_android(repo, shipped.get("android", set()))
-    found += complete_resx(repo, shipped.get("windows", set()))
+    found += complete_android(repo)
+    found += complete_resx(repo)
+    found += complete_strings(repo)
+    found += complete_web(repo)
     return found
 
 
@@ -265,48 +320,76 @@ def complete_xcstrings(repo, shipped):
     for name in repo.files:
         if not name.endswith(".xcstrings"):
             continue
-        strings = json.loads(repo.text(name)).get("strings", {})
+        strings = (repo.json(name, [], "languages") or {}).get("strings", {})
         base = {k for k, v in strings.items() if k and v.get("shouldTranslate", True)}
         for tag in sorted(shipped - {"en-US"}):
             apple = next(r["apple"] for r in rows if r["web"] == tag)
-            missing = sorted(k for k in base if not strings[k].get("localizations", {}).get(apple, {}).get("stringUnit", {}).get("value")
-                             and not strings[k].get("localizations", {}).get(apple, {}).get("variations"))
+            def done(v):
+                loc = v.get("localizations", {}).get(apple, {})
+                return loc.get("stringUnit", {}).get("value") or loc.get("variations")
+            missing = sorted(k for k in base if not done(strings[k]))
             if missing:
                 found.append(Finding("languages", name, 0, f"{apple} is missing {len(missing)} of {len(base)} texts, first: {missing[0][:60]}"))
     return found
 
 
-def complete_android(repo, shipped):
+def complete_android(repo):
     found = []
-    rows = lang_rows()
     for name in repo.files:
-        if not name.endswith("res/values/strings.xml"):
+        parts = name.split("/")
+        if parts[-1] != "strings.xml" or len(parts) < 2 or parts[-2] == "values" or not android_tag(parts[-2]):
             continue
-        base = xml_names(repo.text(name))
-        for tag in sorted(shipped - {"en-US"}):
-            folder = next(r["android"] for r in rows if r["web"] == tag)
-            other = name.replace("/values/", "/" + folder + "/")
-            if other not in repo.files:
-                continue
-            missing = sorted(base - xml_names(repo.text(other)))
-            if missing:
-                found.append(Finding("languages", other, 0, f"missing {len(missing)} of {len(base)} texts, first: {missing[0]}"))
+        base_name = "/".join(parts[:-2] + ["values", "strings.xml"])
+        if base_name not in repo.files:
+            continue
+        base = xml_names(repo.text(base_name))
+        missing = sorted(base - xml_names(repo.text(name)))
+        if missing:
+            found.append(Finding("languages", name, 0, f"missing {len(missing)} of {len(base)} texts, first: {missing[0]}"))
     return found
 
 
-def complete_resx(repo, shipped):
+def complete_resx(repo):
     found = []
     for name in repo.files:
-        if not re.search(r"/Strings\.resx$", name):
+        m = re.fullmatch(r"(.+)\.([a-z]{2,3}(?:-[A-Za-z0-9]+)?)\.resx", name)
+        if not m or not is_language(m.group(2)) or m.group(1) + ".resx" not in repo.files:
             continue
-        base = resx_names(repo.text(name))
-        for tag in sorted(shipped - {"en-US"}):
-            other = name[:-5] + "." + tag + ".resx"
-            if other not in repo.files:
-                continue
-            missing = sorted(base - resx_names(repo.text(other)))
+        base = resx_names(repo.text(m.group(1) + ".resx"))
+        missing = sorted(base - resx_names(repo.text(name)))
+        if base and missing:
+            found.append(Finding("languages", name, 0, f"missing {len(missing)} of {len(base)} texts, first: {missing[0]}"))
+    return found
+
+
+def complete_strings(repo):
+    found = []
+    for name in repo.files:
+        m = re.fullmatch(r"(.+)/([^/]+)\.lproj/([^/]+\.strings)", name)
+        if not m or m.group(2) in ("en", "Base"):
+            continue
+        base_name = next((f"{m.group(1)}/{b}.lproj/{m.group(3)}" for b in ("en", "Base") if f"{m.group(1)}/{b}.lproj/{m.group(3)}" in repo.files), None)
+        if not base_name:
+            continue
+        base = strings_keys(repo.text(base_name))
+        missing = sorted(base - strings_keys(repo.text(name)))
+        if missing:
+            found.append(Finding("languages", name, 0, f"missing {len(missing)} of {len(base)} texts, first: {missing[0][:60]}"))
+    return found
+
+
+def complete_web(repo):
+    found = []
+    for name in repo.files:
+        m = re.fullmatch(r"(.*i18n)/([A-Za-z-]+)\.json", name)
+        if not m or m.group(2) == "en" or m.group(1) + "/en.json" not in repo.files:
+            continue
+        base = repo.json(m.group(1) + "/en.json", found, "languages")
+        table = repo.json(name, found, "languages")
+        if isinstance(base, dict) and isinstance(table, dict):
+            missing = sorted(set(base) - set(table))
             if missing:
-                found.append(Finding("languages", other, 0, f"missing {len(missing)} of {len(base)} texts, first: {missing[0]}"))
+                found.append(Finding("languages", name, 0, f"missing {len(missing)} of {len(base)} texts, first: {missing[0]}"))
     return found
 
 
@@ -327,8 +410,11 @@ def english_texts(repo):
         if name.endswith("res/values/strings.xml") or re.search(r"/Strings\.resx$", name) or name.endswith("i18n/en.json"):
             for no, line in repo.lines(name):
                 yield name, no, line
+        elif name == "l10n/shared.json":
+            for key in (repo.json(name, [], "spelling") or {}):
+                yield name, 0, key
         elif ext == ".xcstrings":
-            strings = json.loads(repo.text(name)).get("strings", {})
+            strings = (repo.json(name, [], "spelling") or {}).get("strings", {})
             for key, v in strings.items():
                 yield name, 0, key
                 for code, loc in v.get("localizations", {}).items():
