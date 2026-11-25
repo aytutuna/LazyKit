@@ -8,5 +8,5 @@
     "skipLibCheck": true,
     "types": ["@cloudflare/workers-types", "node"]
   },
-  "include": ["src", "test"]
+  "include": ["src", "test", "node_modules/@cloudflare/vitest-plugin/types/cloudflare-test.d.ts"]
 }
