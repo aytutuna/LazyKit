@@ -28,6 +28,10 @@ class LanguageTests(unittest.TestCase):
         for r in self.rows:
             self.assertTrue(r["android"] == "values" or r["android"].startswith("values-b+"), r)
 
+    def test_android_uses_the_old_codes_for_hebrew_and_indonesian(self):
+        folders = {r["apple"]: r["android"] for r in self.rows}
+        self.assertEqual((folders["he"], folders["id"]), ("values-iw", "values-in"))
+
     def test_right_to_left(self):
         self.assertEqual({r["apple"] for r in self.rows if r["rtl"]}, {"ar", "he", "ur"})
 
@@ -37,6 +41,9 @@ class LanguageTests(unittest.TestCase):
             if term.get("keep"):
                 continue
             self.assertEqual(set(term["tr"]), WAVE_1, term["id"])
+            if term["id"] in ("share", "open-with", "settings", "quit"):
+                for words in term["tr"].values():
+                    self.assertEqual(set(words), {"windows", "apple", "android"}, term["id"])
 
 
 if __name__ == "__main__":
