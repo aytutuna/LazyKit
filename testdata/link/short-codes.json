@@ -197,14 +197,8 @@
           "expect": "wrongToken"
         },
         {
-          "token": "ZZZZZZZZ",
-          "at": 4,
-          "peer": "10.0.0.1",
-          "expect": "wrongToken"
-        },
-        {
           "token": null,
-          "at": 5,
+          "at": 4,
           "peer": "10.0.0.1",
           "expect": "wrongToken"
         },

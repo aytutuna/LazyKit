@@ -318,9 +318,9 @@
       "body": ""
     },
     {
-      "name": "the offset as text",
+      "name": "the offset as a list",
       "type": "ItemState",
-      "body": "{\"id\":\"item-0001-abcd\",\"offset\":\"10\",\"done\":false}"
+      "body": "{\"id\":\"item-0001-abcd\",\"offset\":[10],\"done\":false}"
     },
     {
       "name": "a list instead of an object",
