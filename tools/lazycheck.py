@@ -533,16 +533,24 @@ def rule_wf_download(repo):
 
 
 GUARD = re.compile(r"require_green_main|check_main_green|--status\s+success")
+UPLOAD = re.compile(r"altool|-exportArchive|upload-testflight|upload_to_testflight|upload_to_play_store|upload-google-play|"
+                    r"publishBundle|publishReleaseBundle|r0adkll")
+
+
+def live_text(repo, name):
+    return "\n".join(l for l in repo.text(name).splitlines() if not l.lstrip().startswith("#"))
 
 
 def rule_upload_guard(repo):
     found = []
     for name in workflows(repo):
-        base = Path(name).name
-        text = repo.text(name)
-        uploads = re.search(r"testflight|macappstore|appstore|playstore", base) or re.search(r"altool|-exportArchive|upload-testflight", text)
-        if uploads and not GUARD.search(text):
-            found.append(Finding("upload-guard", name, 0, "uploads to a store with no green-main check"))
+        body = live_text(repo, name)
+        upload = UPLOAD.search(body)
+        if not (upload or re.search(r"testflight|macappstore|appstore|playstore", Path(name).name)):
+            continue
+        guard = GUARD.search(body)
+        if not guard or (upload and guard.start() > upload.start()):
+            found.append(Finding("upload-guard", name, 0, "uploads to a store with no green-main check before it"))
     return found
 
 
@@ -551,9 +559,14 @@ def rule_store_x64(repo):
     for name in workflows(repo):
         if Path(name).name in ("ci.yml", "ci.yaml"):
             continue
-        for no, line in repo.lines(name):
-            if re.search(r"-Arm64\b", line) and not line.lstrip().startswith("#"):
-                found.append(Finding("store-x64", name, no, "arm64 goes into a Store package"))
+        for line in live_text(repo, name).splitlines():
+            if re.search(r"-Arm64\b|-Arch\b[^\n]*arm64", line, re.I):
+                found.append(Finding("store-x64", name, 0, "arm64 goes into a Store package"))
+    for name in repo.files:
+        if name.endswith("scripts/make_msix.ps1"):
+            for no, line in repo.lines(name):
+                if re.search(r"\$Arch\b[^\n]*=[^\n]*arm64", line, re.I) and not line.lstrip().startswith("#"):
+                    found.append(Finding("store-x64", name, no, "the script packs arm64 by default"))
     return found
 
 

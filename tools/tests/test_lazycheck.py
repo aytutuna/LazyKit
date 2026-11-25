@@ -242,6 +242,35 @@ class TextRuleTests(unittest.TestCase):
             self.assertTrue(any("no accent found" in f.text for f in found), path)
 
 
+class WorkflowRuleTests(unittest.TestCase):
+    def test_guard_in_a_comment_does_not_count(self):
+        wf = "# TODO call scripts/check_main_green.sh\nsteps:\n  - run: xcodebuild -exportArchive\n"
+        self.assertTrue(run({".github/workflows/testflight.yml": wf}, "upload-guard"))
+
+    def test_guard_after_the_upload_does_not_count(self):
+        wf = "steps:\n  - run: xcodebuild -exportArchive\n  - run: scripts/check_main_green.sh\n"
+        self.assertTrue(run({".github/workflows/testflight.yml": wf}, "upload-guard"))
+
+    def test_play_and_fastlane_uploads_need_a_guard(self):
+        for text in ("- uses: r0adkll/upload-google-play@v1", "- run: ./gradlew publishBundle", "- run: fastlane upload_to_testflight"):
+            self.assertTrue(run({".github/workflows/android.yml": "steps:\n  " + text + "\n"}, "upload-guard"), text)
+        self.assertEqual(run({".github/workflows/android.yml": "steps:\n  - run: gh run list --status success\n  - run: ./gradlew publishBundle\n"}, "upload-guard"), [])
+
+    def test_arch_list_with_arm64(self):
+        self.assertTrue(run({".github/workflows/release.yml": "steps:\n  - run: ./make_msix.ps1 -Arch x64,arm64\n"}, "store-x64"))
+        self.assertTrue(run({".github/workflows/release.yml": "steps:\n  - run: ./make_msix.ps1 -arm64 out\n"}, "store-x64"))
+        self.assertEqual(run({".github/workflows/release.yml": "steps:\n  - run: ./make_msix.ps1 -Arch x64\n"}, "store-x64"), [])
+
+    def test_script_default_with_arm64(self):
+        script = "param(\n    [string[]] $Arch = @('x64', 'arm64')\n)\n"
+        self.assertTrue(run({"scripts/make_msix.ps1": script}, "store-x64"))
+        self.assertEqual(run({"scripts/make_msix.ps1": script.replace(", 'arm64'", "")}, "store-x64"), [])
+
+    def test_contracts_and_downloads_have_green_cases(self):
+        self.assertEqual(run({"README.md": "x"}, "contracts"), [])
+        self.assertEqual(run({".github/workflows/ci.yml": "steps:\n  - run: dotnet test\n"}, "wf-download"), [])
+
+
 class RobustnessTests(unittest.TestCase):
     def test_bom_and_utf16_files_are_read(self):
         bom = bytes([0xEF, 0xBB, 0xBF])
