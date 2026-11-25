@@ -182,6 +182,66 @@ class LanguageTableTests(unittest.TestCase):
         self.assertEqual(run({"l10n/shared.json": json.dumps({"The scan was canceled.": {}})}, "spelling"), [])
 
 
+def colorset(red, green, blue, dark=None):
+    def entry(r, g, b, appearance):
+        e = {"color": {"color-space": "srgb", "components": {"red": r, "green": g, "blue": b, "alpha": "1.000"}}}
+        if appearance:
+            e["appearances"] = [{"appearance": "luminosity", "value": "dark"}]
+        return e
+    colors = [entry(red, green, blue, False)]
+    if dark:
+        colors.append(entry(*dark, True))
+    return json.dumps({"colors": colors})
+
+
+class TextRuleTests(unittest.TestCase):
+    def test_publisher_in_build_files_and_literals(self):
+        self.assertTrue(run({"windows/Directory.Build.props": "<Copyright>Copyright (c) 2026 Aytu</Copyright>"}, "publisher"))
+        self.assertTrue(run({"ios/project.yml": "NSHumanReadableCopyright: Copyright 2026 Aytu"}, "publisher"))
+        self.assertTrue(run({"web/src/i18n/en.json": '{"a": "© 2026 Someone"}'}, "publisher"))
+        self.assertTrue(run({"Sources/About.swift": 'Text("© 2026 Aytu")'}, "publisher"))
+        self.assertEqual(run({"Sources/About.swift": "// Copyright (c) 2026 Somebody Else"}, "publisher"), [])
+        self.assertEqual(run({"windows/Directory.Build.props": "<Copyright>Copyright (c) 2026 ALAZY INC.</Copyright>"}, "publisher"), [])
+
+    def test_source_code_is_published_line(self):
+        self.assertTrue(run({"site/terms.html": "<p>The source code of Lazy Collect is published under the PolyForm licence.</p>"}, "open-source"))
+        self.assertEqual(run({"site/terms.html": "<p>You can read the terms below.</p>"}, "open-source"), [])
+
+    def test_open_source_with_a_named_third_party_licence_is_allowed(self):
+        self.assertEqual(run({"site/privacy.html": "<p>an open-source model (DocAligner, Apache-2.0)</p>"}, "open-source"), [])
+        self.assertTrue(run({"android/res/values/strings.xml": "<string name=\"a\">Free and open source</string>"}, "open-source"))
+
+    def test_accent_in_a_html_style_block(self):
+        page = "<style>:root { --accent: #006B82; }</style>"
+        self.assertTrue(run({"public/scan/index.html": page}, "accent", None))
+
+    def test_accent_colorset(self):
+        good = colorset("0.047", "0.525", "0.416", dark=("0.055", "0.624", "0.494"))
+        self.assertTrue(run({"ios/A/Assets.xcassets/AccentColor.colorset/Contents.json": colorset("0.1", "0.4", "0.7")}, "accent"))
+        self.assertEqual(run({"ios/A/Assets.xcassets/AccentColor.colorset/Contents.json": good}, "accent"), [])
+
+    def test_accent_colorset_hex_and_integer_forms(self):
+        hexed = colorset("0x0C", "0x86", "0x6A", dark=("0x0E", "0x9F", "0x7E"))
+        self.assertEqual(run({"ios/A/Assets.xcassets/AccentColor.colorset/Contents.json": hexed}, "accent"), [])
+        ints = colorset("12", "134", "106")
+        found = run({"ios/A/Assets.xcassets/AccentColor.colorset/Contents.json": ints}, "accent")
+        self.assertFalse([f for f in found if "light" in f.text])
+
+    def test_accent_in_a_compose_theme(self):
+        theme = "val Light = lightColorScheme(primary = Color(0xFF3F51B5))\nval Dark = darkColorScheme(primary = Color(0xFF0E9F7E))"
+        found = run({"android/app/Theme.kt": theme}, "accent")
+        self.assertEqual([f.text.split()[1] for f in found], ["light"])
+
+    def test_accent_in_a_xaml_resource(self):
+        self.assertTrue(run({"windows/App/Colors.xaml": '<Color x:Key="AppAccent">#112233</Color>'}, "accent"))
+        self.assertEqual(run({"windows/App/Colors.xaml": '<Color x:Key="AppAccent">#0C866A</Color>'}, "accent"), [])
+
+    def test_a_platform_without_an_accent_is_a_gap(self):
+        for path in ("ios/x.txt", "android/x.txt", "windows/x.txt"):
+            found = run({path: ""}, "accent")
+            self.assertTrue(any("no accent found" in f.text for f in found), path)
+
+
 class RobustnessTests(unittest.TestCase):
     def test_bom_and_utf16_files_are_read(self):
         bom = bytes([0xEF, 0xBB, 0xBF])

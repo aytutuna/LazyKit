@@ -96,6 +96,11 @@ def rule_licence(repo):
 
 COPYRIGHT = re.compile(r"(©|&copy;|\(c\)|copyright)\s*(\(c\)|©)?\s*(19|20)\d\d", re.I)
 PERSON = re.compile(r"Aytu Tuna|sole proprietor\b", re.I)
+COPYRIGHT_TYPES = PAGES | {".props", ".csproj", ".xml", ".yml"}
+
+
+def is_i18n(name):
+    return bool(re.search(r"i18n/[A-Za-z-]+\.json$", name))
 
 
 def rule_publisher(repo):
@@ -104,20 +109,24 @@ def rule_publisher(repo):
         ext = repo.ext(name)
         if is_test(name) or (is_notice(name) and name != "LICENSE"):
             continue
-        copyright_files = ext in PAGES or name in ("LICENSE", "README.md")
+        copyright_files = ext in COPYRIGHT_TYPES or name in ("LICENSE", "README.md") or is_i18n(name)
         if not (copyright_files or ext in CODE):
             continue
         for no, line in repo.lines(name):
-            if PERSON.search(line) or (ext == ".html" and re.search(r"\bAytu\b", line)):
-                found.append(Finding("publisher", name, no, line.strip()[:120]))
-            elif copyright_files and COPYRIGHT.search(line) and "ALAZY INC." not in line:
+            hit = PERSON.search(line) or (ext == ".html" and re.search(r"\bAytu\b", line))
+            if not hit and COPYRIGHT.search(line) and "ALAZY INC." not in line:
+                # in code only a string literal is shown to people; a header comment is not
+                hit = copyright_files or re.search(r"[\"']", line)
+            if hit:
                 found.append(Finding("publisher", name, no, line.strip()[:120]))
     return found
 
 
 OPEN_SOURCE = re.compile(r"open[- ]source", re.I)
 NOT_OPEN = re.compile(r"(not|never|isn.t|no)\s+(an?\s+)?open[- ]source", re.I)
-SOURCE_LINE = re.compile(r"github\.com/aytutuna|source[- ]available|view (the )?source", re.I)
+THIRD_PARTY = re.compile(r"\b(Apache|MIT|BSD|MPL|LGPL|GPL|ISC)\b")
+SOURCE_LINE = re.compile(r"github\.com/aytutuna|source[- ]available|view (the )?source|"
+                         r"source code\b[^.<]{0,80}\b(is|are)\s+(published|available|open)", re.I)
 
 
 def rule_open_source(repo):
@@ -126,13 +135,13 @@ def rule_open_source(repo):
         ext = repo.ext(name)
         if is_test(name) or is_notice(name):
             continue
-        docs = ext in PAGES or ext in (".md", ".txt")
+        docs = ext in PAGES or ext in (".md", ".txt", ".xml") or is_i18n(name)
         if not (docs or ext in CODE):
             continue
         for no, line in repo.lines(name):
-            if docs and OPEN_SOURCE.search(line) and not NOT_OPEN.search(line):
+            if docs and OPEN_SOURCE.search(line) and not NOT_OPEN.search(line) and not THIRD_PARTY.search(line):
                 found.append(Finding("open-source", name, no, line.strip()[:120]))
-            elif ext != ".md" and ext != ".txt" and SOURCE_LINE.search(line):
+            elif ext not in (".md", ".txt") and SOURCE_LINE.search(line):
                 found.append(Finding("open-source", name, no, line.strip()[:120]))
     return found
 
@@ -148,9 +157,18 @@ def close(a, b, tol=0):
     return all(abs(x - y) <= tol for x, y in zip(contrast.to_rgb(a), contrast.to_rgb(b)))
 
 
+def component(value):
+    """One colorset component: 0-1 float, 0-255 integer or 0x hex."""
+    text = str(value).strip()
+    if text.lower().startswith("0x"):
+        return int(text, 16)
+    return round(float(text) * 255) if "." in text else int(text)
+
+
 def rule_accent(repo):
     table = expected_accents()
     found = []
+    seen = set()
 
     def check(name, no, app, mode, value, tol=0):
         want = table.get(app, {}).get(mode)
@@ -159,24 +177,57 @@ def rule_accent(repo):
 
     for name in repo.files:
         ext = repo.ext(name)
-        if ext == ".css":
+        if ext in (".css", ".html"):
             app = repo.app
             parts = name.split("/")
             if app is None and len(parts) > 2 and parts[0] == "public":
                 app = parts[1]
             dark = False
             for no, line in repo.lines(name):
-                if "prefers-color-scheme: dark" in line:
+                if re.search(r"prefers-color-scheme:\s*dark", line):
                     dark = True
                 m = re.search(r"--accent:\s*(#[0-9a-fA-F]{6})\b", line)
                 if m and app:
+                    seen.add("web")
                     check(name, no, app, "dark" if dark else "light", m.group(1))
         elif name.endswith("AccentColor.colorset/Contents.json") and repo.app:
-            for entry in json.loads(repo.text(name)).get("colors", []):
-                c = entry["color"]["components"]
-                value = "#%02X%02X%02X" % tuple(round(float(c[k]) * 255) for k in ("red", "green", "blue"))
-                mode = "dark" if "appearances" in entry else "light"
-                check(name, 0, repo.app, mode, value, tol=1)
+            seen.add("apple")
+            for entry in (repo.json(name, found, "accent") or {}).get("colors", []):
+                try:
+                    c = entry["color"]["components"]
+                    value = "#%02X%02X%02X" % tuple(component(c[k]) for k in ("red", "green", "blue"))
+                except (KeyError, ValueError, TypeError):
+                    found.append(Finding("accent", name, 0, "colorset entry cannot be read"))
+                    continue
+                check(name, 0, repo.app, "dark" if "appearances" in entry else "light", value, tol=1)
+        elif ext == ".kt" and repo.app and not is_test(name):
+            mode = None
+            for no, line in repo.lines(name):
+                scheme = re.search(r"(light|dark)ColorScheme", line)
+                if scheme:
+                    mode = scheme.group(1)
+                m = re.search(r"\bprimary\s*=\s*Color\(0x[0-9A-Fa-f]{2}([0-9A-Fa-f]{6})\)", line)
+                if m and mode:
+                    seen.add("android")
+                    check(name, no, repo.app, mode, "#" + m.group(1))
+        elif ext == ".xaml" and repo.app and not is_test(name):
+            for no, line in repo.lines(name):
+                m = re.search(r"x:Key=\"[^\"]*Accent[^\"]*\"[^#]*#([0-9A-Fa-f]{6})\b", line) or \
+                    re.search(r"#([0-9A-Fa-f]{6})\b[^#]*x:Key=\"[^\"]*Accent", line)
+                if m and "SystemColors" not in line:
+                    seen.add("windows")
+                    want = table.get(repo.app, {})
+                    if want and not any(close("#" + m.group(1), v) for v in want.values()):
+                        found.append(Finding("accent", name, no, f"{repo.app} accent is #{m.group(1).upper()}, table says {want['light']} / {want['dark']}"))
+
+    if repo.app:
+        for dirs, platform, where in ((("ios/", "mac/"), "apple", "an AccentColor colorset"),
+                                      (("android/",), "android", "a primary color in the Compose theme"),
+                                      (("windows/",), "windows", "an accent resource in XAML")):
+            if platform not in seen and any(n.startswith(dirs) for n in repo.files):
+                found.append(Finding("accent", dirs[0], 0, f"no accent found for {platform}: expected {where}"))
+        if repo.app == "collect" and "web" not in seen:
+            found.append(Finding("accent", "web/", 0, "no accent found for the web app"))
     return found
 
 
