@@ -26,7 +26,7 @@ class LanguageTests(unittest.TestCase):
 
     def test_android_folders(self):
         for r in self.rows:
-            self.assertTrue(r["android"] == "values" or r["android"].startswith("values-b+"), r)
+            self.assertTrue(r["android"] == "values" or r["android"].startswith(("values-b+", "values-iw", "values-in")), r)
 
     def test_android_uses_the_old_codes_for_hebrew_and_indonesian(self):
         folders = {r["apple"]: r["android"] for r in self.rows}
