@@ -1,0 +1,18 @@
+[package]
+name = "lazy-link-wasm"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license-file.workspace = true
+publish.workspace = true
+
+[lib]
+crate-type = ["cdylib"]
+
+[dependencies]
+js-sys = "0.3"
+lazy-link = { path = "../lazy-link" }
+sha2 = "0.10"
+# The wasm-bindgen CLI has to be the same release as this crate.
+wasm-bindgen = "=0.2.130"
+wasm-bindgen-futures = "0.4"
