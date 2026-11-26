@@ -1,4 +1,5 @@
 use crate::corners::SURE_CONFIDENCE;
+use crate::detector::Line;
 use crate::geometry::{Point, Quad};
 use lazy_image::{Rgba, minified};
 
@@ -35,13 +36,6 @@ pub struct Field {
     diagonal: f64,
 }
 
-#[derive(Clone, Copy)]
-struct Line {
-    nx: f64,
-    ny: f64,
-    rho: f64,
-}
-
 // JS Math.round: halves go up
 fn round(v: f64) -> f64 {
     let f = v.floor();
@@ -49,7 +43,7 @@ fn round(v: f64) -> f64 {
 }
 
 // channel `ch` smoothed by 1-4-6-4-1 across and down, edges repeated: 256 times the level
-fn smooth(rgba: &[u8], w: usize, h: usize, ch: usize) -> Vec<i32> {
+pub(crate) fn smooth(rgba: &[u8], w: usize, h: usize, ch: usize) -> Vec<i32> {
     let mut row = vec![0i32; w + 4];
     let mut across = vec![0i32; w * (h + 4)];
     for y in 0..h {
@@ -147,28 +141,6 @@ fn gradient_at(f: &Field, x: f64, y: f64) -> (f64, f64) {
     )
 }
 
-fn through(p: Point, q: Point) -> Line {
-    let (dx, dy) = (q.x - p.x, q.y - p.y);
-    let len = (dx * dx + dy * dy).sqrt();
-    let (nx, ny) = (dy / len, -dx / len);
-    Line {
-        nx,
-        ny,
-        rho: nx * p.x + ny * p.y,
-    }
-}
-
-fn intersect(a: Line, b: Line) -> Option<Point> {
-    let det = a.nx * b.ny - a.ny * b.nx;
-    if det.abs() < 1e-9 {
-        return None;
-    }
-    Some(Point::new(
-        (a.rho * b.ny - b.rho * a.ny) / det,
-        (a.nx * b.rho - b.nx * a.rho) / det,
-    ))
-}
-
 // total least squares line through the points
 fn fit(points: &[Point]) -> Line {
     let n = points.len() as f64;
@@ -210,7 +182,7 @@ fn fit(points: &[Point]) -> Line {
 }
 
 // refitted twice without the points farther from the line than 2.5 times the median distance (and 0.75 px)
-fn fit_line(points: &[Point]) -> Line {
+pub(crate) fn fit_line(points: &[Point]) -> Line {
     let mut current = points.to_vec();
     let mut line = fit(&current);
     for _ in 0..2 {
@@ -510,7 +482,7 @@ pub fn refine(image: &Rgba, quad: &Quad) -> Refinement {
             lines.push(line);
             moved += 1;
         } else if a.distance_to(b) >= 1.0 {
-            lines.push(through(a, b));
+            lines.push(Line::through(a, b));
         } else {
             return unchanged(0.0);
         }
@@ -518,7 +490,7 @@ pub fn refine(image: &Rgba, quad: &Quad) -> Refinement {
     let (given_shares, given_fit) = backing(&field, &q);
     let mut corners = [Point::default(); 4];
     for i in 0..4 {
-        match intersect(lines[(i + 3) & 3], lines[i]) {
+        match Line::intersect(&lines[(i + 3) & 3], &lines[i]) {
             Some(c) => corners[i] = c,
             None => return unchanged(weakest(&given_shares)),
         }

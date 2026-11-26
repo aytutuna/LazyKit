@@ -4,6 +4,9 @@
 mod background;
 mod color;
 mod corners;
+pub mod detector;
+mod detector_lines;
+mod detector_regions;
 mod enhancer;
 pub mod frame_quality;
 mod geometry;
