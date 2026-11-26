@@ -9,7 +9,7 @@ mod ccitt_codes;
 pub mod dct;
 mod error;
 pub mod flate;
-mod jbig2;
+pub mod jbig2;
 mod lzw;
 mod output;
 mod params;
@@ -124,6 +124,9 @@ pub fn run(data: &[u8], filters: &[Filter], options: &Options) -> Result<Decoded
                     ));
                 }
             }
+            "JBIG2Decode" if !options.keep_jbig2 => {
+                data = decode_jbig2(&data, parms, max_size, options.whole_jbig2)?;
+            }
             name @ ("DCTDecode" | "DCT" | "JPXDecode" | "JBIG2Decode") => {
                 if !options.stop_at_codec {
                     return Err(FilterError::unsupported(format!(
@@ -167,4 +170,18 @@ fn decode_ccitt(data: &[u8], parms: Option<&Params>, max_size: u64) -> Result<Ve
         black_is_1: params::flag(parms, "BlackIs1"),
     };
     ccitt::decode(data, &options, max_size)
+}
+
+/// /JBIG2Globals is read as the data it holds. The image's /Width and /Height go in the parameters too
+/// (they are no part of the filter's own): the page is fitted to that size.
+fn decode_jbig2(
+    data: &[u8],
+    parms: Option<&Params>,
+    max_size: u64,
+    whole: bool,
+) -> Result<Vec<u8>> {
+    let globals = parms.and_then(|p| p.data("JBIG2Globals")).unwrap_or(&[]);
+    let width = params::int(parms, "Width", 0).max(0);
+    let height = params::int(parms, "Height", 0).max(0);
+    jbig2::decode(globals, data, max_size, width, height, whole)
 }
