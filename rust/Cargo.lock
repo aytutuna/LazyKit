@@ -368,6 +368,10 @@ dependencies = [
 ]
 
 [[package]]
+name = "lazy-image"
+version = "0.1.0"
+
+[[package]]
 name = "lazy-link"
 version = "0.1.0"
 dependencies = [
@@ -397,6 +401,15 @@ dependencies = [
  "sha2",
  "wasm-bindgen",
  "wasm-bindgen-futures",
+]
+
+[[package]]
+name = "lazy-scan"
+version = "0.1.0"
+dependencies = [
+ "lazy-image",
+ "serde_json",
+ "sha2",
 ]
 
 [[package]]
