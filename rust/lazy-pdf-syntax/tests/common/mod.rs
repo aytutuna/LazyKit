@@ -88,3 +88,9 @@ impl Filters for TestFilters {
         miniz_oxide::deflate::compress_to_vec_zlib(data, 6)
     }
 }
+
+pub mod pdf;
+
+pub fn open(file: Vec<u8>) -> lazy_pdf_syntax::Document {
+    lazy_pdf_syntax::Document::open(file, Box::new(TestFilters)).unwrap()
+}

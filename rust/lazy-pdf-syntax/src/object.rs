@@ -445,3 +445,9 @@ impl fmt::Display for Dict {
         f.write_str(&crate::error::latin1(&out))
     }
 }
+
+impl fmt::Display for Number {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(&self.text)
+    }
+}
