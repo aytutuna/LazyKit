@@ -514,6 +514,11 @@ pub fn refine(image: &Rgba, quad: &Quad) -> Refinement {
 /// Where a page found by the model goes, as Lazy Scan's `PhotoImport.modelPlan` and Lazy Send's page finder do it: the
 /// refined corners kept within the photo, placed straight away when the model and the edges are both sure and the page can
 /// be corrected, else shown in the corner editor from the same corners.
+///
+/// One deliberate difference: when clamping leaves corners that are no longer usable, the page is never placed, however sure
+/// the model and the edges were, and the editor starts from the inset rectangle. The references (Swift and C# `modelPlan`,
+/// Lazy Send's `PageFinder.find`) still work `sure` out from the start rectangle in that case and can cut it out without
+/// asking. They are to follow this rule when R7 replaces them; `the_corners_stay_inside_the_photo...` pins it.
 pub fn placement(
     r: Option<&Refinement>,
     given: &Quad,
