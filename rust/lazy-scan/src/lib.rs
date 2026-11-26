@@ -11,6 +11,7 @@ mod detector_regions;
 mod enhancer;
 pub mod frame_quality;
 mod geometry;
+mod glare;
 mod live;
 pub mod multi_quad;
 mod page_quality;
@@ -31,6 +32,11 @@ pub use enhancer::{
     photo, tile_size,
 };
 pub use geometry::{Point, Quad, aspect};
+pub use glare::{
+    ANALYSIS_LONG_SIDE as GLARE_ANALYSIS_LONG_SIDE, CLIP_LEVEL as GLARE_CLIP_LEVEL, GlareReading,
+    INSET_SHARE as GLARE_INSET_SHARE, MIN_BLOB_SHARE as GLARE_MIN_BLOB_SHARE,
+    has_glare as glare_has_glare, measure as glare_measure,
+};
 pub use lazy_scan_model::{CornerModel, Heatmaps, ModelError};
 pub use live::{
     ANALYSIS_LONG_SIDE, CaptureKind, Detection, FrameTicket, HOLD_MS, LiveFrame, LiveObjectSet,
