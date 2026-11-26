@@ -61,7 +61,9 @@ fn samples() -> Vec<Vec<u8>> {
 #[test]
 fn encoded_data_decodes_to_the_input() {
     for data in samples() {
-        assert_eq!(undo("FlateDecode", &encode::flate(&data)), data);
+        for level in [0, 1, 6, 9] {
+            assert_eq!(undo("FlateDecode", &encode::flate(&data, level)), data);
+        }
         assert_eq!(undo("ASCIIHexDecode", &encode::ascii_hex(&data)), data);
         assert_eq!(undo("ASCII85Decode", &encode::ascii85(&data)), data);
         assert_eq!(undo("RunLengthDecode", &encode::run_length(&data)), data);
@@ -72,11 +74,11 @@ fn encoded_data_decodes_to_the_input() {
 
 #[test]
 fn flate_output_is_zlib_data() {
-    let packed = encode::flate(&[5; 10000]);
+    let packed = encode::flate(&[5; 10000], 6);
     assert_eq!(packed[0] & 0x0f, 8);
     assert_eq!((packed[0] as u32 * 256 + packed[1] as u32) % 31, 0);
     assert!(packed.len() < 100);
-    assert_eq!(encode::flate(&[]).len(), 8);
+    assert_eq!(encode::flate(&[], 6).len(), 8);
 }
 
 // The expected bytes are what Lazy PDF's C# encoders write.
@@ -132,4 +134,12 @@ fn lzw_writes_the_same_codes_as_the_reference() {
     let (early, late) = (encode::lzw(&data, true), encode::lzw(&data, false));
     assert_eq!((early.len(), fnv(&early).as_str()), (17955, "0d9c26ce"));
     assert_eq!((late.len(), fnv(&late).as_str()), (17954, "db8496d6"));
+}
+
+#[test]
+fn flate_level_changes_the_size() {
+    let data: Vec<u8> = (0..20000u32).map(|i| (i * i / 7 % 251) as u8).collect();
+    let stored = encode::flate(&data, 0);
+    assert!(stored.len() > data.len());
+    assert!(encode::flate(&data, 9).len() < stored.len());
 }

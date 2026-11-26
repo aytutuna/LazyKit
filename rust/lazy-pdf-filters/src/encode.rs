@@ -7,9 +7,9 @@ use zlib_rs::{Deflate, DeflateFlush, Status};
 
 use crate::lzw::{CLEAR, END, FIRST, TABLE_SIZE};
 
-/// zlib data (RFC 1950) at the default level.
-pub fn flate(data: &[u8]) -> Vec<u8> {
-    let mut deflate = Deflate::new(6, true, 15);
+/// zlib data (RFC 1950) at a zlib level, 0 (stored) to 9 (smallest).
+pub fn flate(data: &[u8], level: i32) -> Vec<u8> {
+    let mut deflate = Deflate::new(level.clamp(0, 9), true, 15);
     let mut output = vec![0u8; data.len() / 2 + 64];
     loop {
         let used = deflate.total_in() as usize;
