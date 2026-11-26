@@ -57,7 +57,7 @@ impl Quad {
             }
             // how far outside edge a to b the point is, positive outside for a clockwise quad
             let outside = ((b.x - a.x) * (a.y - point.y) - (b.y - a.y) * (a.x - point.x)) / len;
-            !(outside > tolerance)
+            outside.is_nan() || outside <= tolerance
         })
     }
 
