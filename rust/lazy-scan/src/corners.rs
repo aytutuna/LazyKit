@@ -26,8 +26,12 @@ fn tap(index: usize, scale: f64, size: usize) -> (usize, usize, f64) {
     (low, (low + 1).min(size - 1), at - low as f64)
 }
 
-/// The photo as the model takes it: 3 x SIDE x SIDE values, blue plane first.
+/// The photo as the model takes it: 3 x SIDE x SIDE values, blue plane first. Nothing for a photo without pixels (the
+/// model then refuses the input's shape).
 pub fn model_input(photo: &Rgba) -> Vec<f32> {
+    if photo.width == 0 || photo.height == 0 {
+        return Vec::new();
+    }
     let plane = SIDE * SIDE;
     let mut input = vec![0f32; 3 * plane];
     let sx = photo.width as f64 / SIDE as f64;
@@ -65,7 +69,8 @@ fn corner(heat: &[f32], width: usize, height: usize) -> Option<(Point, f64)> {
     for start in 0..plane {
         let value = heat[start];
         peak = peak.max(value);
-        if value < THRESHOLD || seen[start] {
+        // NaN is no heat: the reference tests value >= threshold
+        if value.is_nan() || value < THRESHOLD || seen[start] {
             continue;
         }
         seen[start] = true;
@@ -322,6 +327,33 @@ mod tests {
             assert_eq!(input[SIDE * SIDE + y * SIDE + x], (128.0f64 / 255.0) as f32);
             assert_eq!(input[2 * SIDE * SIDE + y * SIDE + x], 1.0);
         }
+    }
+
+    #[test]
+    fn a_photo_without_pixels_gives_no_input_and_one_pixel_fills_the_planes() {
+        assert!(model_input(&Rgba::new(0, 0, vec![])).is_empty());
+        assert!(model_input(&Rgba::new(0, 9, vec![])).is_empty());
+        assert!(model_input(&Rgba::new(9, 0, vec![])).is_empty());
+        let one = model_input(&Rgba::new(1, 1, vec![255, 0, 51, 255]));
+        assert_eq!(one.len(), 3 * SIDE * SIDE);
+        assert!(one[..SIDE * SIDE].iter().all(|&v| v == 0.2));
+        assert!(one[2 * SIDE * SIDE..].iter().all(|&v| v == 1.0));
+    }
+
+    #[test]
+    fn a_nan_value_is_no_heat() {
+        let mut heat = page([0.9; 4]);
+        // away from the blobs: it must not count as a blob or a peak
+        heat.0[40 * SIZE + 40] = f32::NAN;
+        let found = decode_heatmap(&heat.0, SIZE, SIZE).unwrap();
+        assert!((found.quad.0[0].x * SIZE as f64 - 12.0).abs() < 0.01);
+        assert!(found.confidence <= 0.9);
+        // a channel that is nothing but NaN has no corner
+        let mut blank = page([0.9; 4]);
+        for v in &mut blank.0[SIZE * SIZE..2 * SIZE * SIZE] {
+            *v = f32::NAN;
+        }
+        assert!(decode_heatmap(&blank.0, SIZE, SIZE).is_none());
     }
 
     #[test]
