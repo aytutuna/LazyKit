@@ -16,3 +16,6 @@ uniffi = "=0.32.0"
 [profile.release]
 # Every cdylib and staticlib has to unwind: UniFFI turns a panic into an exception only if it can catch it.
 panic = "unwind"
+lto = true
+codegen-units = 1
+strip = true

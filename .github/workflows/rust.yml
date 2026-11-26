@@ -1,0 +1,129 @@
+name: rust
+
+on:
+  push:
+    branches: [main, 'ci/**']
+    paths:
+      - rust/**
+      - testdata/link/**
+      - .github/workflows/rust.yml
+
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: always
+  WASM_BINDGEN_CLI: 0.2.130
+
+defaults:
+  run:
+    working-directory: rust
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: rust
+      - run: cargo fmt --check
+      - run: cargo clippy --workspace --all-targets -- -D warnings
+      - run: cargo test --workspace
+
+  windows:
+    runs-on: windows-latest
+    strategy:
+      matrix:
+        target: [x86_64-pc-windows-msvc, aarch64-pc-windows-msvc]
+    steps:
+      - uses: actions/checkout@v7
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: rust
+          key: ${{ matrix.target }}
+      - run: rustup target add ${{ matrix.target }}
+      - name: Test
+        if: matrix.target == 'x86_64-pc-windows-msvc'
+        run: cargo test --workspace
+      - run: cargo build --release -p lazy-link-ffi --target ${{ matrix.target }}
+      - name: Size
+        shell: bash
+        run: ls -l target/${{ matrix.target }}/release/lazy_link_ffi.dll | awk '{print "${{ matrix.target }} dll", $5}' | tee -a "$GITHUB_STEP_SUMMARY"
+
+  apple:
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: rust
+      - run: rustup target add aarch64-apple-ios aarch64-apple-ios-sim aarch64-apple-darwin x86_64-apple-darwin
+      - run: cargo test --workspace
+      - name: Static libraries
+        run: |
+          for target in aarch64-apple-ios aarch64-apple-ios-sim aarch64-apple-darwin x86_64-apple-darwin; do
+            cargo build --release -p lazy-link-ffi --target $target
+          done
+      - name: XCFramework
+        run: |
+          mkdir -p out/macos out/headers
+          lipo -create target/aarch64-apple-darwin/release/liblazy_link_ffi.a target/x86_64-apple-darwin/release/liblazy_link_ffi.a -output out/macos/liblazy_link_ffi.a
+          cargo run -q -p uniffi-bindgen -- generate --library target/aarch64-apple-darwin/release/liblazy_link_ffi.dylib --language swift --out-dir out/gen
+          cp out/gen/lazy_link_ffiFFI.h out/headers/
+          cp out/gen/lazy_link_ffiFFI.modulemap out/headers/module.modulemap
+          xcodebuild -create-xcframework \
+            -library out/macos/liblazy_link_ffi.a -headers out/headers \
+            -library target/aarch64-apple-ios/release/liblazy_link_ffi.a -headers out/headers \
+            -library target/aarch64-apple-ios-sim/release/liblazy_link_ffi.a -headers out/headers \
+            -output out/LazyLinkFfi.xcframework
+      - name: Size
+        run: |
+          {
+            ls -l out/macos/liblazy_link_ffi.a target/aarch64-apple-ios/release/liblazy_link_ffi.a target/aarch64-apple-ios-sim/release/liblazy_link_ffi.a | awk '{print $9, $5}'
+            du -sk out/LazyLinkFfi.xcframework | awk '{print "xcframework", $1 " KB"}'
+          } | tee -a "$GITHUB_STEP_SUMMARY"
+
+  android:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: rust
+      - run: rustup target add aarch64-linux-android x86_64-linux-android
+      - uses: actions/cache@v4
+        with:
+          path: ~/.cargo/bin/cargo-ndk
+          key: cargo-ndk-${{ runner.os }}
+      - run: command -v cargo-ndk || cargo install cargo-ndk --locked
+      - name: Build
+        run: |
+          export ANDROID_NDK_HOME="$ANDROID_NDK_LATEST_HOME"
+          cargo ndk -t arm64-v8a -t x86_64 -P 26 -o out/jniLibs build --release -p lazy-link-ffi
+      - name: Size
+        run: ls -l out/jniLibs/*/liblazy_link_ffi.so | awk '{print $9, $5}' | tee -a "$GITHUB_STEP_SUMMARY"
+
+  wasm:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: rust
+      - run: rustup target add wasm32-unknown-unknown
+      - uses: actions/cache@v4
+        with:
+          path: ~/.cargo/bin/wasm-bindgen
+          key: wasm-bindgen-${{ env.WASM_BINDGEN_CLI }}
+      - run: command -v wasm-bindgen || cargo install wasm-bindgen-cli --version ${{ env.WASM_BINDGEN_CLI }} --locked
+      - run: cargo build --release -p lazy-link-wasm --target wasm32-unknown-unknown
+      - run: wasm-bindgen --target nodejs --out-dir target/wasm-pkg target/wasm32-unknown-unknown/release/lazy_link_wasm.wasm
+      - run: node --test lazy-link-wasm/tests/vectors.test.cjs
+        env:
+          WASM_PKG: target/wasm-pkg
+      - name: Size
+        run: ls -l target/wasm-pkg/lazy_link_wasm_bg.wasm | awk '{print "wasm", $5}' | tee -a "$GITHUB_STEP_SUMMARY"

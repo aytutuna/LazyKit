@@ -184,7 +184,8 @@ impl PairingSession {
         Ok(self.inner.redeem(token.as_deref(), now_ms, peer).into())
     }
 
-    pub fn close(&self) {
+    /// Closes the session: no token is accepted any more. (Not `close`: Kotlin gives every object one.)
+    pub fn end(&self) {
         self.inner.close();
     }
 }

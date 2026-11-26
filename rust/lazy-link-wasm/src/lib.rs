@@ -117,7 +117,7 @@ impl PairingSession {
         .to_owned()
     }
 
-    pub fn close(&self) {
+    pub fn end(&self) {
         self.inner.close();
     }
 }
