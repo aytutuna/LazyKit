@@ -7,10 +7,19 @@ import check_pins
 
 A, B = "a" * 64, "b" * 64
 FETCH = f'url="https://example.org/pkg/tool/1.0"\nsum={A}\nother={B}\n'
+# the shapes the real script uses: a variable per digest, one case line per desktop library, abi paths as jni/$abi/
+REAL = (
+    f'url="https://example.org/pkg/tool/1.0"\ntool_sha={A}\nabi_sha_x86={A[::-1]}\nabi_sha_arm={B[::-1]}\n'
+    f'case x in\n  L/x) entry=runtimes/linux-x64/lib.so; lib_sha={B} ;;\n'
+    f'  L/y) entry=runtimes/linux-arm64/lib.so; lib_sha={"c" * 64} ;;\nesac\n'
+    'unzip "jni/$abi/lib.so"\n'
+)
 
 
 def pin(name, sha, extra='url = "https://example.org/pkg/tool/1.0"', licence="MIT"):
-    return f'[[pin]]\nname = "{name}"\nsha256 = "{sha}"\nlicence = "{licence}"\n{extra}\n'
+    tied = "var" in extra or "path" in extra
+    var = "" if tied else {A: 'var = "sum"\n', B: 'var = "other"\n'}.get(sha, "")
+    return f'[[pin]]\nname = "{name}"\nsha256 = "{sha}"\nlicence = "{licence}"\n{var}{extra}\n'
 
 
 class CheckPins(unittest.TestCase):
@@ -40,6 +49,37 @@ class CheckPins(unittest.TestCase):
     def test_a_pin_from_nothing(self):
         pins = pin("tool", A) + pin("inner", B, 'from = "missing"')
         self.assertTrue(any("neither a url" in p for p in self.problems(pins)))
+
+    def real_pins(self, x86=A[::-1], arm=B[::-1], arm_path="jni/arm64-v8a/lib.so", linux_x64=B):
+        url = 'url = "https://example.org/pkg/tool/1.0"\nvar = "tool_sha"'
+        return (
+            pin("tool", A, url)
+            + pin("x86", x86, 'from = "tool"\npath = "jni/x86_64/lib.so"\nvar = "abi_sha_x86"')
+            + pin("arm", arm, f'from = "tool"\npath = "{arm_path}"\nvar = "abi_sha_arm"')
+            + pin("lx64", linux_x64, 'from = "tool"\npath = "runtimes/linux-x64/lib.so"')
+            + pin("larm", "c" * 64, 'from = "tool"\npath = "runtimes/linux-arm64/lib.so"')
+        )
+
+    def test_pins_tied_to_their_variables_and_lines_are_clean(self):
+        self.assertEqual(self.problems(self.real_pins(), REAL), [])
+
+    def test_two_digests_swapped_between_variables(self):
+        problems = self.problems(self.real_pins(x86=B[::-1], arm=A[::-1]), REAL)
+        self.assertTrue(any("x86: fetch.sh does not set abi_sha_x86" in p for p in problems))
+        self.assertTrue(any("arm: fetch.sh does not set abi_sha_arm" in p for p in problems))
+
+    def test_a_digest_on_the_wrong_case_line(self):
+        problems = self.problems(self.real_pins(linux_x64="c" * 64), REAL)
+        self.assertTrue(any("lx64: no line of fetch.sh has both" in p for p in problems))
+
+    def test_a_path_the_script_does_not_extract(self):
+        problems = self.problems(self.real_pins(arm_path="jni/riscv/lib.so"), REAL)
+        self.assertTrue(any("arm: path jni/riscv/lib.so" in p for p in problems))
+
+    def test_a_pin_with_nothing_to_tie_it(self):
+        pins = pin("tool", A) + pin("inner", "c" * 64, 'from = "tool"')
+        self.assertTrue(any("inner: no var or path" in p for p in self.problems(pins, FETCH + "c" * 64 + "
+")))
 
     def test_the_real_files_agree(self):
         root = Path(__file__).resolve().parent.parent.parent

@@ -1,9 +1,11 @@
 # Every native file the scanner downloads, where it comes from and under which licence. The digests are the ones
 # rust/lazy-scan-model/scripts/fetch.sh checks after each download; tools/check_pins.py fails when the two disagree.
-# A pin with `from` is a file taken out of another pin's download (or made from it) and has no URL of its own.
+# A pin with `var` is the fetch.sh variable that holds its digest; one without has its digest on the line of fetch.sh that names
+# its `path`. A pin with `from` is a file taken out of another pin's download (or made from it) and has no URL of its own.
 
 [[pin]]
 name = "onnxruntime-nuget"
+var = "nupkg_sha"
 version = "1.24.2"
 url = "https://www.nuget.org/api/v2/package/Microsoft.ML.OnnxRuntime/1.24.2"
 sha256 = "782564d3d68e87269ea1812cc94710ad06fe014faf093f01a6f89d0bd58719d3"
@@ -11,6 +13,7 @@ licence = "MIT"
 
 [[pin]]
 name = "onnxruntime-android-aar"
+var = "aar_sha"
 from = "onnxruntime-nuget"
 path = "runtimes/android/native/onnxruntime.aar"
 sha256 = "bc461499a735653dff285a6a3477d28b9cfd119a09c7753eaf003426b577f223"
@@ -18,6 +21,7 @@ licence = "MIT"
 
 [[pin]]
 name = "onnxruntime-android-x86_64"
+var = "android_sha_x86_64"
 from = "onnxruntime-android-aar"
 path = "jni/x86_64/libonnxruntime.so"
 sha256 = "a824fa2ae49c0686b7730704ae705b03e654a1f71459939e8e0924c6a4226b11"
@@ -25,6 +29,7 @@ licence = "MIT"
 
 [[pin]]
 name = "onnxruntime-android-arm64-v8a"
+var = "android_sha_arm64_v8a"
 from = "onnxruntime-android-aar"
 path = "jni/arm64-v8a/libonnxruntime.so"
 sha256 = "42f83b3c2370300821942d1f61099689d37bb5e05126fb75849d4cc9dbe356a2"
@@ -32,6 +37,7 @@ licence = "MIT"
 
 [[pin]]
 name = "onnxruntime-ios-xcframework"
+var = "xcframework_sha"
 from = "onnxruntime-nuget"
 path = "runtimes/ios/native/onnxruntime.xcframework.zip"
 sha256 = "a161fe8628ed3bf8d97915bd34063fe115f58a1b9b0f4f0baec78c62487ac3ee"
@@ -75,6 +81,7 @@ licence = "MIT"
 # DocAligner's FastViT-T8 corner model: Lazy Scan's deps-docaligner-1.1.1 copy is tried first, the upstream release second
 [[pin]]
 name = "docaligner-model"
+var = "model_sha"
 version = "1.1.1"
 url = "https://github.com/aytutuna/LazyScan/releases/download/deps-docaligner-1.1.1/fastvit_t8_h_e_bifpn_256_fp32.onnx"
 upstream = "https://github.com/DocsaidLab/DocAligner/releases/download/1.1.1/fastvit_t8_h_e_bifpn_256_fp32.onnx"
@@ -84,6 +91,7 @@ licence = "Apache-2.0"
 # the same model with tract's Einsum fix, made by tools/patch_einsum.py
 [[pin]]
 name = "docaligner-model-tract"
+var = "patched_sha"
 from = "docaligner-model"
 sha256 = "613368905282e2ef7e0ad1f20517750c1abd0ad0661771b2e7041834c9c4d746"
 licence = "Apache-2.0"

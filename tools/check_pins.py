@@ -1,6 +1,8 @@
 #!/usr/bin/env python3
 """Checks native/pins.toml against rust/lazy-scan-model/scripts/fetch.sh: every pin's digest and download address is in the
-script, every digest the script holds is a pin, and every pin names a licence the cargo-deny allowlist would also take.
+script, tied to the pin: a pin with `var` is the script's `var=<digest>` line, any other pin with a `path` is on the script's
+line that names that path. Every digest the script holds is a pin, and every pin names a licence the cargo-deny allowlist
+would also take.
 Usage: check_pins.py [repo root]"""
 import re
 import sys
@@ -27,8 +29,19 @@ def check(pins_text, fetch_text):
             problems.append(f"{name}: licence {p.get('licence')!r} is not on the allowlist")
         if "url" not in p and p.get("from") not in names:
             problems.append(f"{name}: neither a url nor a pin to come from")
-        if p.get("sha256", "") not in fetch_text:
+        digest = p.get("sha256", "")
+        if digest not in fetch_text:
             problems.append(f"{name}: its digest is not in fetch.sh")
+        elif "var" in p:
+            if not re.search(rf"^{re.escape(p['var'])}={digest}$", fetch_text, re.M):
+                problems.append(f"{name}: fetch.sh does not set {p['var']} to its digest")
+        elif "path" in p:
+            if not any(p["path"] in line and digest in line for line in fetch_text.splitlines()):
+                problems.append(f"{name}: no line of fetch.sh has both its path and its digest")
+        else:
+            problems.append(f"{name}: no var or path to tie its digest to fetch.sh")
+        if "path" in p and not path_in_script(p["path"], fetch_text):
+            problems.append(f"{name}: path {p['path']} is not what fetch.sh extracts")
         for key in ("url", "upstream"):
             if key in p and not in_script(p[key], fetch_text):
                 problems.append(f"{name}: {key} {p[key]} is not what fetch.sh downloads")
@@ -36,6 +49,12 @@ def check(pins_text, fetch_text):
     for digest in sorted(set(HEX.findall(fetch_text)) - pinned):
         problems.append(f"fetch.sh holds digest {digest} that no pin lists")
     return problems
+
+
+def path_in_script(path, fetch_text):
+    # the Android libraries are taken out as `jni/$abi/libonnxruntime.so`
+    generic = re.sub(r"/(x86_64|arm64-v8a)/", "/$abi/", path)
+    return path in fetch_text or generic in fetch_text
 
 
 def in_script(url, fetch_text):
