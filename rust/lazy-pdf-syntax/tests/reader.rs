@@ -253,3 +253,21 @@ fn a_page_takes_what_it_lacks_from_the_nodes_above() {
             .contains_key("XObject")
     );
 }
+
+#[test]
+fn a_root_that_names_another_reference_is_still_a_file_that_saves_and_reopens() {
+    let mut pdf = TestPdf::new();
+    pdf.obj(1, "2 0 R")
+        .obj(2, "<</Type /Pages /Kids [3 0 R] /Count 1>>")
+        .obj(3, "<</Type /Page /Parent 2 0 R>>");
+    let mut document = open(pdf.finish());
+    assert_eq!(document.pages().len(), 1);
+    for packed in [false, true] {
+        let saved = document.save_rewrite(&lazy_pdf_syntax::SaveOptions {
+            use_object_streams: packed,
+            document_id: None,
+        });
+        let mut reopened = open(saved.bytes);
+        assert_eq!(reopened.pages().len(), 1, "packed {packed}");
+    }
+}

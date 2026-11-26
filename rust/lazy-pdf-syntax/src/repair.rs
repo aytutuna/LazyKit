@@ -303,24 +303,26 @@ impl Document {
             return Err(ReadError::damaged("The file has no catalog and no pages."));
         };
 
+        // A catalog is amended only where it is itself a dictionary; a /Root that is a reference to a reference
+        // would take the page tree nowhere that is read back.
         let root = self.trailer.get("Root").cloned();
-        if let Some(root) = root
-            && let Some(Object::Dict(_)) = self.resolve(&root).as_deref()
-        {
-            match root {
-                Object::Ref(r) => {
-                    if let Some(Object::Dict(existing)) = self.get_mut(r.number) {
-                        existing.insert("Pages", Object::Ref(tree));
-                    }
+        match root {
+            Some(Object::Ref(r))
+                if matches!(self.get(r.number).as_deref(), Some(Object::Dict(_))) =>
+            {
+                if let Some(Object::Dict(existing)) = self.get_mut(r.number) {
+                    existing.insert("Pages", Object::Ref(tree));
                 }
-                Object::Dict(mut direct) => {
-                    direct.insert("Pages", Object::Ref(tree));
-                    self.trailer.insert("Root", Object::Dict(direct));
-                }
-                _ => {}
+                self.add_repair("The catalog had no page tree; set it to the one found.".into());
+                return Ok(());
             }
-            self.add_repair("The catalog had no page tree; set it to the one found.".into());
-            return Ok(());
+            Some(Object::Dict(mut direct)) => {
+                direct.insert("Pages", Object::Ref(tree));
+                self.trailer.insert("Root", Object::Dict(direct));
+                self.add_repair("The catalog had no page tree; set it to the one found.".into());
+                return Ok(());
+            }
+            _ => {}
         }
         let mut made = Dict::new();
         made.add(crate::object::Name::new("Type"), Object::name("Catalog"));
