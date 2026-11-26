@@ -80,6 +80,13 @@ impl Quad {
         self.is_convex() && (0..4).all(|i| self.edge(i) >= 16.0)
     }
 
+    /// Whether the page can be cut out and straightened: a convex outline whose shape comes out as a finite sheet (the
+    /// reference's `PerspectiveCorrector.plan` returns nothing otherwise).
+    pub fn correctable(&self, width: f64, height: f64) -> bool {
+        let shape = aspect(self, width, height);
+        width > 0.0 && height > 0.0 && self.is_convex() && shape.is_finite() && shape > 0.0
+    }
+
     /// Every corner moved into the photo so the editor's handles stay where they can be seen.
     pub fn clamped_to_photo(&self, width: f64, height: f64) -> Quad {
         Quad(

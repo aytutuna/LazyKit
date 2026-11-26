@@ -116,27 +116,27 @@ fn a_page_is_placed_straight_away_only_when_the_model_and_the_edges_are_both_sur
 }
 
 #[test]
-fn the_editor_starts_from_the_models_corners_when_the_refined_ones_have_little_behind_them() {
+fn a_page_moved_onto_a_stack_of_sheets_still_starts_from_the_refined_corners() {
     let given = Quad::from_xy([
         [100.0, 100.0],
         [400.0, 100.0],
         [400.0, 500.0],
         [100.0, 500.0],
     ]);
-    let drifted = Quad::from_xy([
+    let stacked = Quad::from_xy([
         [100.0, 100.0],
         [400.0, 100.0],
         [440.0, 540.0],
         [100.0, 500.0],
     ]);
     let r = Refinement {
-        quad: drifted,
+        quad: stacked,
         refined: true,
         support: 0.31,
     };
     assert_eq!(
         placement(Some(&r), &given, 0.92, 640.0, 640.0),
-        (given, false)
+        (stacked, false)
     );
 }
 

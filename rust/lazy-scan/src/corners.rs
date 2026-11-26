@@ -9,6 +9,7 @@ const THRESHOLD: f32 = 0.3;
 /// A page is taken from this confidence (the weakest corner's peak) up, and trusted from `SURE_CONFIDENCE` up.
 pub const MIN_CONFIDENCE: f64 = 0.5;
 pub const SURE_CONFIDENCE: f64 = 0.7;
+const MAX_LONG_OVER_SHORT: f64 = 2.0;
 
 /// A page the model found: corners as shares of the photo (x right, y down) and the confidence.
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -120,8 +121,8 @@ pub fn decode_heatmap(heat: &[f32], width: usize, height: usize) -> Option<Found
 }
 
 /// The sanity checks on a page of `width` x `height` pixels: a confidence from `MIN_CONFIDENCE` up, corners the editor can
-/// cut along, covering at least a tenth of the photo and no more than 4 to 1 once the perspective is undone (Lazy Scan's
-/// document kind stops at 2; receipts here run longer).
+/// cut along, covering at least a tenth of the photo and no more than 2 to 1 once the perspective is undone (Lazy Scan's
+/// document kind and Lazy Send's page finder; Lazy Collect's TypeScript copy allows 4 for receipts).
 pub fn acceptable(found: &Found, width: f64, height: f64) -> bool {
     if found.confidence < MIN_CONFIDENCE || found.confidence.is_nan() {
         return false;
@@ -135,7 +136,7 @@ pub fn acceptable(found: &Found, width: f64, height: f64) -> bool {
         return false;
     }
     let wide = aspect(&Quad::from_corners(q.0), width, height);
-    wide.max(1.0 / wide) <= 4.0
+    wide.max(1.0 / wide) <= MAX_LONG_OVER_SHORT
 }
 
 #[cfg(test)]
@@ -279,6 +280,25 @@ mod tests {
             confidence: 0.9,
         };
         assert!(!acceptable(&tiny, 800.0, 600.0));
+    }
+
+    #[test]
+    fn a_strip_of_paper_longer_than_two_to_one_is_not_a_document() {
+        let strip = |width: f64| Found {
+            quad: Quad(
+                [
+                    (0.3, 0.3),
+                    (0.3 + width, 0.3),
+                    (0.3 + width, 0.6),
+                    (0.3, 0.6),
+                ]
+                .map(|(x, y)| Point::new(x, y)),
+            ),
+            confidence: 0.9,
+        };
+        // 800 x 600 photo: 0.3 x 0.3 of it is 240 x 180, so a width share of 0.6 / 0.4 gives 480 x 180 (2.7 to 1) and 288 x 180 (1.6 to 1)
+        assert!(!acceptable(&strip(0.6), 800.0, 600.0));
+        assert!(acceptable(&strip(0.36), 800.0, 600.0));
     }
 
     #[test]

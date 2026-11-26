@@ -24,6 +24,8 @@ impl OrtModel {
             None => {
                 let built = ort::environment::init_from(library)
                     .map_err(|e| load(&e))?
+                    // the official Windows build sends usage events to Microsoft unless told not to
+                    .with_telemetry(false)
                     .build()
                     .map_err(|e| load(&e))?;
                 shared.insert(Arc::new(built)).clone()

@@ -535,10 +535,9 @@ pub fn refine(image: &Rgba, quad: &Quad) -> Refinement {
     unchanged(weakest(&given_shares))
 }
 
-/// Where a page found by the model goes: the refined corners (kept within the photo), placed straight away when the model
-/// and the edges are both sure, else shown in the corner editor. When the edges back the refined outline below the sure
-/// level, the editor starts from the model's corners, not the refined ones: the refiner can latch onto a stack of sheets
-/// under the page, and a person asked to check the corners should start from the better guess.
+/// Where a page found by the model goes, as Lazy Scan's `PhotoImport.modelPlan` and Lazy Send's page finder do it: the
+/// refined corners kept within the photo, placed straight away when the model and the edges are both sure and the page can
+/// be corrected, else shown in the corner editor from the same corners.
 pub fn placement(
     r: Option<&Refinement>,
     given: &Quad,
@@ -551,12 +550,7 @@ pub fn placement(
         refined: false,
         support: 0.0,
     });
-    let start = if found.refined && found.support < SURE_CONFIDENCE {
-        *given
-    } else {
-        found.quad
-    };
-    let clamped = start.clamped_to_photo(width, height);
+    let clamped = found.quad.clamped_to_photo(width, height);
     let fine = clamped.usable();
     (
         if fine {
@@ -564,6 +558,8 @@ pub fn placement(
         } else {
             Quad::start(width, height)
         },
-        fine && confidence >= SURE_CONFIDENCE && found.support >= SURE_CONFIDENCE,
+        fine && confidence >= SURE_CONFIDENCE
+            && found.support >= SURE_CONFIDENCE
+            && clamped.correctable(width, height),
     )
 }

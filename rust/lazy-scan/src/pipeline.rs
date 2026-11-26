@@ -50,12 +50,13 @@ mod tests {
     }
 
     fn page_heat() -> Heatmaps {
+        spots([(12, 10), (50, 14), (48, 56), (9, 52)])
+    }
+
+    fn spots(corners: [(usize, usize); 4]) -> Heatmaps {
         let n = 64;
         let mut values = vec![0f32; 4 * n * n];
-        for (ch, (x, y)) in [(12, 10), (50, 14), (48, 56), (9, 52)]
-            .into_iter()
-            .enumerate()
-        {
+        for (ch, (x, y)) in corners.into_iter().enumerate() {
             for dy in 0..3 {
                 for dx in 0..3 {
                     values[ch * n * n + (y + dy) * n + x + dx] = 0.9;
@@ -77,6 +78,14 @@ mod tests {
         assert!(!found.sure);
         assert!((found.quad.0[0].x - 13.5 / 64.0 * 640.0).abs() < 1e-9);
         assert!(found.confidence > 0.89);
+    }
+
+    #[test]
+    fn a_long_strip_is_no_document_even_when_the_model_is_sure() {
+        // 56 x 19 cells of 64 on a 640 x 480 photo: about 3.9 to 1, a quarter of the frame
+        let strip = spots([(4, 24), (60, 24), (60, 43), (4, 43)]);
+        let photo = Rgba::filled(640, 480, 120, 120, 120);
+        assert_eq!(locate(&photo, &Fixed(Some(strip))).unwrap(), None);
     }
 
     #[test]
