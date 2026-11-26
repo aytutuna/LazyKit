@@ -286,6 +286,16 @@ describe("relay", () => {
     await side.closed;
   });
 
+  it("passes a credit to the other end", async () => {
+    const h = await host(newRoom());
+    const [guest, side] = await stream(h);
+    guest.ws.send(bytes(1));
+    await side.next();
+    side.ws.send("ack");
+    expect(await guest.nextText()).toBe("ack");
+    expect(await used(groupOf(h.room))).toBe(0);
+  });
+
   it("passes a half-close to the other end and keeps the stream open", async () => {
     const h = await host(newRoom());
     const [guest, side] = await stream(h);
@@ -432,18 +442,33 @@ describe("relay", () => {
     expect(sent).toEqual([["fcm", "tok", { room }]]);
   });
 
-  it("wakes the group when the host's control socket is open but never answers", async () => {
+  it("wakes the group when the host's control socket has been silent and never answers", async () => {
     const sent: unknown[] = [];
     useServices({ push: { send: async (platform, token, message) => void sent.push([platform, token, message]) } });
     const room = newRoom();
     const group = groupOf(room);
     expect((await groupApi(group, "push", { device: "e".repeat(32), platform: "fcm", token: "tok" })).status).toBe(204);
     const control = await open(room, "role=host");
+    await runInDurableObject(stub(room), (_o, state) => {
+      state.getWebSockets("host")[0].serializeAttachment({ seen: Date.now() - 60_000 });
+    });
     const res = await ask(room, "role=guest");
     expect(res.status).toBe(404);
     expect(res.headers.get("x-relay-woken")).toBe("1");
     expect(sent).toEqual([["fcm", "tok", { room }]]);
     await control.closed;
+  });
+
+  it("only fails the guest when a host that is alive is slow to answer", async () => {
+    const sent: unknown[] = [];
+    useServices({ push: { send: async (platform, token, message) => void sent.push([platform, token, message]) } });
+    const room = newRoom();
+    const group = groupOf(room);
+    expect((await groupApi(group, "push", { device: "e".repeat(32), platform: "fcm", token: "tok" })).status).toBe(204);
+    const control = await open(room, "role=host");
+    expect((await ask(room, "role=guest")).status).toBe(504);
+    expect(sent).toEqual([]);
+    expect(control.ws.readyState).toBe(WebSocket.OPEN);
   });
 
   it("counts into the week of the bytes and forgets old weeks", async () => {

@@ -10,6 +10,8 @@ const SWEEP_MS = 30_000;
 const CONTROL_IDLE_MS = 90_000;
 const STREAM_IDLE_MS = 120_000;
 const JOIN_MS = 10_000;
+// The client pings every 30 s, so a control socket quiet for longer than this is not being read.
+const HOST_SILENT_MS = 45_000;
 
 // A room has one control socket, the host waiting for guests, and any number
 // of streams. A guest that connects gets a stream id sent to the host on the
@@ -43,6 +45,10 @@ export class Room extends DurableObject {
     if (this.group !== group) return new Response("wrong group", { status: 403 });
     if (role === "host") return this.acceptHost();
     return this.acceptGuest(url.pathname.split("/").pop() ?? "", url.searchParams.get("device") ?? "");
+  }
+
+  private lastSeen(ws: WebSocket): number {
+    return Math.max(ws.deserializeAttachment()?.seen ?? 0, this.ctx.getWebSocketAutoResponseTimestamp(ws)?.getTime() ?? 0);
   }
 
   private groupStub() {
@@ -83,8 +89,10 @@ export class Room extends DurableObject {
     clearTimeout(timer);
     this.joining.delete(id);
     if (!ok) {
-      // A control socket that looks open but never answers is a suspended or
-      // killed app; treat it like no host so the push goes out.
+      // A host that has pinged lately is only slow, and only this guest
+      // loses. One that has been silent for longer is a suspended or killed
+      // app: treat it like no host so the push goes out.
+      if (Date.now() - this.lastSeen(control) < HOST_SILENT_MS) return new Response("host did not answer", { status: 504 });
       control.close(1001, "not answering");
       return this.nobodyWaiting(room, device);
     }
@@ -117,8 +125,9 @@ export class Room extends DurableObject {
   async webSocketMessage(ws: WebSocket, data: string | ArrayBuffer): Promise<void> {
     const [role] = this.ctx.getTags(ws);
     // "eof" is a stream's half-close: the writer is done, the reader is not.
-    if (data === "eof" && role !== "host") {
-      this.peerOf(ws)?.send("eof");
+    // "ack" returns one frame of credit to the sender.
+    if ((data === "eof" || data === "ack") && role !== "host") {
+      this.peerOf(ws)?.send(data);
       return;
     }
     if (typeof data === "string" || role === "host") return this.end(ws, 1003, "binary frames on streams only");
@@ -127,8 +136,8 @@ export class Room extends DurableObject {
     if (!peer) return this.end(ws, 1008, "no peer");
     ws.serializeAttachment({ seen: Date.now() });
     peer.send(data);
-    if (peer.bufferedAmount > MAX_BUFFERED) return this.end(ws, 1013, "receiver too slow");
     await this.count(data.byteLength);
+    if (peer.bufferedAmount > MAX_BUFFERED) return this.end(ws, 1013, "receiver too slow");
   }
 
   async webSocketClose(ws: WebSocket, code: number): Promise<void> {
@@ -150,10 +159,7 @@ export class Room extends DurableObject {
     const now = Date.now();
     for (const ws of this.ctx.getWebSockets()) {
       const [role] = this.ctx.getTags(ws);
-      const seen = Math.max(
-        ws.deserializeAttachment()?.seen ?? 0,
-        this.ctx.getWebSocketAutoResponseTimestamp(ws)?.getTime() ?? 0,
-      );
+      const seen = this.lastSeen(ws);
       const limit = role === "host" ? CONTROL_IDLE_MS : STREAM_IDLE_MS;
       if (now - seen > limit) this.end(ws, 1001, "idle");
     }
