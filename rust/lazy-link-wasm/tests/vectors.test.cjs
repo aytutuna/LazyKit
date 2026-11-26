@@ -169,6 +169,20 @@ test("an async signer that reads the hash late still sees its own copy", async (
   assert.deepEqual(Buffer.from(await second), expected(Uint8Array.from([2, 7, 1])));
 });
 
+test("a pairing code cannot be changed from JavaScript", () => {
+  const code = new link.PairingCode("id", "n", "fp", ["10.0.0.1"], 443, "t");
+  const change = (field, value) => { try { code[field] = value; } catch {} };
+  change("name", 5);
+  change("port", 70000);
+  change("port", -1);
+  change("addresses", "abc");
+  change("token", {});
+  assert.equal(code.name, "n");
+  assert.equal(code.port, 443);
+  assert.deepEqual(code.addresses, ["10.0.0.1"]);
+  assert.equal(code.token, "t");
+});
+
 test("arguments of the wrong kind throw instead of trapping", () => {
   const entropy = new Uint8Array(8);
   assert.throws(() => new link.PairingSession(0, "0123456789abcdef", entropy), { message: "the pairing token must be a Uint8Array" });

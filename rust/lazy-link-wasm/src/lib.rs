@@ -58,15 +58,14 @@ fn port(value: f64) -> Result<u16, JsError> {
 }
 
 /// What a desktop's pairing code carries.
-#[wasm_bindgen(getter_with_clone)]
+#[wasm_bindgen]
 pub struct PairingCode {
-    #[wasm_bindgen(js_name = desktopId)]
-    pub desktop_id: String,
-    pub name: String,
-    pub fingerprint: String,
-    pub addresses: Vec<String>,
-    pub port: u16,
-    pub token: String,
+    desktop_id: String,
+    name: String,
+    fingerprint: String,
+    addresses: Vec<String>,
+    port: u16,
+    token: String,
 }
 
 #[wasm_bindgen]
@@ -94,6 +93,37 @@ impl PairingCode {
             port: port(port_number)?,
             token: text(&token, "the token")?,
         })
+    }
+
+    // Read only: a setter would skip the checks the constructor makes.
+    #[wasm_bindgen(getter, js_name = desktopId)]
+    pub fn desktop_id(&self) -> String {
+        self.desktop_id.clone()
+    }
+
+    #[wasm_bindgen(getter)]
+    pub fn name(&self) -> String {
+        self.name.clone()
+    }
+
+    #[wasm_bindgen(getter)]
+    pub fn fingerprint(&self) -> String {
+        self.fingerprint.clone()
+    }
+
+    #[wasm_bindgen(getter)]
+    pub fn addresses(&self) -> Vec<String> {
+        self.addresses.clone()
+    }
+
+    #[wasm_bindgen(getter)]
+    pub fn port(&self) -> u16 {
+        self.port
+    }
+
+    #[wasm_bindgen(getter)]
+    pub fn token(&self) -> String {
+        self.token.clone()
     }
 }
 
