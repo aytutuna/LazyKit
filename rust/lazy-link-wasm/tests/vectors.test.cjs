@@ -140,6 +140,39 @@ test("signers must return bytes", async () => {
   assert.throws(() => link.signData({ sign: () => [1, 2] }, data), message);
   await assert.rejects(link.signDataAsync({ sign: async () => undefined }, data), message);
   await assert.rejects(link.signDataAsync({ sign: async () => "text" }, data), message);
+  await assert.rejects(link.signDataAsync({ sign: () => undefined }, data), message);
+  await assert.rejects(link.signDataAsync({ sign: () => "text" }, data), message);
+});
+
+test("async signing accepts a plain value and a thenable", async () => {
+  const data = Uint8Array.from([4, 5]);
+  const plain = await link.signDataAsync({ sign: (hash) => new Uint8Array(sign(hash)) }, data);
+  assert.deepEqual(Buffer.from(plain), expected(data));
+  const thenable = { sign: (hash) => ({ then: (done) => done(new Uint8Array(sign(hash))) }) };
+  assert.deepEqual(Buffer.from(await link.signDataAsync(thenable, data)), expected(data));
+  await assert.rejects(link.signDataAsync({ sign: () => { throw new Error("locked"); } }, data), { message: "locked" });
+});
+
+test("arguments of the wrong kind throw instead of trapping", () => {
+  const entropy = new Uint8Array(8);
+  assert.throws(() => new link.PairingSession(0, "0123456789abcdef", entropy), { message: "the pairing token must be a Uint8Array" });
+  assert.throws(() => new link.PairingSession(0, new Uint8Array(16), { length: 8 }), { message: "the code entropy must be a Uint8Array" });
+  const session = new link.PairingSession(0, new Uint8Array(16), entropy);
+  assert.throws(() => session.redeem(123, 1, undefined), { message: "the token must be a string" });
+  assert.throws(() => session.redeem("x", 1, 42), { message: "the peer must be a string" });
+  assert.throws(() => session.redeem("x", 1, {}), { message: "the peer must be a string" });
+  assert.equal(session.failedAttempts(), 0);
+  session.free();
+  assert.throws(() => link.normalizeShortCode(12345678), { message: "the short code must be a string" });
+  assert.throws(() => link.parsePairingCode(5), { message: "the pairing code must be a string" });
+  assert.throws(() => link.matchCode(new Uint8Array(32), 1), { message: "the short code must be a string" });
+  for (const port of [0, 70000, 1.5, NaN, -1]) {
+    assert.throws(() => new link.PairingCode("id", "n", "fp", ["10.0.0.1"], port, "t"), { message: /port/ }, String(port));
+  }
+  assert.throws(() => new link.PairingCode("id", "n", "fp", "10.0.0.1", 1, "t"), { message: /addresses/ });
+  assert.throws(() => new link.PairingCode("id", "n", "fp", [1], 1, "t"), { message: "an address must be a string" });
+  assert.equal(new link.PairingCode("id", "n", "fp", [], 65535, "t").port, 65535);
+  assert.equal(link.normalizeShortCode(undefined) ?? null, null);
 });
 
 test("pattern bytes have a cap", () => {

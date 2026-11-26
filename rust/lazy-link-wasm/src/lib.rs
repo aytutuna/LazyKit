@@ -4,6 +4,7 @@
 use js_sys::Uint8Array;
 use sha2::{Digest, Sha256};
 use wasm_bindgen::prelude::*;
+use wasm_bindgen_futures::JsFuture;
 
 const MAX_PATTERN_BYTES: u32 = 256 * 1024 * 1024;
 
@@ -25,6 +26,37 @@ fn time(ms: f64) -> Result<i64, JsError> {
     }
 }
 
+/// A parameter that must be a string; anything else would make the generated glue trap in the allocator.
+fn text(value: &JsValue, what: &str) -> Result<String, JsError> {
+    value
+        .as_string()
+        .ok_or_else(|| JsError::new(&format!("{what} must be a string")))
+}
+
+fn optional_text(value: &JsValue, what: &str) -> Result<Option<String>, JsError> {
+    if value.is_undefined() || value.is_null() {
+        Ok(None)
+    } else {
+        text(value, what).map(Some)
+    }
+}
+
+/// The generated glue copies any array-like into a byte slice, so a string would pass as predictable bytes.
+fn bytes(value: &JsValue, what: &str) -> Result<Vec<u8>, JsError> {
+    value
+        .dyn_ref::<Uint8Array>()
+        .map(|b| b.to_vec())
+        .ok_or_else(|| JsError::new(&format!("{what} must be a Uint8Array")))
+}
+
+fn port(value: f64) -> Result<u16, JsError> {
+    if value.fract() == 0.0 && (1.0..=65535.0).contains(&value) {
+        Ok(value as u16)
+    } else {
+        Err(JsError::new("the port is a whole number from 1 to 65535"))
+    }
+}
+
 /// What a desktop's pairing code carries.
 #[wasm_bindgen(getter_with_clone)]
 pub struct PairingCode {
@@ -41,28 +73,35 @@ pub struct PairingCode {
 impl PairingCode {
     #[wasm_bindgen(constructor)]
     pub fn new(
-        desktop_id: String,
-        name: String,
-        fingerprint: String,
-        addresses: Vec<String>,
-        port: u16,
-        token: String,
-    ) -> PairingCode {
-        PairingCode {
-            desktop_id,
-            name,
-            fingerprint,
+        desktop_id: JsValue,
+        name: JsValue,
+        fingerprint: JsValue,
+        addresses: JsValue,
+        port_number: f64,
+        token: JsValue,
+    ) -> Result<PairingCode, JsError> {
+        let addresses = addresses
+            .dyn_ref::<js_sys::Array>()
+            .ok_or_else(|| JsError::new("the addresses must be an array of strings"))?
+            .iter()
+            .map(|a| text(&a, "an address"))
+            .collect::<Result<_, _>>()?;
+        Ok(PairingCode {
+            desktop_id: text(&desktop_id, "the desktop id")?,
+            name: text(&name, "the name")?,
+            fingerprint: text(&fingerprint, "the fingerprint")?,
             addresses,
-            port,
-            token,
-        }
+            port: port(port_number)?,
+            token: text(&token, "the token")?,
+        })
     }
 }
 
 /// Throws an Error whose message is notPairingCode, newerVersion or damaged.
 #[wasm_bindgen(js_name = parsePairingCode)]
-pub fn parse_pairing_code(text: &str) -> Result<PairingCode, JsError> {
-    let uri = lazy_link::parse_pairing_uri(text).map_err(|e| JsError::new(error_name(e)))?;
+pub fn parse_pairing_code(value: JsValue) -> Result<PairingCode, JsError> {
+    let uri = lazy_link::parse_pairing_uri(&text(&value, "the pairing code")?)
+        .map_err(|e| JsError::new(error_name(e)))?;
     Ok(PairingCode {
         desktop_id: uri.desktop_id,
         name: uri.name,
@@ -88,8 +127,8 @@ pub fn format_pairing_code(code: &PairingCode) -> Result<String, JsError> {
 }
 
 #[wasm_bindgen(js_name = normalizeShortCode)]
-pub fn normalize_short_code(text: &str) -> Option<String> {
-    lazy_link::normalize_short_code(text)
+pub fn normalize_short_code(value: JsValue) -> Result<Option<String>, JsError> {
+    Ok(optional_text(&value, "the short code")?.and_then(|t| lazy_link::normalize_short_code(&t)))
 }
 
 #[wasm_bindgen(js_name = spkiFingerprint)]
@@ -103,8 +142,12 @@ pub fn check_code(fingerprint: &[u8]) -> String {
 }
 
 #[wasm_bindgen(js_name = matchCode)]
-pub fn match_code(fingerprint: &[u8], short_code: &str) -> String {
-    lazy_link::spaced(&lazy_link::match_code(fingerprint, short_code))
+pub fn match_code(fingerprint: &[u8], short_code: JsValue) -> Result<String, JsError> {
+    let short_code = text(&short_code, "the short code")?;
+    Ok(lazy_link::spaced(&lazy_link::match_code(
+        fingerprint,
+        &short_code,
+    )))
 }
 
 #[wasm_bindgen]
@@ -117,13 +160,16 @@ impl PairingSession {
     #[wasm_bindgen(constructor)]
     pub fn new(
         opened_ms: f64,
-        token: &[u8],
-        code_entropy: &[u8],
+        token: JsValue,
+        code_entropy: JsValue,
     ) -> Result<PairingSession, JsError> {
+        let token = bytes(&token, "the pairing token")?;
         let token = token
+            .as_slice()
             .try_into()
             .map_err(|_| JsError::new("a pairing token has 16 bytes"))?;
-        let inner = lazy_link::PairingSession::new(time(opened_ms)?, token, code_entropy)
+        let code_entropy = bytes(&code_entropy, "the code entropy")?;
+        let inner = lazy_link::PairingSession::new(time(opened_ms)?, token, &code_entropy)
             .ok_or_else(|| JsError::new("the short code needs 8 bytes of randomness"))?;
         Ok(PairingSession { inner })
     }
@@ -169,14 +215,10 @@ impl PairingSession {
 
     /// Returns accepted, wrongToken, expired, alreadyUsed or closed. `peer` is an address as the
     /// platform prints it, an IPv6 one possibly with its zone (fe80::1%12); anything else throws.
-    pub fn redeem(
-        &self,
-        token: Option<String>,
-        now_ms: f64,
-        peer: Option<String>,
-    ) -> Result<String, JsError> {
+    pub fn redeem(&self, token: JsValue, now_ms: f64, peer: JsValue) -> Result<String, JsError> {
         use lazy_link::RedeemResult::*;
-        let peer = peer
+        let token = optional_text(&token, "the token")?;
+        let peer = optional_text(&peer, "the peer")?
             .map(|p| p.parse::<lazy_link::Peer>())
             .transpose()
             .map_err(|()| JsError::new("the peer is not an address"))?;
@@ -203,11 +245,11 @@ extern "C" {
     #[wasm_bindgen(method, catch)]
     fn sign(this: &Signer, hash: &[u8]) -> Result<JsValue, JsValue>;
 
-    /// The same with `sign` returning a promise.
+    /// The same with `sign` returning a promise or a plain value.
     pub type AsyncSigner;
 
     #[wasm_bindgen(method, catch, js_name = sign)]
-    async fn sign_later(this: &AsyncSigner, hash: &[u8]) -> Result<JsValue, JsValue>;
+    fn sign_later(this: &AsyncSigner, hash: &[u8]) -> Result<JsValue, JsValue>;
 }
 
 fn signature(value: JsValue) -> Result<Vec<u8>, JsValue> {
@@ -224,7 +266,8 @@ pub fn sign_data(signer: &Signer, data: &[u8]) -> Result<Vec<u8>, JsValue> {
 
 #[wasm_bindgen(js_name = signDataAsync)]
 pub async fn sign_data_async(signer: &AsyncSigner, data: Vec<u8>) -> Result<Vec<u8>, JsValue> {
-    signature(signer.sign_later(&Sha256::digest(&data)).await?)
+    let value = signer.sign_later(&Sha256::digest(&data))?;
+    signature(JsFuture::from(js_sys::Promise::resolve(&value)).await?)
 }
 
 /// A panic traps: the page sees a RuntimeError and the instance is not used again.
