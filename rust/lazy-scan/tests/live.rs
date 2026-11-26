@@ -538,3 +538,253 @@ fn the_edge_search_finds_the_page_without_the_model() {
         assert_eq!(update.state, CaptureState::NoPage);
     }
 }
+
+// Lazy Scan's LiveObjectSearchTests: three prints in a frame, found by a scripted finder (call n answers sets[n], the last one
+// after that), 250 ms apart, on a sharp lit frame.
+mod objects {
+    use super::*;
+    use lazy_scan::{CaptureKind, LiveSearch};
+
+    const SCALE: f64 = 5.0;
+
+    fn print(x0: f64, y0: f64, x1: f64, y1: f64) -> Quad {
+        Quad::from_xy([
+            [x0 * SCALE, y0 * SCALE],
+            [x1 * SCALE, y0 * SCALE],
+            [x1 * SCALE, y1 * SCALE],
+            [x0 * SCALE, y1 * SCALE],
+        ])
+    }
+
+    fn three_prints() -> Vec<Quad> {
+        vec![
+            print(2.0, 2.0, 20.0, 14.0),
+            print(30.0, 2.0, 48.0, 14.0),
+            print(2.0, 24.0, 20.0, 36.0),
+        ]
+    }
+
+    fn shifted(quads: &[Quad], dx: f64) -> Vec<Quad> {
+        quads
+            .iter()
+            .map(|q| Quad::from_xy(q.0.map(|p| [p.x + dx * SCALE, p.y])))
+            .collect()
+    }
+
+    struct Script {
+        sets: Vec<Vec<Quad>>,
+        calls: Cell<usize>,
+    }
+
+    impl Script {
+        fn new(sets: Vec<Vec<Quad>>) -> Script {
+            Script {
+                sets,
+                calls: Cell::new(0),
+            }
+        }
+
+        fn find(&self, _: &Rgba, _: CaptureKind) -> Vec<Quad> {
+            let n = self.calls.get();
+            self.calls.set(n + 1);
+            self.sets[n.min(self.sets.len() - 1)].clone()
+        }
+    }
+
+    fn frame(t: f64) -> LiveFrame {
+        LiveFrame {
+            image: Arc::new(quality_frame(true, 0, 255)),
+            timestamp_ms: t,
+            model: None,
+        }
+    }
+
+    fn tracker(search: LiveSearch) -> LiveQuadTracker {
+        let mut tracker = LiveQuadTracker::default();
+        tracker.set_search(search);
+        tracker
+    }
+
+    fn read(tracker: &mut LiveQuadTracker, script: &Script, t: f64) -> Option<LiveUpdate> {
+        tracker.process_with(&frame(t), nothing, |i, k| script.find(i, k))
+    }
+
+    fn times(from: f64, to: f64) -> impl Iterator<Item = f64> {
+        (0..)
+            .map(move |i| from + i as f64 * 250.0)
+            .take_while(move |t| *t <= to)
+    }
+
+    fn shares(quad: &Quad) -> Quad {
+        let w = quality_frame(true, 0, 255);
+        quad.scaled(1.0 / w.width as f64, 1.0 / w.height as f64)
+    }
+
+    #[test]
+    fn every_print_found_is_outlined_as_shares_and_the_shutter_waits_for_the_set_to_hold_still() {
+        let script = Script::new(vec![three_prints()]);
+        let mut live = tracker(LiveSearch::Objects(CaptureKind::Photo));
+        let (mut fired, mut counts, mut steady) = (vec![], vec![], vec![]);
+        for t in times(0.0, 1250.0) {
+            let update = read(&mut live, &script, t).unwrap();
+            counts.push(update.outlines.len());
+            steady.push(update.is_steady);
+            if update.should_capture {
+                fired.push(t);
+            }
+        }
+        assert_eq!(counts, [3; 6]);
+        assert_eq!(steady, [false, true, true, true, true, true]);
+        // first seen at 0, held still from 250, 600 ms of it at 750; not taken again while it stays
+        assert_eq!(fired, [750.0]);
+        let first = read(&mut live, &script, 1500.0).unwrap();
+        assert!(first.outlines[0].max_corner_distance(&shares(&three_prints()[0])) < 1e-4);
+        assert_eq!(first.outline, None);
+    }
+
+    #[test]
+    fn a_set_that_moves_is_never_taken_and_a_count_that_changes_starts_over() {
+        let moving = (0..8)
+            .map(|i| shifted(&three_prints(), i as f64 * 4.0))
+            .collect();
+        let script = Script::new(moving);
+        let mut live = tracker(LiveSearch::Objects(CaptureKind::Photo));
+        for (i, t) in times(0.0, 1750.0).enumerate() {
+            let update = read(&mut live, &script, t).unwrap();
+            assert!(!update.should_capture && !update.is_steady, "frame {i}");
+        }
+        let two = three_prints()[..2].to_vec();
+        let script = Script::new(vec![
+            three_prints(),
+            three_prints(),
+            three_prints(),
+            two.clone(),
+            two.clone(),
+            two.clone(),
+            two,
+        ]);
+        let mut live = tracker(LiveSearch::Objects(CaptureKind::Photo));
+        let fired: Vec<f64> = times(0.0, 1500.0)
+            .filter(|t| read(&mut live, &script, *t).is_some_and(|u| u.should_capture))
+            .collect();
+        // the third print leaves at 750: the two left are first seen then and taken once held 600 ms, at 1500
+        assert_eq!(fired, [1500.0]);
+    }
+
+    #[test]
+    fn frames_are_searched_four_times_a_second_and_not_at_all_while_off() {
+        let script = Script::new(vec![three_prints()]);
+        let mut live = tracker(LiveSearch::Objects(CaptureKind::Photo));
+        assert!(read(&mut live, &script, 0.0).is_some());
+        assert!(read(&mut live, &script, 100.0).is_none());
+        assert!(read(&mut live, &script, 200.0).is_none());
+        assert!(read(&mut live, &script, 250.0).is_some());
+        assert_eq!(script.calls.get(), 2);
+        live.set_search(LiveSearch::Off);
+        assert!(read(&mut live, &script, 1000.0).is_none());
+        assert_eq!(script.calls.get(), 2);
+    }
+
+    #[test]
+    fn a_lost_set_keeps_its_outlines_for_half_a_second_and_a_photo_taken_is_not_taken_again() {
+        let p = three_prints;
+        let script = Script::new(vec![p(), p(), p(), p(), vec![], vec![], vec![], p()]);
+        let mut live = tracker(LiveSearch::Objects(CaptureKind::Photo));
+        for t in times(0.0, 500.0) {
+            assert!(read(&mut live, &script, t).is_some());
+        }
+        live.mark_captured();
+        let held = read(&mut live, &script, 750.0).unwrap();
+        assert!(!held.should_capture);
+        assert_eq!(held.state, CaptureState::Captured);
+        let lost = read(&mut live, &script, 1000.0).unwrap();
+        assert_eq!(lost.outlines.len(), 3);
+        assert_eq!(lost.state, CaptureState::NoPage);
+        assert_eq!(read(&mut live, &script, 1250.0).unwrap().outlines.len(), 3);
+        assert_eq!(read(&mut live, &script, 1500.0).unwrap().outlines.len(), 0);
+        // the prints come back after the set was gone for 500 ms: a new set, judged from its first sighting
+        let back = read(&mut live, &script, 1750.0).unwrap();
+        assert!(!back.should_capture);
+        assert_eq!(back.state, CaptureState::Moving);
+    }
+
+    #[test]
+    fn rearm_judges_a_set_decided_on_without_a_photo_again() {
+        let script = Script::new(vec![three_prints()]);
+        let mut live = tracker(LiveSearch::Objects(CaptureKind::Photo));
+        let mut fired = 0;
+        for t in times(0.0, 750.0) {
+            fired += read(&mut live, &script, t).is_some_and(|u| u.should_capture) as i32;
+        }
+        assert_eq!(fired, 1);
+        live.rearm();
+        for t in times(1000.0, 1750.0) {
+            fired += read(&mut live, &script, t).is_some_and(|u| u.should_capture) as i32;
+        }
+        assert_eq!(fired, 2);
+    }
+
+    #[test]
+    fn with_largest_only_the_one_biggest_print_is_outlined() {
+        let script = Script::new(vec![three_prints()]);
+        let mut live = tracker(LiveSearch::Objects(CaptureKind::Photo));
+        live.set_largest_only(true);
+        let update = read(&mut live, &script, 0.0).unwrap();
+        assert_eq!(update.outlines.len(), 1);
+        let biggest = three_prints()
+            .into_iter()
+            .max_by(|a, b| a.area().total_cmp(&b.area()))
+            .unwrap();
+        assert!(update.outlines[0].max_corner_distance(&shares(&biggest)) < 1e-4);
+    }
+
+    #[test]
+    fn a_search_for_the_page_does_not_run_the_object_finder() {
+        let script = Script::new(vec![three_prints()]);
+        let mut live = tracker(LiveSearch::Page);
+        for t in times(0.0, 500.0) {
+            read(&mut live, &script, t);
+        }
+        assert_eq!(script.calls.get(), 0);
+    }
+
+    #[test]
+    fn a_warm_phone_searches_the_page_about_four_times_a_second() {
+        let mut live = LiveQuadTracker::default();
+        live.set_reduced(true);
+        let image = quality_frame(true, 0, 255);
+        let at = |live: &mut LiveQuadTracker, t| step(live, &image, t, nothing).is_some();
+        assert!(at(&mut live, 1000.0));
+        assert!(!at(&mut live, 1100.0));
+        assert!(!at(&mut live, 1224.9));
+        assert!(at(&mut live, 1225.0));
+        live.set_reduced(false);
+        assert!(!at(&mut live, 1300.0));
+        assert!(at(&mut live, 1315.0));
+    }
+
+    #[test]
+    fn an_answer_to_a_frame_searched_before_a_reset_or_a_new_search_is_dropped() {
+        let script = Script::new(vec![three_prints()]);
+        let mut live = tracker(LiveSearch::Objects(CaptureKind::Photo));
+        let f = frame(0.0);
+        let ticket = live.begin(&f).unwrap();
+        let read = ticket.read_objects(&f, |i, k| script.find(i, k));
+        live.reset();
+        assert!(live.finish_objects(&ticket, &f, read).is_none());
+
+        let f = frame(500.0);
+        let ticket = live.begin(&f).unwrap();
+        let read = ticket.read_objects(&f, |i, k| script.find(i, k));
+        assert_eq!(ticket.search(), LiveSearch::Objects(CaptureKind::Photo));
+        assert!(live.finish_objects(&ticket, &f, read.clone()).is_some());
+        live.set_search(LiveSearch::Page);
+        assert!(live.finish_objects(&ticket, &f, read).is_none());
+
+        let f = frame(2000.0);
+        let ticket = live.begin(&f).unwrap();
+        let read = ticket.read_page(&f, nothing);
+        live.reset();
+        assert!(live.finish_page(&ticket, &f, read).is_none());
+    }
+}

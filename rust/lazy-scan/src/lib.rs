@@ -30,8 +30,10 @@ pub use enhancer::{
 pub use geometry::{Point, Quad, aspect};
 pub use lazy_scan_model::{CornerModel, Heatmaps, ModelError};
 pub use live::{
-    ANALYSIS_LONG_SIDE, Detection, HOLD_MS, LiveFrame, LiveQuadFilter, LiveQuadTracker, LiveUpdate,
-    MIN_FRAME_GAP_MS, PageThumbnail, Steadied, edge_search,
+    ANALYSIS_LONG_SIDE, CaptureKind, Detection, FrameTicket, HOLD_MS, LiveFrame, LiveObjectSet,
+    LiveQuadFilter, LiveQuadTracker, LiveSearch, LiveUpdate, MIN_FRAME_GAP_MS, MIN_OBJECT_GAP_MS,
+    OBJECT_OUTLINE_HOLD_MS, ObjectOutput, ObjectReading, PageReading, PageThumbnail, Steadied,
+    edge_search,
 };
 pub use photo::{
     Action, DpiRule, Filter, ImportPlan, Imported, MAX_DPI, MIN_DPI, NOMINAL_DPI, Orientation,
