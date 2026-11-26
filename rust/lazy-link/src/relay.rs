@@ -320,6 +320,11 @@ impl Relay {
             let agent: ureq::Agent = ureq::Agent::config_builder()
                 .http_status_as_error(false)
                 .timeout_global(Some(REQUEST_TIMEOUT))
+                .tls_config(
+                    ureq::tls::TlsConfig::builder()
+                        .root_certs(ureq::tls::RootCerts::PlatformVerifier)
+                        .build(),
+                )
                 .build()
                 .into();
             let res = match (method, body) {
