@@ -1,0 +1,15 @@
+[package]
+name = "lazy-link-ffi"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license-file.workspace = true
+publish.workspace = true
+
+[lib]
+crate-type = ["cdylib", "staticlib", "lib"]
+
+[dependencies]
+lazy-link = { path = "../lazy-link" }
+thiserror = "2"
+uniffi = { workspace = true }

@@ -1,6 +1,6 @@
 [workspace]
 resolver = "3"
-members = ["lazy-link"]
+members = ["lazy-link", "lazy-link-ffi", "uniffi-bindgen"]
 
 [workspace.package]
 version = "0.1.0"
@@ -8,6 +8,10 @@ edition = "2024"
 rust-version = "1.100"
 license-file = "../LICENSE"
 publish = false
+
+[workspace.dependencies]
+# uniffi-bindgen-cs 0.12.0 generates for exactly this release; the pin holds Swift and Kotlin back with it.
+uniffi = "=0.32.0"
 
 [profile.release]
 # Every cdylib and staticlib has to unwind: UniFFI turns a panic into an exception only if it can catch it.
