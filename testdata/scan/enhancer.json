@@ -1,0 +1,46 @@
+{
+  "about": "Page clean-up (DocumentEnhancer) on drawn pages. The pages are described, not stored; the sum is FNV-1a (offset 2166136261, prime 16777619) over the RGBA bytes. The pages come from Lazy Scan's EnhancerPages (Swift and C# tests, same values in both); Lazy Collect's TypeScript filters pin the same sums for shadowed, shadowed-plain, shadowed-picture and dark-ground in the modes it has (auto, gray, bw, whiteboard) and has no photo mode.",
+  "pages": {
+    "shadowed": {"kind": "shadowed", "stamp": true, "picture": false, "sum": "4329e79a"},
+    "shadowed-plain": {"kind": "shadowed", "stamp": false, "picture": false, "sum": "8f960753"},
+    "shadowed-picture": {"kind": "shadowed", "stamp": false, "picture": true, "sum": "2c86f2c0"},
+    "dark-ground": {"kind": "dark-ground", "sum": "e4cfc2d5"},
+    "hard-shadow": {"kind": "hard-shadow", "print": "lines", "edge": 130, "sum": "a8cb3fcd"},
+    "hard-shadow-few": {"kind": "hard-shadow", "print": "few-lines", "edge": 130, "sum": "4b4a6495"},
+    "hard-shadow-blank": {"kind": "hard-shadow", "print": "blank", "edge": 130, "sum": "2ec994c5"},
+    "hard-shadow-few-109": {"kind": "hard-shadow", "print": "few-lines", "edge": 109, "sum": "263a9905"},
+    "hard-shadow-blank-148": {"kind": "hard-shadow", "print": "blank", "edge": 148, "sum": "a99e33c5"},
+    "picture-caption": {"kind": "picture-caption", "sum": "78dd9b25"},
+    "ramp-70-136": {"kind": "ramp", "from": 70, "to": 136},
+    "ramp-10-250": {"kind": "ramp", "from": 10, "to": 250}
+  },
+  "results": [
+    {"page": "shadowed", "mode": "auto", "applied": "color", "sum": "70604295"},
+    {"page": "shadowed", "mode": "color", "applied": "color", "sum": "70604295"},
+    {"page": "shadowed", "mode": "gray", "applied": "gray", "sum": "ec4526a3"},
+    {"page": "shadowed", "mode": "bw", "applied": "bw", "sum": "43422875"},
+    {"page": "shadowed", "mode": "photo", "applied": "photo", "sum": "bca2862c"},
+    {"page": "shadowed-plain", "mode": "auto", "applied": "gray", "sum": "f81468d6"},
+    {"page": "shadowed-picture", "mode": "gray", "applied": "gray", "sum": "13cf7a4c"},
+    {"page": "hard-shadow", "mode": "gray", "applied": "gray", "sum": "2e7fef38"},
+    {"page": "hard-shadow", "mode": "bw", "applied": "bw", "sum": "74283c44"},
+    {"page": "hard-shadow", "mode": "color", "applied": "color", "sum": "2c520a1d"},
+    {"page": "hard-shadow", "mode": "auto", "applied": "gray", "sum": "2e7fef38"},
+    {"page": "hard-shadow-few", "mode": "gray", "applied": "gray", "sum": "7181a6c5"},
+    {"page": "hard-shadow-few", "mode": "auto", "applied": "gray", "sum": "7181a6c5"},
+    {"page": "hard-shadow-few", "mode": "bw", "applied": "bw", "sum": "5bfd1fe5"},
+    {"page": "hard-shadow-blank", "mode": "bw", "applied": "bw", "sum": "f2cefdc5"},
+    {"page": "dark-ground", "mode": "gray", "applied": "gray", "sum": "6edc8c95"},
+    {"page": "dark-ground", "mode": "bw", "applied": "bw", "sum": "6edc8c95"},
+    {"page": "dark-ground", "mode": "auto", "applied": "gray", "sum": "6edc8c95"},
+    {"page": "dark-ground", "mode": "color", "applied": "color", "sum": "6edc8c95"},
+    {"page": "picture-caption", "mode": "gray", "applied": "gray", "sum": "895657f5"},
+    {"page": "picture-caption", "mode": "bw", "applied": "bw", "sum": "4acce6b5"},
+    {"page": "ramp-70-136", "mode": "photo", "applied": "photo", "sum": "9d70ab4a"},
+    {"page": "ramp-10-250", "mode": "photo", "applied": "photo", "sum": "7e1d5280"}
+  ],
+  "lightOnDark": {
+    "true": ["dark-ground"],
+    "false": ["shadowed", "shadowed-picture", "hard-shadow", "hard-shadow-few", "hard-shadow-blank", "hard-shadow-few-109", "hard-shadow-blank-148", "picture-caption"]
+  }
+}
