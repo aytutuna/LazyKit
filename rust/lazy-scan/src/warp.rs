@@ -524,16 +524,16 @@ pub fn box_reduced(image: &Rgba, factor: usize) -> Rgba {
         let (y0, y1) = (oy * factor, h.min(oy * factor + factor));
         for ox in 0..rw {
             let (x0, x1) = (ox * factor, w.min(ox * factor + factor));
-            let mut sum = [0usize; 4];
+            let mut sum = [0u64; 4];
             for y in y0..y1 {
                 for x in x0..x1 {
                     let si = (y * w + x) * 4;
                     for (s, &p) in sum.iter_mut().zip(&image.data[si..si + 4]) {
-                        *s += p as usize;
+                        *s += u64::from(p);
                     }
                 }
             }
-            let count = (y1 - y0) * (x1 - x0);
+            let count = ((y1 - y0) * (x1 - x0)) as u64;
             let di = (oy * rw + ox) * 4;
             for k in 0..4 {
                 out[di + k] = ((sum[k] + count / 2) / count) as u8;

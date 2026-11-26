@@ -9,11 +9,19 @@ pub struct Rgba {
     pub data: Vec<u8>,
 }
 
+/// Bytes in a `width` x `height` RGBA buffer; panics where the product does not fit usize (wasm32 wraps at 4 GiB).
+fn rgba_len(width: usize, height: usize) -> usize {
+    width
+        .checked_mul(height)
+        .and_then(|n| n.checked_mul(4))
+        .expect("image size is too large")
+}
+
 impl Rgba {
     pub fn new(width: usize, height: usize, data: Vec<u8>) -> Self {
         assert_eq!(
             data.len(),
-            width * height * 4,
+            rgba_len(width, height),
             "pixel data does not match the size"
         );
         Rgba {
@@ -24,7 +32,7 @@ impl Rgba {
     }
 
     pub fn filled(width: usize, height: usize, r: u8, g: u8, b: u8) -> Self {
-        let mut data = Vec::with_capacity(width * height * 4);
+        let mut data = Vec::with_capacity(rgba_len(width, height));
         for _ in 0..width * height {
             data.extend_from_slice(&[r, g, b, 255]);
         }
@@ -45,7 +53,7 @@ impl Rgba {
         }
         let (w, h) = (self.width, self.height);
         let (nw, nh) = if turns % 2 == 1 { (h, w) } else { (w, h) };
-        let mut data = vec![0u8; nw * nh * 4];
+        let mut data = vec![0u8; rgba_len(nw, nh)];
         for dy in 0..nh {
             for dx in 0..nw {
                 // each destination pixel looks up its source pixel
@@ -134,6 +142,12 @@ pub fn minified(image: &Rgba, width: usize, height: usize) -> Rgba {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    #[should_panic(expected = "image size is too large")]
+    fn a_size_that_overflows_is_refused() {
+        Rgba::new(usize::MAX / 2, 4, Vec::new());
+    }
 
     #[test]
     fn turning_moves_the_top_left_pixel_to_the_top_right() {

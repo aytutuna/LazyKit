@@ -213,6 +213,14 @@ fn box_reduction_averages_whole_and_edge_blocks_rounding_halves_up() {
 }
 
 #[test]
+fn a_block_of_many_pixels_does_not_overflow_a_32_bit_sum() {
+    // 4200 x 4200 is 17.6M pixels of 255, over u32::MAX once added up
+    let image = Rgba::filled(4200, 4200, 255, 255, 255);
+    let reduced = warp::box_reduced(&image, 4200);
+    assert_eq!(reduced.data, [255, 255, 255, 255]);
+}
+
+#[test]
 fn no_warp_for_an_outline_that_is_not_convex_or_a_size_out_of_range() {
     let photo = fixture(32, 24);
     let o = Options::default();
