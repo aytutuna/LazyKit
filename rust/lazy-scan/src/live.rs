@@ -300,10 +300,14 @@ impl LiveQuadTracker {
     }
 
     /// The model's page in the frame's pixels, when it is sure enough to be taken and a document's shape, its corners
-    /// named from the top left as the apps' MultiQuadPicker does.
+    /// named from the top left as the apps' MultiQuadPicker does, kept within the frame and still cut along (the apps'
+    /// canUseCorners).
     fn model_page(found: &Found, w: f64, h: f64) -> Option<Quad> {
-        acceptable(found, w, h)
-            .then(|| Quad::from_corners(found.quad.scaled(w, h).0).clamped_to_photo(w, h))
+        if !acceptable(found, w, h) {
+            return None;
+        }
+        let clamped = Quad::from_corners(found.quad.scaled(w, h).0).clamped_to_photo(w, h);
+        clamped.usable().then_some(clamped)
     }
 
     /// Reads one frame. `search` is the page search (edges) for frames the model did not place; it gets the page of a

@@ -473,3 +473,33 @@ fn the_model_flickering_does_not_hand_the_outline_to_the_search() {
         assert!(o.max_corner_distance(&want) < 1e-9, "at {i}");
     }
 }
+
+#[test]
+fn a_models_page_that_the_frame_edge_squeezes_to_nothing_is_not_taken() {
+    // two corners far outside on the left both land on the edge, so the top edge goes to nothing
+    let squeezed = Found {
+        quad: Quad::from_xy([[-0.5, 0.2], [-0.4, 0.2], [0.9, 0.9], [-0.5, 0.9]]),
+        confidence: 0.95,
+    };
+    let image = Arc::new(Rgba::filled(640, 480, 90, 90, 90));
+    let asked = Cell::new(0);
+    let mut t = LiveQuadTracker::default();
+    for ms in [0.0, 100.0] {
+        let u = t
+            .process(
+                &LiveFrame {
+                    image: Arc::clone(&image),
+                    timestamp_ms: ms,
+                    model: Some(squeezed),
+                },
+                |_, _| {
+                    asked.set(asked.get() + 1);
+                    Detection::default()
+                },
+            )
+            .unwrap();
+        assert_eq!(u.outline, None);
+    }
+    // not taken, so the search looked
+    assert_eq!(asked.get(), 2);
+}
