@@ -13,6 +13,7 @@ pub mod frame_quality;
 mod geometry;
 mod glare;
 mod live;
+pub mod mask_ops;
 pub mod multi_quad;
 mod page_quality;
 mod photo;
