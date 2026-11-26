@@ -9,4 +9,7 @@ mod arith;
 mod bitmap;
 mod budget;
 mod generic;
+mod halftone;
 mod huffman;
+mod symbols;
+mod text;
