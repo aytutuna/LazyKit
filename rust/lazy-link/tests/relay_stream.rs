@@ -1,4 +1,5 @@
 #![cfg(feature = "relay")]
+#![allow(clippy::result_large_err)] // the handshake callback's error type is the library's
 //! The relay client against small stand-in servers, so no relay has to run.
 
 use futures_util::{SinkExt, StreamExt};
@@ -8,6 +9,7 @@ use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::{TcpListener, TcpStream};
 use tokio::time::timeout;
 use tokio_tungstenite::tungstenite::Message;
+use tokio_tungstenite::tungstenite::handshake::server::{Request, Response};
 use tokio_tungstenite::tungstenite::protocol::CloseFrame;
 use tokio_tungstenite::tungstenite::protocol::frame::coding::CloseCode;
 
@@ -181,6 +183,14 @@ async fn refusals_become_their_own_errors() {
         RelayError::TooManyStreams
     ));
     assert!(matches!(
+        refused_with("503 Service Unavailable", "Retry-After: 60\r\n").await,
+        RelayError::RateLimited { retry_after } if retry_after == Duration::from_secs(60)
+    ));
+    assert!(matches!(
+        refused_with("503 Service Unavailable", "").await,
+        RelayError::Refused(503)
+    ));
+    assert!(matches!(
         refused_with("500 Internal Server Error", "").await,
         RelayError::Refused(500)
     ));
@@ -228,4 +238,208 @@ async fn a_host_that_is_replaced_says_so() {
     });
     let mut host = relay.host(&room_id(b"r")).await.unwrap();
     assert!(matches!(host.accept().await, Err(RelayError::Closed(1012))));
+}
+
+#[tokio::test]
+async fn a_rate_limited_request_says_when_to_retry() {
+    let (l, relay) = listener().await;
+    tokio::spawn(refuse(l, "503 Service Unavailable", "Retry-After: 30\r\n"));
+    assert!(matches!(
+        relay.status().await,
+        Err(RelayError::RateLimited { retry_after }) if retry_after == Duration::from_secs(30)
+    ));
+}
+
+#[tokio::test]
+async fn shutdown_is_a_half_close_and_the_reply_still_arrives() {
+    let (l, relay) = listener().await;
+    let server = tokio::spawn(async move {
+        let mut ws = tokio_tungstenite::accept_async(l.accept().await.unwrap().0)
+            .await
+            .unwrap();
+        let Some(Ok(Message::Binary(b))) = ws.next().await else {
+            panic!("expected the request")
+        };
+        assert_eq!(&b[..], b"ask");
+        let Some(Ok(Message::Text(t))) = ws.next().await else {
+            panic!("expected the end of input")
+        };
+        assert_eq!(t.as_str(), "eof");
+        ws.send(Message::binary(b"answer".to_vec())).await.unwrap();
+        ws.send(Message::text("eof")).await.unwrap();
+        // The client closed nothing, so the next frame is its goodbye when it is dropped.
+        matches!(ws.next().await, Some(Ok(Message::Close(_))) | None)
+    });
+    let mut s = relay.connect(&room_id(b"r")).await.unwrap();
+    s.write_all(b"ask").await.unwrap();
+    s.shutdown().await.unwrap();
+    let mut got = Vec::new();
+    s.read_to_end(&mut got).await.unwrap();
+    assert_eq!(got, b"answer");
+    assert_eq!(s.close_code(), None);
+    drop(s);
+    assert!(server.await.unwrap());
+}
+
+#[tokio::test]
+async fn the_other_ends_half_close_leaves_the_writer_working() {
+    let (l, relay) = listener().await;
+    let server = tokio::spawn(async move {
+        let mut ws = tokio_tungstenite::accept_async(l.accept().await.unwrap().0)
+            .await
+            .unwrap();
+        ws.send(Message::text("eof")).await.unwrap();
+        let Some(Ok(Message::Binary(b))) = ws.next().await else {
+            panic!("expected data after the half-close")
+        };
+        b.to_vec()
+    });
+    let mut s = relay.connect(&room_id(b"r")).await.unwrap();
+    let mut got = Vec::new();
+    s.read_to_end(&mut got).await.unwrap();
+    assert!(got.is_empty());
+    s.write_all(b"still here").await.unwrap();
+    assert_eq!(server.await.unwrap(), b"still here");
+}
+
+#[tokio::test]
+async fn a_stream_dropped_after_shutdown_still_says_goodbye() {
+    let (l, relay) = listener().await;
+    let server = tokio::spawn(async move {
+        let mut ws = tokio_tungstenite::accept_async(l.accept().await.unwrap().0)
+            .await
+            .unwrap();
+        while let Some(Ok(m)) = ws.next().await {
+            if let Message::Close(_) = m {
+                return true;
+            }
+        }
+        false
+    });
+    let mut s = relay.connect(&room_id(b"r")).await.unwrap();
+    s.shutdown().await.unwrap();
+    tokio::time::sleep(Duration::from_millis(100)).await;
+    drop(s);
+    assert!(
+        timeout(Duration::from_secs(5), server)
+            .await
+            .unwrap()
+            .unwrap()
+    );
+}
+
+#[tokio::test]
+async fn the_guest_names_its_own_device() {
+    let l = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let device = random_id();
+    let relay = Relay::new(
+        &format!("http://{}/relay/v1", l.local_addr().unwrap()),
+        &random_id(),
+        &device,
+    );
+    let server = tokio::spawn(async move {
+        let query = std::sync::Arc::new(std::sync::Mutex::new(String::new()));
+        let q = query.clone();
+        let _ws = tokio_tungstenite::accept_hdr_async(
+            l.accept().await.unwrap().0,
+            move |req: &Request, res: Response| {
+                *q.lock().unwrap() = req.uri().query().unwrap_or_default().to_string();
+                Ok(res)
+            },
+        )
+        .await
+        .unwrap();
+        query.lock().unwrap().clone()
+    });
+    let _s = relay.connect(&room_id(b"r")).await.unwrap();
+    let query = server.await.unwrap();
+    assert!(query.contains("role=guest"), "{query}");
+    assert!(query.contains(&format!("device={device}")), "{query}");
+}
+
+// The control socket announces two guests; the first one's stream is refused as expired.
+#[tokio::test]
+async fn accept_skips_a_guest_that_already_gave_up() {
+    let (l, relay) = listener().await;
+    tokio::spawn(async move {
+        let mut control = tokio_tungstenite::accept_async(l.accept().await.unwrap().0)
+            .await
+            .unwrap();
+        control.send(Message::text("open gone")).await.unwrap();
+        control.send(Message::text("open here")).await.unwrap();
+        let mut streams = Vec::new();
+        for _ in 0..2 {
+            let ws = tokio_tungstenite::accept_hdr_async(
+                l.accept().await.unwrap().0,
+                |req: &Request, res: Response| {
+                    if req.uri().query().unwrap_or_default().contains("id=gone") {
+                        Err(tokio_tungstenite::tungstenite::http::Response::builder()
+                            .status(404)
+                            .body(None)
+                            .unwrap())
+                    } else {
+                        Ok(res)
+                    }
+                },
+            )
+            .await;
+            streams.push(ws);
+        }
+        let mut ok = streams.into_iter().find_map(Result::ok).unwrap();
+        ok.send(Message::binary(vec![5])).await.unwrap();
+        let _ = control.next().await;
+    });
+    let mut host = relay.host(&room_id(b"r")).await.unwrap();
+    let mut s = host.accept().await.unwrap();
+    let mut b = [0u8; 1];
+    s.read_exact(&mut b).await.unwrap();
+    assert_eq!(b, [5]);
+}
+
+#[tokio::test]
+async fn a_connect_that_stalls_is_given_up_on() {
+    let (l, relay) = listener().await;
+    tokio::spawn(async move {
+        let (_tcp, _) = l.accept().await.unwrap();
+        tokio::time::sleep(Duration::from_secs(60)).await;
+    });
+    let res = timeout(
+        Duration::from_secs(5),
+        relay.connect_waiting(&room_id(b"r"), Duration::from_secs(1)),
+    )
+    .await
+    .expect("connect_waiting kept waiting past its own timeout");
+    assert!(matches!(res, Err(RelayError::Transport(_))));
+}
+
+// The next two accept the upgrade and then never answer, as a path that has died does.
+#[tokio::test]
+async fn a_host_whose_connection_goes_quiet_is_told_it_is_closed() {
+    let (l, relay) = listener().await;
+    tokio::spawn(async move {
+        let _ws = tokio_tungstenite::accept_async(l.accept().await.unwrap().0)
+            .await
+            .unwrap();
+        tokio::time::sleep(Duration::from_secs(3600)).await;
+    });
+    let mut host = relay.host(&room_id(b"r")).await.unwrap();
+    tokio::time::pause();
+    assert!(matches!(host.accept().await, Err(RelayError::Closed(1006))));
+}
+
+#[tokio::test]
+async fn a_stream_whose_connection_goes_quiet_ends_with_1006() {
+    let (l, relay) = listener().await;
+    tokio::spawn(async move {
+        let _ws = tokio_tungstenite::accept_async(l.accept().await.unwrap().0)
+            .await
+            .unwrap();
+        tokio::time::sleep(Duration::from_secs(3600)).await;
+    });
+    let mut s = relay.connect(&room_id(b"r")).await.unwrap();
+    tokio::time::pause();
+    let mut got = Vec::new();
+    s.read_to_end(&mut got).await.unwrap();
+    assert!(got.is_empty());
+    assert_eq!(s.close_code(), Some(1006));
 }

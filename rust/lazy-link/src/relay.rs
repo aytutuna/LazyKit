@@ -7,12 +7,13 @@ use sha2::{Digest, Sha256};
 use std::fmt;
 use std::io;
 use std::pin::Pin;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, OnceLock};
 use std::task::{Context, Poll};
 use std::time::Duration;
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt, DuplexStream, ReadBuf};
 use tokio::net::TcpStream;
-use tokio::sync::mpsc;
+use tokio::sync::{Notify, mpsc};
 use tokio::task::{AbortHandle, JoinHandle};
 use tokio_tungstenite::tungstenite::{self, Message};
 use tokio_tungstenite::{MaybeTlsStream, WebSocketStream};
@@ -24,10 +25,15 @@ pub const MAX_STREAMS: usize = 16;
 /// What the relay may hold for a receiver before it closes the stream with [`CLOSE_TOO_SLOW`].
 pub const MAX_BUFFERED: usize = 8 * 1024 * 1024;
 pub const CLOSE_TOO_SLOW: u16 = 1013;
-pub const CLOSE_CAPPED: u16 = 1008;
+/// The weekly cap closes streams with this application code; 1008 is a protocol fault.
+pub const CLOSE_CAPPED: u16 = 4402;
 
 const KEEPALIVE: Duration = Duration::from_secs(30);
 const WAKE_POLL: Duration = Duration::from_secs(1);
+/// A connection that has said nothing for this long, not even the relay's answer to a ping, is dead.
+const DEAD: Duration = Duration::from_secs(60);
+/// How long a connect or a plain request may take before it counts as failed.
+const REQUEST_TIMEOUT: Duration = Duration::from_secs(15);
 /// How much a stream holds before a write waits. It stays far below the relay's own limit, so a
 /// slow reader makes the writer wait here and only a reader that stops entirely is cut off.
 const WINDOW: usize = 256 * 1024;
@@ -47,6 +53,10 @@ pub enum RelayError {
     /// The group has used its week's allowance and has not paid.
     Capped,
     TooManyStreams,
+    /// This address has made too many requests; try again after `retry_after`.
+    RateLimited {
+        retry_after: Duration,
+    },
     /// The room belongs to another group.
     WrongGroup,
     /// The relay cannot check this store's receipts yet.
@@ -64,6 +74,9 @@ impl fmt::Display for RelayError {
             Self::NoHost { woken } => write!(f, "nobody is waiting in the room (woken: {woken})"),
             Self::Capped => f.write_str("the group has used its weekly allowance"),
             Self::TooManyStreams => f.write_str("too many streams in the room"),
+            Self::RateLimited { retry_after } => {
+                write!(f, "too many requests, retry in {} s", retry_after.as_secs())
+            }
             Self::WrongGroup => f.write_str("the room belongs to another group"),
             Self::NotConfigured => f.write_str("the relay cannot check receipts of this store yet"),
             Self::ReceiptRejected => f.write_str("the store rejected the receipt"),
@@ -88,9 +101,22 @@ impl From<tungstenite::Error> for RelayError {
             402 => Self::Capped,
             403 => Self::WrongGroup,
             429 => Self::TooManyStreams,
+            503 => match retry_after(
+                res.headers()
+                    .get("retry-after")
+                    .and_then(|v| v.to_str().ok()),
+            ) {
+                Some(retry_after) => Self::RateLimited { retry_after },
+                None => Self::Refused(503),
+            },
             status => Self::Refused(status),
         }
     }
+}
+
+// The relay answers its per-address limit with 503 and a Retry-After in seconds.
+fn retry_after(value: Option<&str>) -> Option<Duration> {
+    value?.trim().parse().ok().map(Duration::from_secs)
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -210,7 +236,11 @@ impl Relay {
     /// Waits in the room for guests; every one that connects comes out of [`RelayHost::accept`].
     pub async fn host(&self, room: &str) -> Result<RelayHost, RelayError> {
         let ws = self
-            .socket(room, &format!("role=host&device={}", self.device))
+            .socket(
+                room,
+                &format!("role=host&device={}", self.device),
+                REQUEST_TIMEOUT,
+            )
             .await?;
         let (tx, opens) = mpsc::channel(MAX_STREAMS);
         let task = tokio::spawn(control(ws, tx));
@@ -224,7 +254,17 @@ impl Relay {
 
     /// Opens one stream to the host of the room.
     pub async fn connect(&self, room: &str) -> Result<RelayStream, RelayError> {
-        let ws = self.socket(room, "role=guest").await?;
+        self.connect_within(room, REQUEST_TIMEOUT).await
+    }
+
+    async fn connect_within(
+        &self,
+        room: &str,
+        within: Duration,
+    ) -> Result<RelayStream, RelayError> {
+        let ws = self
+            .socket(room, &format!("role=guest&device={}", self.device), within)
+            .await?;
         Ok(RelayStream::new(ws))
     }
 
@@ -237,7 +277,8 @@ impl Relay {
     ) -> Result<RelayStream, RelayError> {
         let deadline = tokio::time::Instant::now() + timeout;
         loop {
-            match self.connect(room).await {
+            let left = deadline.saturating_duration_since(tokio::time::Instant::now());
+            match self.connect_within(room, left.min(REQUEST_TIMEOUT)).await {
                 Err(RelayError::NoHost { woken: true })
                     if tokio::time::Instant::now() + WAKE_POLL < deadline =>
                 {
@@ -248,15 +289,24 @@ impl Relay {
         }
     }
 
-    async fn socket(&self, room: &str, query: &str) -> Result<Socket, RelayError> {
+    async fn socket(
+        &self,
+        room: &str,
+        query: &str,
+        within: Duration,
+    ) -> Result<Socket, RelayError> {
         let base = self.base.replacen("http", "ws", 1);
         let url = if query.starts_with("role=stream") {
             format!("{base}/{room}?{query}")
         } else {
             format!("{base}/{room}?{query}&group={}", self.group)
         };
-        let (ws, _) = tokio_tungstenite::connect_async(url).await?;
-        Ok(ws)
+        match tokio::time::timeout(within, tokio_tungstenite::connect_async(url)).await {
+            Ok(res) => Ok(res?.0),
+            Err(_) => Err(RelayError::Transport(
+                "the relay did not answer in time".into(),
+            )),
+        }
     }
 
     async fn api(
@@ -269,6 +319,7 @@ impl Relay {
         tokio::task::spawn_blocking(move || {
             let agent: ureq::Agent = ureq::Agent::config_builder()
                 .http_status_as_error(false)
+                .timeout_global(Some(REQUEST_TIMEOUT))
                 .build()
                 .into();
             let res = match (method, body) {
@@ -281,6 +332,15 @@ impl Relay {
             };
             let mut res = res.map_err(|e| RelayError::Transport(e.to_string()))?;
             let status = res.status().as_u16();
+            if status == 503
+                && let Some(retry_after) = retry_after(
+                    res.headers()
+                        .get("retry-after")
+                        .and_then(|v| v.to_str().ok()),
+                )
+            {
+                return Err(RelayError::RateLimited { retry_after });
+            }
             let body = res.body_mut().read_to_string().unwrap_or_default();
             Ok((status, body))
         })
@@ -315,18 +375,24 @@ pub struct RelayHost {
 }
 
 impl RelayHost {
-    /// Waits for the next guest and returns the host's end of its stream.
+    /// Waits for the next guest and returns the host's end of its stream. An error means the
+    /// control connection is gone or the relay cannot be reached; a guest that has already given
+    /// up is skipped.
     pub async fn accept(&mut self) -> Result<RelayStream, RelayError> {
-        let id = self
-            .opens
-            .recv()
-            .await
-            .unwrap_or(Err(RelayError::Closed(1006)))?;
-        let ws = self
-            .relay
-            .socket(&self.room, &format!("role=stream&id={id}"))
-            .await?;
-        Ok(RelayStream::new(ws))
+        loop {
+            let id = self
+                .opens
+                .recv()
+                .await
+                .unwrap_or(Err(RelayError::Closed(1006)))?;
+            let query = format!("role=stream&id={id}");
+            match self.relay.socket(&self.room, &query, REQUEST_TIMEOUT).await {
+                Ok(ws) => return Ok(RelayStream::new(ws)),
+                // The relay forgets a join after ten seconds, so this guest is gone.
+                Err(RelayError::NoHost { .. }) => {}
+                Err(e) => return Err(e),
+            }
+        }
     }
 }
 
@@ -336,30 +402,35 @@ impl Drop for RelayHost {
     }
 }
 
-// Reads the control socket for guests that arrived and keeps it alive.
+// Reads the control socket for guests that arrived and keeps it alive. The relay answers every
+// ping, so a socket that has gone quiet for too long is dead even if no error has come yet.
 async fn control(mut ws: Socket, tx: mpsc::Sender<Result<String, RelayError>>) {
     let mut ping = keepalive();
+    let mut heard = tokio::time::Instant::now();
     loop {
         tokio::select! {
-            msg = ws.next() => match msg {
-                Some(Ok(Message::Text(t))) => {
-                    if let Some(id) = t.strip_prefix("open ") && tx.send(Ok(id.to_string())).await.is_err() {
+            msg = ws.next() => {
+                heard = tokio::time::Instant::now();
+                match msg {
+                    Some(Ok(Message::Text(t))) => {
+                        if let Some(id) = t.strip_prefix("open ") && tx.send(Ok(id.to_string())).await.is_err() {
+                            return;
+                        }
+                    }
+                    Some(Ok(Message::Close(frame))) => {
+                        let code = frame.map_or(1005, |f| u16::from(f.code));
+                        let _ = tx.send(Err(RelayError::Closed(code))).await;
+                        return;
+                    }
+                    Some(Ok(_)) => {}
+                    Some(Err(_)) | None => {
+                        let _ = tx.send(Err(RelayError::Closed(1006))).await;
                         return;
                     }
                 }
-                Some(Ok(Message::Close(frame))) => {
-                    let code = frame.map_or(1005, |f| u16::from(f.code));
-                    let _ = tx.send(Err(RelayError::Closed(code))).await;
-                    return;
-                }
-                Some(Ok(_)) => {}
-                Some(Err(_)) | None => {
-                    let _ = tx.send(Err(RelayError::Closed(1006))).await;
-                    return;
-                }
             },
             _ = ping.tick() => {
-                if ws.send(Message::text("ping")).await.is_err() {
+                if heard.elapsed() > DEAD || ws.send(Message::text("ping")).await.is_err() {
                     let _ = tx.send(Err(RelayError::Closed(1006))).await;
                     return;
                 }
@@ -371,10 +442,14 @@ async fn control(mut ws: Socket, tx: mpsc::Sender<Result<String, RelayError>>) {
 /// One connection of the phone link through the relay, as a byte stream. A clean close from
 /// the other end reads as end of input; any other close is available from
 /// [`close_code`](Self::close_code), and reads then end and writes fail.
+///
+/// `shutdown` is a half-close, as on TCP: the other end reads end of input, and this end can
+/// still read the reply. Dropping the stream closes both directions.
 pub struct RelayStream {
     io: DuplexStream,
     close: Arc<OnceLock<u16>>,
     reader: AbortHandle,
+    dropped: Arc<(AtomicBool, Notify)>,
 }
 
 impl RelayStream {
@@ -383,16 +458,26 @@ impl RelayStream {
         let (mut rd, mut wr) = tokio::io::split(remote);
         let (mut sink, mut source) = ws.split();
         let close = Arc::new(OnceLock::new());
+        let dropped = Arc::new((AtomicBool::new(false), Notify::new()));
 
+        let gone = dropped.clone();
         let outbound = tokio::spawn(async move {
             let mut ping = keepalive();
             let mut buf = vec![0u8; MAX_FRAME];
+            let mut writing = true;
             loop {
                 tokio::select! {
-                    n = rd.read(&mut buf) => match n {
-                        Ok(0) | Err(_) => {
+                    n = rd.read(&mut buf), if writing => match n {
+                        Ok(0) | Err(_) if gone.0.load(Ordering::Acquire) => {
                             let _ = sink.send(Message::Close(None)).await;
                             return;
+                        }
+                        Ok(0) | Err(_) => {
+                            // The writer is done; the reader may still be waiting for a reply.
+                            writing = false;
+                            if sink.send(Message::text("eof")).await.is_err() {
+                                return;
+                            }
                         }
                         Ok(n) => {
                             if sink.send(Message::binary(buf[..n].to_vec())).await.is_err() {
@@ -400,6 +485,11 @@ impl RelayStream {
                             }
                         }
                     },
+                    // Dropped after a shutdown: nothing is left to read, so say goodbye.
+                    _ = gone.1.notified(), if !writing => {
+                        let _ = sink.send(Message::Close(None)).await;
+                        return;
+                    }
                     _ = ping.tick() => {
                         if sink.send(Message::text("ping")).await.is_err() {
                             return;
@@ -413,22 +503,31 @@ impl RelayStream {
         let stop = outbound.clone();
         let code = close.clone();
         let inbound = tokio::spawn(async move {
-            while let Some(msg) = source.next().await {
+            loop {
+                // Pings are answered, so any silence this long means the path is dead.
+                let Ok(msg) = tokio::time::timeout(DEAD, source.next()).await else {
+                    let _ = code.set(1006);
+                    break;
+                };
                 match msg {
-                    Ok(Message::Binary(b)) => {
+                    Some(Ok(Message::Binary(b))) => {
                         if wr.write_all(&b).await.is_err() {
                             break;
                         }
                     }
-                    Ok(Message::Close(frame)) => {
+                    Some(Ok(Message::Text(t))) if t.as_str() == "eof" => {
+                        let _ = wr.shutdown().await;
+                    }
+                    Some(Ok(Message::Close(frame))) => {
                         let _ = code.set(frame.map_or(1005, |f| u16::from(f.code)));
                         break;
                     }
-                    Ok(_) => {}
-                    Err(_) => {
+                    Some(Ok(_)) => {}
+                    Some(Err(_)) => {
                         let _ = code.set(1006);
                         break;
                     }
+                    None => break,
                 }
             }
             let _ = code.set(1006);
@@ -440,11 +539,12 @@ impl RelayStream {
             io: local,
             close,
             reader: inbound,
+            dropped,
         }
     }
 
     /// The code the stream ended with, once it has ended: 1000 for a normal close, 1013 when
-    /// the relay cut it off because a reader fell behind, 1008 at the weekly cap, 1006 when the
+    /// the relay cut it off because a reader fell behind, 4402 at the weekly cap, 1006 when the
     /// connection simply dropped.
     pub fn close_code(&self) -> Option<u16> {
         self.close.get().copied()
@@ -455,6 +555,8 @@ impl Drop for RelayStream {
     fn drop(&mut self) {
         // The writer task says goodbye to the relay when its end of the pipe closes, so only the
         // reader is stopped here; it ends by itself once the relay answers.
+        self.dropped.0.store(true, Ordering::Release);
+        self.dropped.1.notify_one();
         self.reader.abort();
     }
 }

@@ -170,8 +170,10 @@ async fn push_tokens_register_and_a_missing_host_is_reported() {
     drop(a.host(&room).await.unwrap());
     // The relay sees the host's socket close a moment after the drop.
     let mut res = b.connect(&room).await.map(drop);
+    // Only the relay's answer for an empty room ends the wait; a slow close shows up as another
+    // error or as a stream that opens and has nobody behind it.
     for _ in 0..20 {
-        if res.is_err() {
+        if matches!(res, Err(RelayError::NoHost { .. })) {
             break;
         }
         tokio::time::sleep(Duration::from_millis(200)).await;
@@ -194,4 +196,26 @@ async fn a_group_starts_unpaid_and_receipts_are_not_checked_yet() {
         a.pay(Store::Apple, "receipt").await,
         Err(RelayError::NotConfigured)
     ));
+}
+
+#[tokio::test(flavor = "multi_thread")]
+#[ignore = "needs the relay on RELAY_URL"]
+async fn a_reply_still_arrives_after_the_request_is_shut_down() {
+    let (a, b, room) = pair();
+    let mut host = a.host(&room).await.unwrap();
+    let server = tokio::spawn(async move {
+        let mut s = host.accept().await.unwrap();
+        let mut request = Vec::new();
+        s.read_to_end(&mut request).await.unwrap();
+        s.write_all(b"reply").await.unwrap();
+        s.flush().await.unwrap();
+        request
+    });
+    let mut s = b.connect(&room).await.unwrap();
+    s.write_all(b"request").await.unwrap();
+    s.shutdown().await.unwrap();
+    let mut reply = vec![0u8; 5];
+    s.read_exact(&mut reply).await.unwrap();
+    assert_eq!(reply, b"reply");
+    assert_eq!(server.await.unwrap(), b"request");
 }
