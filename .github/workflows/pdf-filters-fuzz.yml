@@ -41,6 +41,8 @@ jobs:
           path: ~/.cargo/bin/cargo-fuzz
           key: cargo-fuzz-${{ env.CARGO_FUZZ }}-${{ runner.os }}-${{ env.NIGHTLY }}
       - run: cargo-fuzz --version 2>/dev/null | grep -qx "cargo-fuzz ${CARGO_FUZZ}" || cargo +"$NIGHTLY" install cargo-fuzz --version "$CARGO_FUZZ" --locked
+      - name: Lock
+        run: cargo +"$NIGHTLY" fetch --locked --manifest-path fuzz/Cargo.toml
       - name: Seeds
         run: |
           mkdir -p "fuzz/corpus/${{ matrix.target }}"
