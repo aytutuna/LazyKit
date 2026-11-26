@@ -12,6 +12,8 @@ allow = [
     "ISC",
     "Zlib",
     "Unicode-3.0",
+    # the Mozilla root certificate lists inside webpki-roots and webpki-root-certs, pulled in by the relay client
+    "CDLA-Permissive-2.0",
     # UniFFI (the Swift, Kotlin and C# bindings) is MPL-2.0: file-level, so unmodified use only needs its notice and source link
     "MPL-2.0",
 ]
