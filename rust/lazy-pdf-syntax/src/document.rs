@@ -137,7 +137,6 @@ pub struct Document {
     pub(crate) pages: Option<Arc<Vec<Page>>>,
     pub(crate) pages_walked: bool,
     pub(crate) linearized: Option<bool>,
-    pub(crate) pdfa: Option<(Option<i32>, Option<String>)>,
 }
 
 impl Document {
@@ -180,7 +179,6 @@ impl Document {
             pages: None,
             pages_walked: false,
             linearized: None,
-            pdfa: None,
         };
         document.load()?;
         Ok(document)

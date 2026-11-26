@@ -56,8 +56,8 @@ impl Document {
             if stage.filter == b"Crypt" {
                 // Decryption is the crypt layer's; /Identity leaves the data alone (ISO 32000-1 7.4.10).
                 let named = stage.parms.iter().rev().find(|(k, _)| k == b"Name");
-                if let Some((_, parm)) = named
-                    && !matches!(parm, Parm::Name(n) if n == b"Identity")
+                if let Some((_, Parm::Name(name))) = named
+                    && name != b"Identity"
                 {
                     return Err(ReadError::new(
                         Problem::Unsupported,
@@ -75,6 +75,10 @@ impl Document {
                         ReadError::new(Problem::Unsupported, detail)
                     }
                 })?;
+        }
+        // A stream with no filter, or only /Identity, is not held to the limit by any filter.
+        if data.len() > max_size {
+            return Err(ReadError::damaged("The stream is longer than the limit."));
         }
         Ok(data)
     }
@@ -242,15 +246,9 @@ impl Document {
 }
 
 fn parms_of(dict: &Dict) -> Vec<(Vec<u8>, Parm)> {
-    let mut parms: Vec<(Vec<u8>, Parm)> = Vec::new();
-    for (key, value) in dict.entries() {
-        let parm = parm_of(value);
-        match parms.iter_mut().find(|(k, _)| *k == key.0) {
-            Some(existing) => existing.1 = parm,
-            None => parms.push((key.0.clone(), parm)),
-        }
-    }
-    parms
+    dict.live_entries()
+        .map(|(key, value)| (key.0.clone(), parm_of(value)))
+        .collect()
 }
 
 fn parm_of(value: &Object) -> Parm {

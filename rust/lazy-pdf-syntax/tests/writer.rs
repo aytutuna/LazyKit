@@ -218,3 +218,25 @@ fn many_updates_are_each_a_section_of_their_own() {
         matches!(document.trailer().get("Round"), Some(Object::Number(n)) if n.integer() == Some(4))
     );
 }
+
+#[test]
+fn an_object_opened_for_change_and_left_as_it_was_is_not_written_again() {
+    let file = TestPdf::simple(1);
+    let mut document = open(file.clone());
+    document.get_mut(1).unwrap();
+    assert_eq!(document.save_incremental().unwrap(), file);
+
+    let mut document = open(file.clone());
+    let Some(Object::Dict(catalog)) = document.get_mut(1) else {
+        panic!("no catalog")
+    };
+    catalog.insert("Type", Object::Name(Name::new("Catalog")));
+    assert_eq!(document.save_incremental().unwrap(), file);
+
+    let mut document = open(file.clone());
+    let Some(Object::Dict(catalog)) = document.get_mut(1) else {
+        panic!("no catalog")
+    };
+    catalog.insert("Lang", Object::Name(Name::new("en")));
+    assert!(document.save_incremental().unwrap().len() > file.len());
+}

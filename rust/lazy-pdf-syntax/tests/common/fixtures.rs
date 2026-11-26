@@ -166,7 +166,7 @@ pub fn edit(document: &mut Document) {
     );
     let pages = document.pages();
     let contents = {
-        let dict = pages[1].dict().clone();
+        let dict = pages[1].dict(document);
         let Some(Object::Ref(contents)) = dict.get("Contents") else {
             panic!("no contents")
         };

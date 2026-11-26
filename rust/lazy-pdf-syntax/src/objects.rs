@@ -10,7 +10,9 @@ use crate::object::{Dict, Object, Ref};
 const MAX_REFERENCE_HOPS: usize = 32;
 const MAX_CACHED_OBJECT_STREAMS: usize = 256;
 const MAX_CACHED_OBJECT_STREAM_BYTES: usize = 128 << 20;
-const MAX_OBJECT_STREAM_SIZE: usize = 64 << 20;
+const MAX_OBJECT_STREAM_SIZE: usize = 32 << 20;
+/// All the object streams a document may decode in its life, however often the cache drops them.
+const MAX_DECODED_OBJECT_STREAM_BYTES: usize = 1 << 30;
 /// Reading an object can need another (a stream's /Length, an object stream); a longer chain is a trap.
 const MAX_LOAD_DEPTH: usize = 32;
 const MAX_FLATTENED_NODES: usize = 4096;
@@ -49,7 +51,17 @@ impl Document {
 
     /// Object `number` to change; it is written at the next save.
     pub fn get_mut(&mut self, number: u32) -> Option<&mut Object> {
-        self.get(number)?;
+        let value = self.get(number)?;
+        if !self.changed.contains(&number)
+            && self
+                .entries
+                .get(&number)
+                .is_some_and(|e| e.kind != EntryKind::New)
+        {
+            let mut print = Vec::new();
+            value.write_to(&mut print);
+            self.originals.insert(number, print);
+        }
         self.changed.insert(number);
         let slot = self.objects.get_mut(&number)?;
         Some(Arc::make_mut(&mut slot.value))
@@ -169,6 +181,7 @@ impl Document {
             },
         );
         self.changed.insert(number);
+        self.originals.remove(&number);
         self.deleted.remove(&number);
         if number >= self.next_object_number {
             self.next_object_number = number + 1;
@@ -185,6 +198,7 @@ impl Document {
         }
         self.objects.remove(&number);
         self.changed.remove(&number);
+        self.originals.remove(&number);
         if number >= self.first_new && entry.kind == EntryKind::New {
             self.entries.remove(&number);
             return;
@@ -194,14 +208,30 @@ impl Document {
         self.deleted.insert(number);
     }
 
-    /// The numbers of the objects that are new or were changed since the file was read, ascending; freed ones are
-    /// not among them.
+    /// The numbers of the objects that are new or differ from what was read, ascending; freed ones are not among
+    /// them. An object opened for change and left as it was does not count.
     pub(crate) fn changed_objects(&self) -> Vec<u32> {
         self.changed
             .iter()
-            .filter(|n| self.objects.contains_key(n))
+            .filter(|n| {
+                self.objects
+                    .get(n)
+                    .is_some_and(|slot| self.differs(**n, &slot.value))
+            })
             .copied()
             .collect()
+    }
+
+    fn differs(&self, number: u32, value: &Object) -> bool {
+        let Some(original) = self.originals.get(&number) else {
+            return true;
+        };
+        if matches!(value, Object::Stream(s) if s.data.is_some()) {
+            return true;
+        }
+        let mut print = Vec::new();
+        value.write_to(&mut print);
+        print != *original
     }
 
     pub(crate) fn deleted_objects(&self) -> Vec<u32> {
@@ -287,11 +317,18 @@ impl Document {
     pub(crate) fn load_object_stream(&mut self, number: u32) -> Option<&ObjectStream> {
         if !self.object_streams.contains_key(&number) {
             let loaded = self.read_object_stream(number)?;
-            let cached: usize = self.object_streams.values().map(|o| o.data.len()).sum();
-            if self.object_streams.len() >= MAX_CACHED_OBJECT_STREAMS
-                || cached + loaded.data.len() > MAX_CACHED_OBJECT_STREAM_BYTES
+            let mut cached: usize = self.object_streams.values().map(|o| o.data.len()).sum();
+            while !self.object_streams.is_empty()
+                && (self.object_streams.len() >= MAX_CACHED_OBJECT_STREAMS
+                    || cached + loaded.data.len() > MAX_CACHED_OBJECT_STREAM_BYTES)
             {
-                self.object_streams.clear();
+                let largest = *self
+                    .object_streams
+                    .iter()
+                    .max_by_key(|(_, o)| o.data.len())
+                    .map(|(n, _)| n)
+                    .unwrap();
+                cached -= self.object_streams.remove(&largest).unwrap().data.len();
             }
             self.object_streams.insert(number, loaded);
         }
@@ -311,6 +348,12 @@ impl Document {
         if n < 0 || first < 0 {
             return None;
         }
+        if self.object_stream_bytes >= MAX_DECODED_OBJECT_STREAM_BYTES {
+            self.add_repair(format!(
+                "Object stream {number} was not read: the file's object streams were decoded too often."
+            ));
+            return None;
+        }
         let data = match self.stream_data_limited(stream, MAX_OBJECT_STREAM_SIZE, false) {
             Ok(data) => data,
             Err(e) => {
@@ -321,6 +364,7 @@ impl Document {
                 return None;
             }
         };
+        self.object_stream_bytes += data.len();
         let mut header = Lexer::new(&data, 0);
         let mut offsets = HashMap::new();
         let mut numbers = Vec::new();
@@ -425,7 +469,15 @@ impl Document {
                 Some(Object::Dict(copy))
             }
             Object::Stream(_) if !streams => None,
+            // Past the depth a container is copied whole, so what it holds is charged like the levels above.
+            Object::Array(items) => charge(budget, items.len()).then(|| (*resolved).clone()),
+            Object::Dict(dict) => charge(budget, dict.len()).then(|| (*resolved).clone()),
             other => Some(other.clone()),
         }
     }
+}
+
+fn charge(budget: &mut i64, size: usize) -> bool {
+    *budget -= size as i64;
+    *budget >= 0
 }

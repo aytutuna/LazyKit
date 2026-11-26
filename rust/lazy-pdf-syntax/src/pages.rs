@@ -79,7 +79,6 @@ pub(crate) struct Inherited {
 /// One page of the tree.
 #[derive(Debug, Clone)]
 pub struct Page {
-    dict: Arc<Object>,
     pub reference: Ref,
     /// Position in reading order, from 0.
     pub index: usize,
@@ -93,13 +92,26 @@ struct Walk {
 }
 
 impl Page {
-    pub fn dict(&self) -> &Dict {
-        self.dict.as_dict().expect("a page is a dictionary")
+    /// The page's dictionary as it is now: a change made to the page object shows at once. Empty when the object is
+    /// gone or no longer a dictionary.
+    pub fn dict(&self, document: &mut Document) -> Dict {
+        match self.object(document).as_dict() {
+            Some(dict) => dict.clone(),
+            None => Dict::new(),
+        }
+    }
+
+    fn object(&self, document: &mut Document) -> Arc<Object> {
+        match document.get(self.reference.number) {
+            Some(object) if matches!(*object, Object::Dict(_)) => object,
+            _ => Arc::new(Object::Dict(Dict::new())),
+        }
     }
 
     /// The page's /Resources, or those of the nearest node above that has any.
     pub fn resources(&self, document: &mut Document) -> Option<Dict> {
-        if let Some(own) = document.dict_of(self.dict(), "Resources") {
+        let object = self.object(document);
+        if let Some(own) = document.dict_of(object.as_dict()?, "Resources") {
             return Some(own);
         }
         let inherited = document.resolve(self.inherited.resources.as_deref()?)?;
@@ -125,9 +137,35 @@ impl Page {
         if clipped.is_empty() { media } else { clipped }
     }
 
+    /// The finished page size; the crop box when the page has none.
+    pub fn trim_box(&self, document: &mut Document) -> Rect {
+        self.own_box(document, "TrimBox")
+    }
+
+    /// The extent that production clips to; the crop box when the page has none.
+    pub fn bleed_box(&self, document: &mut Document) -> Rect {
+        self.own_box(document, "BleedBox")
+    }
+
+    /// The meaningful content; the crop box when the page has none.
+    pub fn art_box(&self, document: &mut Document) -> Rect {
+        self.own_box(document, "ArtBox")
+    }
+
+    fn own_box(&self, document: &mut Document, key: &str) -> Rect {
+        match self.boxed(document, key, None) {
+            Some(found) => found,
+            None => self.crop_box(document),
+        }
+    }
+
     /// Clockwise degrees the page is turned when shown: 0, 90, 180 or 270 (anything else rounds to the nearest).
     pub fn rotate(&self, document: &mut Document) -> i32 {
-        let own = self.dict().get("Rotate").and_then(|v| document.resolve(v));
+        let object = self.object(document);
+        let own = object
+            .as_dict()
+            .and_then(|d| d.get("Rotate"))
+            .and_then(|v| document.resolve(v));
         let value = match own {
             Some(own) => Some(own.into_shared()),
             None => self
@@ -146,7 +184,11 @@ impl Page {
 
     /// User space units per point (ISO 32000-1 14.11.2.3); 1 unless /UserUnit is a positive number.
     pub fn user_unit(&self, document: &mut Document) -> f64 {
-        match document.number_of(self.dict(), "UserUnit") {
+        let object = self.object(document);
+        match object
+            .as_dict()
+            .and_then(|d| document.number_of(d, "UserUnit"))
+        {
             Some(unit) if unit > 0.0 && unit.is_finite() => unit,
             _ => 1.0,
         }
@@ -157,9 +199,10 @@ impl Page {
     pub fn contents(&self, document: &mut Document) -> Vec<u8> {
         let mut parts: Vec<Vec<u8>> = Vec::new();
         let mut room = MAX_CONTENT_SIZE;
-        let contents = self
-            .dict()
-            .get("Contents")
+        let object = self.object(document);
+        let contents = object
+            .as_dict()
+            .and_then(|d| d.get("Contents"))
             .and_then(|c| document.resolve(c))
             .map(|c| c.into_shared());
         let streams: Vec<Object> = match contents.as_deref() {
@@ -195,7 +238,11 @@ impl Page {
         key: &str,
         inherited: Option<&Object>,
     ) -> Option<Rect> {
-        let own = self.dict().get(key).and_then(|v| document.rect(v));
+        let object = self.object(document);
+        let own = object
+            .as_dict()
+            .and_then(|d| d.get(key))
+            .and_then(|v| document.rect(v));
         own.or_else(|| inherited.and_then(|v| document.rect(v)))
     }
 }
@@ -337,7 +384,6 @@ impl Document {
             return;
         };
         walk.pages.push(Page {
-            dict: dict_object.clone(),
             reference,
             index: walk.pages.len(),
             inherited,
@@ -357,7 +403,6 @@ impl Document {
             };
             if self.name_of(dict, "Type").as_deref() == Some(b"Page") {
                 pages.push(Page {
-                    dict: object.clone(),
                     reference,
                     index: pages.len(),
                     inherited: Inherited::default(),
