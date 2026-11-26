@@ -499,6 +499,7 @@ fn swap_sides(
         -OUTSIDE_SHARE * f.h as f64,
         (1.0 + OUTSIDE_SHARE) * f.h as f64,
     );
+    let mut scratch = Scratch::default();
     for _ in 0..2 {
         let q = best.quad;
         let sides: Vec<Line> = (0..4)
@@ -507,7 +508,7 @@ fn swap_sides(
         let mut round_best: Option<Candidate> = None;
         let mut bar = best.score.total;
         for side in 0..4 {
-            let held = side_score(f, &q, side, SCREEN_SAMPLES).map_or(0.0, |s| s.0);
+            let held = side_score(f, &q, side, SCREEN_SAMPLES, &mut scratch).map_or(0.0, |s| s.0);
             let mut lines: Vec<Line> = global_lines.to_vec();
             if held < CORRIDOR_BELOW {
                 lines.extend(corridor_lines(edges, &q, side));
@@ -545,7 +546,8 @@ fn swap_sides(
                     continue;
                 }
                 // the new edge itself first: much weaker than the one it replaces, it cannot help
-                if side_score(f, &candidate, side, SCREEN_SAMPLES).map_or(0.0, |s| s.0)
+                if side_score(f, &candidate, side, SCREEN_SAMPLES, &mut scratch)
+                    .map_or(0.0, |s| s.0)
                     < held - SWAP_SIDE_MARGIN
                 {
                     continue;
@@ -787,8 +789,9 @@ pub(crate) fn score_quad(
 
     let (mut sum, mut minimum) = (0.0, f64::MAX);
     let (mut covered, mut brighter) = (0, 0);
+    let mut scratch = Scratch::default();
     for i in 0..4 {
-        let Some(side) = side_score(f, q, i, samples) else {
+        let Some(side) = side_score(f, q, i, samples, &mut scratch) else {
             continue;
         };
         sum += side.0;
@@ -829,9 +832,15 @@ pub(crate) fn score_quad(
 /// How clearly edge `index` of `q` is a sheet's edge, 0 to 1, with its sign; `None` when it lies outside the frame or along
 /// its border (BORDER_BAND). Its support (`measure_side`) times CONTRAST_FLOOR plus the rest in proportion to its contrast
 /// (full at CONTRAST_FULL), less up to EXTENSION_PENALTY of that when the edge runs on past its corners.
-pub(crate) fn side_score(f: &Field, q: &Quad, index: usize, samples: usize) -> Option<(f64, f64)> {
+pub(crate) fn side_score(
+    f: &Field,
+    q: &Quad,
+    index: usize,
+    samples: usize,
+    scratch: &mut Scratch,
+) -> Option<(f64, f64)> {
     let (p, e) = (at(q, index), at(q, index + 1));
-    let m = measure_side(f, p, e, samples);
+    let m = measure_side(f, p, e, samples, scratch);
     if !m.covered {
         return None;
     }
@@ -846,12 +855,14 @@ pub(crate) fn side_score(f: &Field, q: &Quad, index: usize, samples: usize) -> O
         Point::new(p.x - ux * ext, p.y - uy * ext),
         p,
         ext_samples,
+        scratch,
     );
     let after = measure_side(
         f,
         e,
         Point::new(e.x + ux * ext, e.y + uy * ext),
         ext_samples,
+        scratch,
     );
     let (mut through, mut ends) = (0.0, 0);
     if before.covered {
@@ -868,6 +879,18 @@ pub(crate) fn side_score(f: &Field, q: &Quad, index: usize, samples: usize) -> O
     through /= ends as f64;
     let penalty = EXTENSION_PENALTY * ((through - 0.15) / 0.45).clamp(0.0, 1.0);
     Some((value * (1.0 - penalty), m.sign))
+}
+
+/// The buffers `measure_side` works in, kept between calls so scoring an outline does not allocate for every edge.
+#[derive(Default)]
+pub(crate) struct Scratch {
+    g: Vec<f64>,
+    texture: Vec<f64>,
+    used: Vec<bool>,
+    textured: Vec<bool>,
+    pos: Vec<f64>,
+    neg: Vec<f64>,
+    levels: Vec<f64>,
 }
 
 /// What `measure_side` finds along an edge; `sign` is +1 when the outside is brighter, -1 when darker.
@@ -892,7 +915,13 @@ const UNCOVERED: SideMeasure = SideMeasure {
 /// strip lies in the frame; none when it lies outside everywhere); the contrast is the mean colour difference between 4 + 0.4 %
 /// of the diagonal px inside and outside, nearer where the frame ends first. Covered when at least a quarter of the points are
 /// measured.
-pub(crate) fn measure_side(f: &Field, p: Point, q: Point, samples: usize) -> SideMeasure {
+pub(crate) fn measure_side(
+    f: &Field,
+    p: Point,
+    q: Point,
+    samples: usize,
+    scratch: &mut Scratch,
+) -> SideMeasure {
     let (dx, dy) = (q.x - p.x, q.y - p.y);
     let len = (dx * dx + dy * dy).sqrt();
     if len < 1.0 {
@@ -905,12 +934,27 @@ pub(crate) fn measure_side(f: &Field, p: Point, q: Point, samples: usize) -> Sid
     let (w, h) = (f.w, f.h);
     let r = SUPPORT_REACH;
     let span = (2 * r + 1) as usize;
-    let mut g = vec![0.0f64; samples * span];
-    let mut texture = vec![0.0f64; samples];
-    let mut used = vec![false; samples];
-    let mut textured = vec![false; samples];
-    let mut pos = vec![0.0f64; span];
-    let mut neg = vec![0.0f64; span];
+    let Scratch {
+        g,
+        texture,
+        used,
+        textured,
+        pos,
+        neg,
+        levels,
+    } = scratch;
+    g.clear();
+    g.resize(samples * span, 0.0);
+    texture.clear();
+    texture.resize(samples, 0.0);
+    used.clear();
+    used.resize(samples, false);
+    textured.clear();
+    textured.resize(samples, false);
+    pos.clear();
+    pos.resize(span, 0.0);
+    neg.clear();
+    neg.resize(span, 0.0);
     let (mut in_frame, mut textured_count) = (0usize, 0usize);
     let mut contrast_sum = 0.0;
     for s in 0..samples {
@@ -977,10 +1021,8 @@ pub(crate) fn measure_side(f: &Field, p: Point, q: Point, samples: usize) -> Sid
     }
     let mut level = 0.0;
     if textured_count > 0 {
-        let mut levels: Vec<f64> = (0..samples)
-            .filter(|&s| textured[s])
-            .map(|s| texture[s])
-            .collect();
+        levels.clear();
+        levels.extend((0..samples).filter(|&s| textured[s]).map(|s| texture[s]));
         levels.sort_by(|a, b| a.total_cmp(b));
         level = levels[textured_count / 2];
     }
