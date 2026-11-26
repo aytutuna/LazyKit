@@ -1,6 +1,6 @@
 [workspace]
 resolver = "3"
-members = ["lazy-link", "lazy-link-ffi", "lazy-link-wasm", "uniffi-bindgen"]
+members = ["lazy-link", "lazy-pdf-syntax", "lazy-link-ffi", "lazy-link-wasm", "uniffi-bindgen"]
 
 [workspace.package]
 version = "0.1.0"
