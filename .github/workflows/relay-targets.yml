@@ -34,6 +34,8 @@ jobs:
           key: relay-${{ matrix.target }}
       - run: rustup target add ${{ matrix.target }}
       - run: cargo build --locked -p lazy-link --features relay --target ${{ matrix.target }}
+      - if: matrix.target == 'x86_64-pc-windows-msvc'
+        run: cargo test --locked -p lazy-link --features relay --test relay_tls
 
   apple:
     runs-on: macos-latest
@@ -48,6 +50,7 @@ jobs:
           for target in aarch64-apple-ios aarch64-apple-ios-sim aarch64-apple-darwin; do
             cargo build --locked -p lazy-link --features relay --target $target
           done
+      - run: cargo test --locked -p lazy-link --features relay --test relay_tls
 
   android:
     runs-on: ubuntu-latest
@@ -66,3 +69,4 @@ jobs:
       - run: |
           export ANDROID_NDK_HOME="$ANDROID_NDK_LATEST_HOME"
           cargo ndk -t arm64-v8a -t x86_64 -P 26 build --locked -p lazy-link --features relay
+          cargo ndk -t arm64-v8a -t x86_64 -P 26 build --locked -p lazy-link-ffi
