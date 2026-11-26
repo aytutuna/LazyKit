@@ -1,0 +1,21 @@
+[package]
+name = "lazy-scan-model"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license-file.workspace = true
+publish.workspace = true
+
+[features]
+# tract runs anywhere, in pure Rust: the browser build uses it
+tract = ["dep:tract-onnx"]
+# ort loads an ONNX Runtime library the app ships (api-24 matches the pinned 1.24.2)
+ort = ["dep:ort"]
+
+[dependencies]
+tract-onnx = { version = "0.23", optional = true }
+ort = { version = "=2.0.0-rc.15", optional = true, default-features = false, features = ["std", "load-dynamic", "api-24"] }
+
+# tract pulls getrandom 0.4, which has no source of randomness in the browser until this feature is on
+[target.'cfg(all(target_arch = "wasm32", target_os = "unknown"))'.dependencies]
+getrandom = { version = "0.4", features = ["wasm_js"] }

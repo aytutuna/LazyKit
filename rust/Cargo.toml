@@ -1,6 +1,6 @@
 [workspace]
 resolver = "3"
-members = ["lazy-image", "lazy-scan", "lazy-link", "lazy-link-ffi", "lazy-link-wasm", "uniffi-bindgen"]
+members = ["lazy-image", "lazy-scan", "lazy-scan-model", "lazy-link", "lazy-link-ffi", "lazy-link-wasm", "uniffi-bindgen"]
 
 [workspace.package]
 version = "0.1.0"
