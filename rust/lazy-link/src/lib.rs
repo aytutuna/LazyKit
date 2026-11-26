@@ -4,6 +4,8 @@
 mod base64url;
 mod fingerprint;
 mod pairing_uri;
+#[cfg(feature = "relay")]
+pub mod relay;
 mod session;
 mod short_code;
 
