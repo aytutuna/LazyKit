@@ -1,8 +1,12 @@
 //! pdfaid:part and pdfaid:conformance from XMP metadata. The metadata is the file's own, so the reader takes no
 //! DTD and expands no entity; anything that is not well-formed XML claims nothing.
 
-/// Nesting deeper than any packet has; each open element collects its own text.
+use std::collections::HashMap;
+
+/// Nesting deeper than any packet has; a part or conformance element collects its own text.
 const MAX_DEPTH: usize = 256;
+
+const MAX_VALUE: usize = 256;
 
 const PDFA_ID: &str = "http://www.aiim.org/pdfa/ns/id/";
 
@@ -35,6 +39,20 @@ struct Open {
     text: String,
 }
 
+/// Text goes only to the elements that can be a part or a conformance, and only a few bytes of it: a value is short.
+fn collect(stack: &mut [Open], chunk: &str) {
+    for open in stack
+        .iter_mut()
+        .filter(|o| o.part.is_some() || o.conformance.is_some())
+    {
+        let mut take = chunk.len().min(MAX_VALUE.saturating_sub(open.text.len()));
+        while !chunk.is_char_boundary(take) {
+            take -= 1;
+        }
+        open.text.push_str(&chunk[..take]);
+    }
+}
+
 /// Candidates in document order; an element's own text is filled in when it closes.
 type Candidates = Vec<Option<String>>;
 
@@ -42,7 +60,7 @@ fn parse(xml: &str) -> Option<(Option<String>, Option<String>)> {
     let bytes = xml.as_bytes();
     let mut at = 0;
     let mut stack: Vec<Open> = Vec::new();
-    let mut bindings: Vec<(String, String)> = Vec::new();
+    let mut bindings = Bindings::default();
     let (mut parts, mut conformances): (Candidates, Candidates) = (Vec::new(), Vec::new());
     let mut roots = 0;
     while at < bytes.len() {
@@ -54,7 +72,7 @@ fn parse(xml: &str) -> Option<(Option<String>, Option<String>)> {
                     return None;
                 }
             } else {
-                stack.iter_mut().for_each(|o| o.text.push_str(chunk));
+                collect(&mut stack, chunk);
             }
             at = next;
             continue;
@@ -67,7 +85,7 @@ fn parse(xml: &str) -> Option<(Option<String>, Option<String>)> {
             if stack.is_empty() {
                 return None;
             }
-            stack.iter_mut().for_each(|o| o.text.push_str(&body[..end]));
+            collect(&mut stack, &body[..end]);
             at += 9 + end + 3;
         } else if rest.starts_with("<!") {
             return None;
@@ -102,9 +120,9 @@ fn parse(xml: &str) -> Option<(Option<String>, Option<String>)> {
             let kept = bindings.len();
             for (key, value) in &attributes {
                 if key == "xmlns" {
-                    bindings.push((String::new(), value.clone()));
+                    bindings.push(String::new(), value.clone());
                 } else if let Some(prefix) = key.strip_prefix("xmlns:") {
-                    bindings.push((prefix.to_string(), value.clone()));
+                    bindings.push(prefix.to_string(), value.clone());
                 }
             }
             for (key, value) in &attributes {
@@ -159,12 +177,38 @@ fn parse(xml: &str) -> Option<(Option<String>, Option<String>)> {
     Some((first(parts), first(conformances)))
 }
 
-fn bound<'a>(bindings: &'a [(String, String)], prefix: &str) -> Option<&'a str> {
-    bindings
-        .iter()
-        .rev()
-        .find(|(p, _)| p == prefix)
-        .map(|(_, uri)| uri.as_str())
+/// Prefix bindings in scope, the innermost first for each prefix.
+#[derive(Default)]
+struct Bindings {
+    order: Vec<String>,
+    uris: HashMap<String, Vec<String>>,
+}
+
+impl Bindings {
+    fn len(&self) -> usize {
+        self.order.len()
+    }
+
+    fn push(&mut self, prefix: String, uri: String) {
+        self.uris.entry(prefix.clone()).or_default().push(uri);
+        self.order.push(prefix);
+    }
+
+    fn truncate(&mut self, len: usize) {
+        while self.order.len() > len {
+            let prefix = self.order.pop().unwrap();
+            if let Some(uris) = self.uris.get_mut(&prefix) {
+                uris.pop();
+                if uris.is_empty() {
+                    self.uris.remove(&prefix);
+                }
+            }
+        }
+    }
+}
+
+fn bound<'a>(bindings: &'a Bindings, prefix: &str) -> Option<&'a str> {
+    bindings.uris.get(prefix)?.last().map(String::as_str)
 }
 
 type StartTag<'a> = (&'a str, Vec<(String, String)>, bool, usize);

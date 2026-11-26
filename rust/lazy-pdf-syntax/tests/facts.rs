@@ -113,3 +113,31 @@ fn a_crypt_stage_is_refused_only_for_a_name_other_than_identity() {
         Problem::Unsupported
     );
 }
+
+#[test]
+fn deeply_nested_metadata_with_a_lot_of_text_is_read_in_bounded_memory() {
+    let depth = 250;
+    let xmp = format!(
+        "<x:xmpmeta xmlns:x=\"a\" {ID}>{}<pdfaid:part>2</pdfaid:part>{}{}</x:xmpmeta>",
+        "<e>".repeat(depth),
+        "t".repeat(4 << 20),
+        "</e>".repeat(depth)
+    );
+    let mut document = with_metadata(&xmp);
+    assert_eq!(document.pdfa_part(), Some(2));
+}
+
+#[test]
+fn many_prefix_bindings_are_read_in_linear_time() {
+    let bindings: String = (0..50_000)
+        .map(|i| format!(" xmlns:p{i}=\"u{i}\""))
+        .collect();
+    let xmp = format!(
+        "<x:xmpmeta xmlns:x=\"a\"{bindings} {ID}>{}<pdfaid:part>1</pdfaid:part></x:xmpmeta>",
+        "<e/>".repeat(100_000)
+    );
+    let started = std::time::Instant::now();
+    let mut document = with_metadata(&xmp);
+    assert_eq!(document.pdfa_part(), Some(1));
+    assert!(started.elapsed().as_secs() < 10);
+}
