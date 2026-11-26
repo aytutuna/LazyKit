@@ -15,13 +15,17 @@ dest=/data/local/tmp/lazykit
 host() { if command -v cygpath >/dev/null 2>&1; then cygpath -m "$1"; else echo "$1"; fi; }
 abi="$(adb shell getprop ro.product.cpu.abi | tr -d '\r')"
 
-if ! adb shell "[ -f $dest/ready-$abi ]" >/dev/null 2>&1; then
-  adb shell "rm -rf $dest && mkdir -p $dest/testdata"
-  adb push "$(host "$root/testdata/scan")" "$dest/testdata/scan" >/dev/null 2>&1
+# the big files are pushed once per library build; testdata is small and goes over every run so edits are picked up
+if command -v sha256sum >/dev/null 2>&1; then sum=sha256sum; else sum="shasum -a 256"; fi
+stamp="$($sum "$models/android/$abi/libonnxruntime.so" | cut -c 1-12)"
+adb shell "mkdir -p $dest/testdata && rm -rf $dest/testdata/scan"
+adb push "$(host "$root/testdata/scan")" "$dest/testdata/scan" >/dev/null 2>&1
+if ! adb shell "[ -f $dest/ready-$abi-$stamp ]" >/dev/null 2>&1; then
+  adb shell "rm -f $dest/ready-* $dest/*.onnx $dest/libonnxruntime.so"
   adb push "$(host "$models")/fastvit_t8_h_e_bifpn_256_fp32.onnx" "$dest/" >/dev/null 2>&1
   adb push "$(host "$models")/fastvit_t8_h_e_bifpn_256_fp32-tract.onnx" "$dest/" >/dev/null 2>&1
   adb push "$(host "$models")/android/$abi/libonnxruntime.so" "$dest/" >/dev/null 2>&1
-  adb shell "touch $dest/ready-$abi"
+  adb shell "touch $dest/ready-$abi-$stamp"
 fi
 
 adb push "$(host "$exe")" "$dest/test-binary" >/dev/null 2>&1

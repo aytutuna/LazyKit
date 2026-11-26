@@ -70,6 +70,7 @@ if [ "$what" = android ]; then
     expected="android_sha_${abi//-/_}"
     expected="${!expected}"
     has "$out/android/$abi/libonnxruntime.so" "$expected" && continue
+    has "$out/onnxruntime.aar" "$aar_sha" || rm -f "$out/onnxruntime.aar"
     if [ ! -f "$out/onnxruntime.aar" ]; then
       download "$nupkg_url" "$out/ort.nupkg" "$nupkg_sha" || { echo "ONNX Runtime package not fetched" >&2; exit 1; }
       unzip -j -o -q "$out/ort.nupkg" runtimes/android/native/onnxruntime.aar -d "$out"
@@ -85,13 +86,15 @@ if [ "$what" = android ]; then
 fi
 
 if [ "$what" = ios ]; then
-  if [ ! -d "$out/ios/onnxruntime.xcframework" ]; then
+  if [ "$(cat "$out/ios/stamp" 2>/dev/null)" != "$xcframework_sha" ]; then
+    rm -rf "$out/ios"
     download "$nupkg_url" "$out/ort.nupkg" "$nupkg_sha" || { echo "ONNX Runtime package not fetched" >&2; exit 1; }
     unzip -j -o -q "$out/ort.nupkg" runtimes/ios/native/onnxruntime.xcframework.zip -d "$out"
     rm -f "$out/ort.nupkg"
     has "$out/onnxruntime.xcframework.zip" "$xcframework_sha" || { echo "onnxruntime.xcframework.zip is not the pinned archive" >&2; exit 1; }
     mkdir -p "$out/ios"
     unzip -q -o "$out/onnxruntime.xcframework.zip" -d "$out/ios"
+    echo "$xcframework_sha" > "$out/ios/stamp"
   fi
   echo "ONNX Runtime for iOS is in $out/ios"
   exit 0
