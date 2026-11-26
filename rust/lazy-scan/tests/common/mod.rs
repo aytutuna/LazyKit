@@ -2,9 +2,11 @@
 use std::path::PathBuf;
 
 pub fn testdata(name: &str) -> PathBuf {
-    PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-        .join("../../testdata/scan")
-        .join(name)
+    // the wasm test runner mounts the checkout elsewhere than the build found it
+    let root = std::env::var_os("LAZYKIT_ROOT")
+        .map(PathBuf::from)
+        .unwrap_or_else(|| PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../.."));
+    root.join("testdata/scan").join(name)
 }
 
 pub fn json(name: &str) -> serde_json::Value {

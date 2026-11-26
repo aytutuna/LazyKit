@@ -6,6 +6,7 @@ mod color;
 mod corners;
 mod enhancer;
 mod geometry;
+mod pipeline;
 mod refiner;
 mod stability;
 
@@ -19,6 +20,8 @@ pub use enhancer::{
     photo, tile_size,
 };
 pub use geometry::{Point, Quad, aspect};
+pub use lazy_scan_model::{CornerModel, Heatmaps, ModelError};
+pub use pipeline::{Located, locate};
 pub use refiner::{Refinement, build_field, placement, refine};
 pub use stability::{
     CapturePlacement, CaptureQuality, CaptureStability, CaptureState, Decision, Observation,
