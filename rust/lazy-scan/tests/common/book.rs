@@ -39,6 +39,7 @@ impl Canvas {
 
     /// `lines` lines of glyphs (words of 2 to 8 glyphs, 5 x 9 px in 7 px cells) from (x, y), each up to `max_width` wide, every
     /// `pitch` px.
+    #[allow(clippy::too_many_arguments)]
     pub fn text_block(
         &mut self,
         x: i64,
