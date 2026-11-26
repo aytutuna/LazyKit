@@ -1,0 +1,68 @@
+name: relay-targets
+
+on:
+  push:
+    branches: [main, 'ci/**']
+    paths:
+      - rust/**
+      - .github/workflows/relay-targets.yml
+
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: always
+  CARGO_NDK: 4.1.2
+
+defaults:
+  run:
+    working-directory: rust
+
+# The relay client pulls in ring and the platform certificate code, which is what breaks first
+# when cross-compiling, so every target the apps ship on builds it.
+jobs:
+  windows:
+    runs-on: windows-latest
+    strategy:
+      matrix:
+        target: [x86_64-pc-windows-msvc, aarch64-pc-windows-msvc]
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2
+        with:
+          workspaces: rust
+          key: relay-${{ matrix.target }}
+      - run: rustup target add ${{ matrix.target }}
+      - run: cargo build --locked -p lazy-link --features relay --target ${{ matrix.target }}
+
+  apple:
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2
+        with:
+          workspaces: rust
+          key: relay
+      - run: rustup target add aarch64-apple-ios aarch64-apple-ios-sim aarch64-apple-darwin
+      - run: |
+          for target in aarch64-apple-ios aarch64-apple-ios-sim aarch64-apple-darwin; do
+            cargo build --locked -p lazy-link --features relay --target $target
+          done
+
+  android:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2
+        with:
+          workspaces: rust
+          key: relay
+      - run: rustup target add aarch64-linux-android x86_64-linux-android
+      - uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
+        with:
+          path: ~/.cargo/bin/cargo-ndk
+          key: cargo-ndk-${{ env.CARGO_NDK }}-${{ runner.os }}
+      - run: cargo ndk --version 2>/dev/null | grep -qx "cargo-ndk ${{ env.CARGO_NDK }}" || cargo install cargo-ndk --version ${{ env.CARGO_NDK }} --locked
+      - run: |
+          export ANDROID_NDK_HOME="$ANDROID_NDK_LATEST_HOME"
+          cargo ndk -t arm64-v8a -t x86_64 -P 26 build --locked -p lazy-link --features relay

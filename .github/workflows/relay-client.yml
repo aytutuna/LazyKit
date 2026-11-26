@@ -47,4 +47,4 @@ jobs:
         run: cargo test --locked -p lazy-link --features relay
       - name: Test against the relay
         working-directory: rust
-        run: cargo test --locked -p lazy-link --features relay --test relay_wrangler -- --ignored
+        run: cargo test --locked -p lazy-link --features relay --test relay_wrangler -- --ignored --test-threads=1
