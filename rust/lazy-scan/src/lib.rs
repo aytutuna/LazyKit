@@ -3,6 +3,7 @@
 
 mod background;
 pub mod bilevel;
+pub mod blank_page;
 mod camera_turn;
 mod color;
 mod corners;
@@ -13,6 +14,7 @@ mod enhancer;
 pub mod frame_quality;
 mod geometry;
 mod glare;
+pub mod gray_image;
 mod live;
 pub mod mask_ops;
 pub mod multi_quad;

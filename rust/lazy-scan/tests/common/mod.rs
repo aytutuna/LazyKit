@@ -29,3 +29,5 @@ pub fn sum(bytes: &[u8]) -> String {
 
 pub mod photo_scenes;
 pub mod scenes;
+
+pub mod pages;
