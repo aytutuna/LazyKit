@@ -3,6 +3,8 @@ use lazy_image::Gray;
 /// How bright the paper is across a page: a high percentile of each tile's luma, interpolated between tile centres.
 #[derive(Clone, Debug)]
 pub struct BackgroundMap {
+    x: usize,
+    y: usize,
     width: usize,
     height: usize,
     columns: usize,
@@ -71,6 +73,8 @@ fn interpolation(length: usize, tiles: usize) -> Interpolation {
 
 impl BackgroundMap {
     fn with_tiles(
+        x: usize,
+        y: usize,
         width: usize,
         height: usize,
         columns: usize,
@@ -78,6 +82,8 @@ impl BackgroundMap {
         tiles: Vec<u8>,
     ) -> Self {
         BackgroundMap {
+            x,
+            y,
             width,
             height,
             columns,
@@ -90,6 +96,8 @@ impl BackgroundMap {
 
     fn same_size(&self, tiles: Vec<u8>) -> Self {
         BackgroundMap {
+            x: self.x,
+            y: self.y,
             width: self.width,
             height: self.height,
             columns: self.columns,
@@ -101,7 +109,26 @@ impl BackgroundMap {
     }
 
     pub fn estimate(gray: &Gray, tile_size: usize, fraction: f64) -> Option<Self> {
-        let (w, h) = (gray.width, gray.height);
+        Self::estimate_in(gray, 0, 0, gray.width, gray.height, tile_size, fraction)
+    }
+
+    /// The map of the area of `gray` at (x, y), `width` by `height` pixels (kept inside the image), in whole tiles of about
+    /// `tile_size` pixels (the last ones a little larger), each one's background the `fraction` percentile of its pixels;
+    /// `None` when the area is empty.
+    pub fn estimate_in(
+        gray: &Gray,
+        x: usize,
+        y: usize,
+        width: usize,
+        height: usize,
+        tile_size: usize,
+        fraction: f64,
+    ) -> Option<Self> {
+        let x0 = x.min(gray.width);
+        let y0 = y.min(gray.height);
+        let x1 = x.saturating_add(width).clamp(x0, gray.width);
+        let y1 = y.saturating_add(height).clamp(y0, gray.height);
+        let (w, h) = (x1 - x0, y1 - y0);
         if w == 0 || h == 0 {
             return None;
         }
@@ -111,20 +138,20 @@ impl BackgroundMap {
         let mut tiles = vec![0u8; columns * rows];
         let mut histogram = [0i32; 256];
         for ty in 0..rows {
-            let (top, bottom) = (ty * h / rows, (ty + 1) * h / rows);
+            let (top, bottom) = (y0 + ty * h / rows, y0 + (ty + 1) * h / rows);
             for tx in 0..columns {
-                let (left, right) = (tx * w / columns, (tx + 1) * w / columns);
+                let (left, right) = (x0 + tx * w / columns, x0 + (tx + 1) * w / columns);
                 histogram.fill(0);
                 for py in top..bottom {
                     for px in left..right {
-                        histogram[gray.data[py * w + px] as usize] += 1;
+                        histogram[gray.data[py * gray.width + px] as usize] += 1;
                     }
                 }
                 tiles[ty * columns + tx] =
                     percentile(&histogram, (bottom - top) * (right - left), fraction) as u8;
             }
         }
-        Some(Self::with_tiles(w, h, columns, rows, tiles))
+        Some(Self::with_tiles(x0, y0, w, h, columns, rows, tiles))
     }
 
     pub fn median_tile(&self) -> u8 {
@@ -254,6 +281,30 @@ impl BackgroundMap {
         let top = lerp(self.tiles[y0 * c + x0], self.tiles[y0 * c + x1], fx);
         let bottom = lerp(self.tiles[y1 * c + x0], self.tiles[y1 * c + x1], fx);
         top + (bottom - top) * fy
+    }
+
+    /// The ink of the area: 1 where a pixel of `gray` is darker than (1 - `contrast`) of the background there, 0 elsewhere. One
+    /// byte per pixel, the area's width by its height, row-major.
+    pub fn ink_mask(&self, gray: &Gray, contrast: f64) -> Vec<u8> {
+        let keep = 1.0 - contrast;
+        let mut mask = vec![0u8; self.width * self.height];
+        for ay in 0..self.height {
+            let row = (self.y + ay) * gray.width + self.x;
+            for ax in 0..self.width {
+                if (gray.data[row + ax] as f64) < self.value_at(ax, ay) * keep {
+                    mask[ay * self.width + ax] = 1;
+                }
+            }
+        }
+        mask
+    }
+
+    pub fn width(&self) -> usize {
+        self.width
+    }
+
+    pub fn height(&self) -> usize {
+        self.height
     }
 }
 
