@@ -260,7 +260,8 @@ fn a_root_that_names_another_reference_is_still_a_file_that_saves_and_reopens() 
     pdf.obj(1, "2 0 R")
         .obj(2, "<</Type /Pages /Kids [3 0 R] /Count 1>>")
         .obj(3, "<</Type /Page /Parent 2 0 R>>");
-    let mut document = open(pdf.finish());
+    let mut document = open(pdf.finish_with("/Root 1 0 R", 0, "99999999"));
+    assert!(document.xref_rebuilt());
     assert_eq!(document.pages().len(), 1);
     for packed in [false, true] {
         let saved = document.save_rewrite(&lazy_pdf_syntax::SaveOptions {
