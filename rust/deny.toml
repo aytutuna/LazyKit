@@ -1,0 +1,31 @@
+[graph]
+all-features = true
+
+[licenses]
+# Only permissive licences: the apps ship these crates in closed, store-distributed builds, so GPL, LGPL and the like stay out.
+allow = [
+    "MIT",
+    "Apache-2.0",
+    "Apache-2.0 WITH LLVM-exception",
+    "BSD-2-Clause",
+    "BSD-3-Clause",
+    "ISC",
+    "Zlib",
+    "Unicode-3.0",
+    # UniFFI (the Swift, Kotlin and C# bindings) is MPL-2.0: file-level, so unmodified use only needs its notice and source link
+    "MPL-2.0",
+]
+confidence-threshold = 0.9
+
+# the workspace's own crates carry the PolyForm Noncommercial licence file and are never published
+[licenses.private]
+ignore = true
+
+[bans]
+multiple-versions = "allow"
+wildcards = "deny"
+allow-wildcard-paths = true
+
+[sources]
+unknown-registry = "deny"
+unknown-git = "deny"

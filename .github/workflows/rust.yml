@@ -7,7 +7,8 @@ on:
       - rust/**
       - testdata/link/**
       - testdata/scan/**
-      - tools/patch_einsum.py
+      - native/**
+      - tools/**
       - .github/workflows/rust.yml
 
 permissions:
@@ -17,6 +18,7 @@ env:
   CARGO_TERM_COLOR: always
   WASM_BINDGEN_CLI: 0.2.130
   CARGO_NDK: 4.1.2
+  CARGO_DENY: 0.22.1
   NDK_VERSION: 27.3.13750724
 
 defaults:
@@ -38,6 +40,18 @@ jobs:
         run: |
           bash scripts/test-fetch.sh
           bash scripts/test-run-android.sh
+      - name: Native pins and tools
+        working-directory: .
+        run: |
+          python3 tools/check_pins.py
+          python3 -m unittest discover -s tools/tests
+      - uses: actions/cache@v4
+        with:
+          path: ~/.cargo/bin/cargo-deny
+          key: cargo-deny-${{ env.CARGO_DENY }}-${{ runner.os }}
+      - run: cargo deny --version 2>/dev/null | grep -qx "cargo-deny ${{ env.CARGO_DENY }}" || cargo install cargo-deny --version ${{ env.CARGO_DENY }} --locked
+      - name: Licences
+        run: cargo deny --locked check licenses bans sources
 
   windows:
     runs-on: windows-latest
