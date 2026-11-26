@@ -1,0 +1,21 @@
+{
+  "about": "CaptureStability on scripted frame sequences (Lazy Scan's CaptureStabilityTests, same in Swift and C#). Frames are 1000 x 750, one every 33 ms, numbered from 0 across the segments. A held frame i of its segment (counted from 0) shifts the page by (dx + (i even ? 1 : -1), dy + i % 3 - 1); a drift frame i shifts it by (i * step, 0); a slide frame i by (step * (i % wrap), 0); a gap frame has no page and confidence 0. fired lists the frames the shutter fired on, state the state after the last frame.",
+  "frame": {"width": 1000, "height": 750, "ms": 33},
+  "page": [[200, 100], [780, 130], [800, 650], [180, 640]],
+  "scenarios": [
+    {"name": "fires once when the page holds still", "segments": [{"held": 60}], "fired": [20], "state": "captured"},
+    {"name": "never fires while the page moves", "segments": [{"slide": 90, "step": 20, "wrap": 10}], "fired": [], "state": "moving"},
+    {"name": "never fires when the detection is unsure", "segments": [{"held": 60, "confidence": 0.55}], "fired": [], "state": "moving"},
+    {"name": "a very unsure detection is no page", "segments": [{"held": 60, "confidence": 0.55}, {"held": 60, "confidence": 0.3}], "fired": [], "state": "noPage"},
+    {"name": "a dip above the stay level keeps steadying", "segments": [{"held": 8}, {"held": 8, "confidence": 0.5}, {"held": 30}], "fired": [20], "state": "captured"},
+    {"name": "a drop below the stay level starts over", "segments": [{"held": 8}, {"held": 1, "confidence": 0.4}, {"held": 40}], "fired": [28], "state": "captured"},
+    {"name": "small drift is tolerated", "segments": [{"drift": 40, "step": 1}], "fired": [20], "state": "captured"},
+    {"name": "a jump starts over", "segments": [{"held": 10}, {"held": 40, "dx": 35}], "fired": [30], "state": "captured"},
+    {"name": "a short dropout is bridged", "segments": [{"held": 8}, {"gap": 5}, {"held": 30}], "fired": [26], "state": "captured"},
+    {"name": "a long dropout starts over", "segments": [{"held": 8}, {"gap": 10}, {"held": 40}], "fired": [38], "state": "captured"},
+    {"name": "time missing is not time held", "segments": [{"held": 14}, {"gap": 6}, {"held": 30}], "fired": [27], "state": "captured"},
+    {"name": "the same page is not taken twice", "segments": [{"held": 120}], "fired": [20], "state": "captured"},
+    {"name": "the next page after the page leaves", "segments": [{"held": 30}, {"gap": 10}, {"held": 40}], "fired": [20, 60], "state": "captured"},
+    {"name": "the next page after the page moves", "segments": [{"held": 30}, {"held": 40, "dx": 200}], "fired": [20, 50], "state": "captured"}
+  ]
+}

@@ -20,7 +20,9 @@ Finding = namedtuple("Finding", "rule path line text")
 
 APPS = {"lazyscan": "scan", "lazyprint": "print", "lazypdf": "pdf", "lazysend": "send", "lazycollect": "collect"}
 PORTS = {"scan": 52731, "print": 52732, "pdf": 52733, "send": 52734}
-NOTICE = "Required Notice: Copyright (c) 2026 ALAZY INC. (https://alazy.app)"
+# the registry spells the company ALAZY INC.; texts are written Alazy Inc. (2026-11-26)
+PUBLISHERS = ("ALAZY INC.", "Alazy Inc.")
+NOTICES = tuple(f"Required Notice: Copyright (c) 2026 {name} (https://alazy.app)" for name in PUBLISHERS)
 SKIP_DIRS = {".git", ".wt", ".scratch", "node_modules", "Vendor", "fonts"}
 # build output is skipped only when walking an unversioned folder; a tracked l10n/out is real
 BUILD_DIRS = {"build", "out", ".build", "Pods", "bin", "obj", "dist"}
@@ -89,7 +91,7 @@ def rule_licence(repo):
     found = []
     if "PolyForm Noncommercial License 1.0.0" not in text:
         found.append(Finding("licence", names[0], 0, "not PolyForm Noncommercial 1.0.0"))
-    if NOTICE not in text:
+    if not any(notice in text for notice in NOTICES):
         found.append(Finding("licence", names[0], 0, "notice line missing or different"))
     return found
 
@@ -114,7 +116,7 @@ def rule_publisher(repo):
             continue
         for no, line in repo.lines(name):
             hit = PERSON.search(line) or (ext == ".html" and re.search(r"\bAytu\b", line))
-            if not hit and COPYRIGHT.search(line) and "ALAZY INC." not in line:
+            if not hit and COPYRIGHT.search(line) and not any(name in line for name in PUBLISHERS):
                 # in code only a string literal is shown to people; a header comment is not
                 hit = copyright_files or re.search(r"[\"']", line)
             if hit:
