@@ -7,6 +7,11 @@ on:
       - rust/**
       - testdata/link/**
       - testdata/pdf/**
+      - testdata/scan/**
+      - native/**
+      - tools/**
+      - THIRD-PARTY-NOTICES.txt
+      - LICENSE
       - .github/workflows/rust.yml
 
 permissions:
@@ -16,6 +21,8 @@ env:
   CARGO_TERM_COLOR: always
   WASM_BINDGEN_CLI: 0.2.130
   CARGO_NDK: 4.1.2
+  CARGO_DENY: 0.22.1
+  NDK_VERSION: 27.3.13750724
 
 defaults:
   run:
@@ -30,8 +37,24 @@ jobs:
         with:
           workspaces: rust
       - run: cargo fmt --check
-      - run: cargo clippy --workspace --all-targets -- -D warnings
-      - run: cargo test --workspace
+      - run: cargo clippy --locked --workspace --all-targets -- -D warnings
+      - run: cargo test --locked --workspace
+      - name: Script checks
+        run: |
+          bash scripts/test-fetch.sh
+          bash scripts/test-run-android.sh
+      - name: Native pins and tools
+        working-directory: .
+        run: |
+          python3 tools/check_pins.py
+          python3 -m unittest discover -s tools/tests
+      - uses: actions/cache@v4
+        with:
+          path: ~/.cargo/bin/cargo-deny
+          key: cargo-deny-${{ env.CARGO_DENY }}-${{ runner.os }}
+      - run: cargo deny --version 2>/dev/null | grep -qx "cargo-deny ${{ env.CARGO_DENY }}" || cargo install cargo-deny --version ${{ env.CARGO_DENY }} --locked
+      - name: Licences
+        run: cargo deny --locked check licenses bans sources
 
   windows:
     runs-on: windows-latest
@@ -47,8 +70,8 @@ jobs:
       - run: rustup target add ${{ matrix.target }}
       - name: Test
         if: matrix.target == 'x86_64-pc-windows-msvc'
-        run: cargo test --workspace
-      - run: cargo build --release -p lazy-link-ffi --target ${{ matrix.target }}
+        run: cargo test --locked --workspace
+      - run: cargo build --locked --release -p lazy-link-ffi --target ${{ matrix.target }}
       - name: Size
         shell: bash
         run: ls -l target/${{ matrix.target }}/release/lazy_link_ffi.dll | awk '{print "${{ matrix.target }} dll", $5}' | tee -a "$GITHUB_STEP_SUMMARY"
@@ -61,17 +84,17 @@ jobs:
         with:
           workspaces: rust
       - run: rustup target add aarch64-apple-ios aarch64-apple-ios-sim aarch64-apple-darwin x86_64-apple-darwin
-      - run: cargo test --workspace
+      - run: cargo test --locked --workspace
       - name: Static libraries
         run: |
           for target in aarch64-apple-ios aarch64-apple-ios-sim aarch64-apple-darwin x86_64-apple-darwin; do
-            cargo build --release -p lazy-link-ffi --target $target
+            cargo build --locked --release -p lazy-link-ffi --target $target
           done
       - name: XCFramework
         run: |
           mkdir -p out/macos out/headers
           lipo -create target/aarch64-apple-darwin/release/liblazy_link_ffi.a target/x86_64-apple-darwin/release/liblazy_link_ffi.a -output out/macos/liblazy_link_ffi.a
-          cargo run -q -p uniffi-bindgen -- generate --library target/aarch64-apple-darwin/release/liblazy_link_ffi.dylib --language swift --out-dir out/gen
+          cargo run --locked -q -p uniffi-bindgen -- generate --library target/aarch64-apple-darwin/release/liblazy_link_ffi.dylib --language swift --out-dir out/gen
           cp out/gen/lazy_link_ffiFFI.h out/headers/
           cp out/gen/lazy_link_ffiFFI.modulemap out/headers/module.modulemap
           xcodebuild -create-xcframework \
@@ -101,8 +124,8 @@ jobs:
       - run: cargo ndk --version 2>/dev/null | grep -qx "cargo-ndk ${{ env.CARGO_NDK }}" || cargo install cargo-ndk --version ${{ env.CARGO_NDK }} --locked
       - name: Build
         run: |
-          export ANDROID_NDK_HOME="$ANDROID_NDK_LATEST_HOME"
-          cargo ndk -t arm64-v8a -t x86_64 -P 26 -o out/jniLibs build --release -p lazy-link-ffi
+          export ANDROID_NDK_HOME="$ANDROID_SDK_ROOT/ndk/$NDK_VERSION"
+          cargo ndk -t arm64-v8a -t x86_64 -P 26 -o out/jniLibs build --locked --release -p lazy-link-ffi
       - name: Size
         run: ls -l out/jniLibs/*/liblazy_link_ffi.so | awk '{print $9, $5}' | tee -a "$GITHUB_STEP_SUMMARY"
 
@@ -122,10 +145,139 @@ jobs:
           path: ~/.cargo/bin/wasm-bindgen
           key: wasm-bindgen-${{ env.WASM_BINDGEN_CLI }}
       - run: wasm-bindgen --version 2>/dev/null | grep -qx "wasm-bindgen ${{ env.WASM_BINDGEN_CLI }}" || cargo install wasm-bindgen-cli --version ${{ env.WASM_BINDGEN_CLI }} --locked
-      - run: cargo build --release -p lazy-link-wasm --target wasm32-unknown-unknown
+      - run: cargo build --locked --release -p lazy-link-wasm --target wasm32-unknown-unknown
       - run: wasm-bindgen --target nodejs --out-dir target/wasm-pkg target/wasm32-unknown-unknown/release/lazy_link_wasm.wasm
       - run: node --test lazy-link-wasm/tests/vectors.test.cjs
         env:
           WASM_PKG: target/wasm-pkg
       - name: Size
         run: ls -l target/wasm-pkg/lazy_link_wasm_bg.wasm | awk '{print "wasm", $5}' | tee -a "$GITHUB_STEP_SUMMARY"
+
+  scan:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+    env:
+      LAZY_SCAN_REQUIRE_MODEL: 1
+    steps:
+      - uses: actions/checkout@v7
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2
+        with:
+          workspaces: rust
+          key: scan
+      - uses: actions/cache@v4
+        with:
+          path: rust/lazy-scan-model/models
+          key: scan-models-${{ runner.os }}-${{ hashFiles('rust/lazy-scan-model/scripts/fetch.sh', 'tools/patch_einsum.py') }}
+      - name: Fetch the model and ONNX Runtime
+        shell: bash
+        run: bash lazy-scan-model/scripts/fetch.sh
+      - name: Lint the model backends
+        if: matrix.os == 'ubuntu-latest'
+        run: cargo clippy --locked -p lazy-scan -p lazy-scan-model --all-targets --features tract,ort -- -D warnings
+      - name: Test with tract and ONNX Runtime
+        run: cargo test --locked --release -p lazy-scan --features tract,ort -- --nocapture
+
+  scan-wasm:
+    runs-on: ubuntu-latest
+    env:
+      LAZY_SCAN_REQUIRE_MODEL: 1
+      RUSTFLAGS: -C target-feature=+simd128
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2
+        with:
+          workspaces: rust
+          key: scan-wasm
+      - run: rustup target add wasm32-unknown-unknown wasm32-wasip1
+      - run: bash lazy-scan-model/scripts/fetch.sh lazy-scan-model/models models
+      - name: Lint for the browser
+        run: cargo clippy --locked -p lazy-scan -p lazy-scan-model --features tract --target wasm32-unknown-unknown -- -D warnings
+      - name: Build for the browser
+        run: cargo build --locked --release -p lazy-scan --features tract --target wasm32-unknown-unknown
+      - name: Test in WASI
+        env:
+          CARGO_TARGET_WASM32_WASIP1_RUNNER: node ${{ github.workspace }}/rust/scripts/run-wasi.mjs
+        run: cargo test --locked --release -p lazy-scan --features tract --target wasm32-wasip1 -- --nocapture
+
+  scan-android:
+    runs-on: ubuntu-latest
+    env:
+      LAZY_SCAN_REQUIRE_MODEL: 1
+    steps:
+      - uses: actions/checkout@v7
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2
+        with:
+          workspaces: rust
+          key: scan-android
+      - run: rustup target add aarch64-linux-android x86_64-linux-android
+      - uses: actions/cache@v4
+        with:
+          path: ~/.cargo/bin/cargo-ndk
+          key: cargo-ndk-${{ env.CARGO_NDK }}-${{ runner.os }}
+      - run: cargo ndk --version 2>/dev/null | grep -qx "cargo-ndk ${{ env.CARGO_NDK }}" || cargo install cargo-ndk --version ${{ env.CARGO_NDK }} --locked
+      - uses: actions/cache@v4
+        with:
+          path: rust/lazy-scan-model/models
+          key: scan-models-android-${{ hashFiles('rust/lazy-scan-model/scripts/fetch.sh', 'tools/patch_einsum.py') }}
+      - run: bash lazy-scan-model/scripts/fetch.sh lazy-scan-model/models models
+      - run: bash lazy-scan-model/scripts/fetch.sh lazy-scan-model/models android
+      - run: echo "ANDROID_NDK_HOME=$ANDROID_SDK_ROOT/ndk/$NDK_VERSION" >> "$GITHUB_ENV"
+      - name: Build the tests for arm64
+        run: cargo ndk -t arm64-v8a -P 26 test --locked --no-run --release -p lazy-scan --features ort
+      - name: Allow the emulator to use KVM
+        run: |
+          echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' | sudo tee /etc/udev/rules.d/99-kvm4all.rules
+          sudo udevadm control --reload-rules
+          sudo udevadm trigger --name-match=kvm
+      - name: Test on an x86_64 emulator
+        uses: ReactiveCircus/android-emulator-runner@a421e43855164a8197daf9d8d40fe71c6996bb0d # v2.38.0
+        with:
+          api-level: 30
+          arch: x86_64
+          working-directory: rust
+          script: cargo ndk -t x86_64 -P 26 test --locked --release -p lazy-scan --features ort --config "target.x86_64-linux-android.runner=['bash','${{ github.workspace }}/rust/scripts/run-android.sh']" -- --nocapture
+
+  scan-ios:
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2
+        with:
+          workspaces: rust
+          key: scan-ios
+      - run: rustup target add aarch64-apple-ios aarch64-apple-ios-sim
+      - uses: actions/cache@v4
+        with:
+          path: rust/lazy-scan-model/models
+          key: scan-models-ios-${{ hashFiles('rust/lazy-scan-model/scripts/fetch.sh', 'tools/patch_einsum.py') }}
+      - run: bash lazy-scan-model/scripts/fetch.sh lazy-scan-model/models models
+      - run: bash lazy-scan-model/scripts/fetch.sh lazy-scan-model/models ios
+      - name: Lint the linked backend
+        run: |
+          export ORT_IOS_XCFWK_LOCATION="$PWD/lazy-scan-model/models/ios/onnxruntime.xcframework"
+          cargo clippy --locked -p lazy-scan -p lazy-scan-model --all-targets --features ort-linked --target aarch64-apple-ios -- -D warnings
+      - name: Build the tests linked with the ONNX Runtime xcframework
+        run: |
+          export ORT_IOS_XCFWK_LOCATION="$PWD/lazy-scan-model/models/ios/onnxruntime.xcframework"
+          # Rust links with -nodefaultlibs, and the runtime's @available and stack probe helpers come from clang's library
+          runtime="$(xcrun clang --print-resource-dir)/lib/darwin"
+          test -f "$runtime/libclang_rt.ios.a" -a -f "$runtime/libclang_rt.iossim.a"
+          export CARGO_TARGET_AARCH64_APPLE_IOS_RUSTFLAGS="-C link-arg=$runtime/libclang_rt.ios.a"
+          export CARGO_TARGET_AARCH64_APPLE_IOS_SIM_RUSTFLAGS="-C link-arg=$runtime/libclang_rt.iossim.a"
+          cargo test --locked --no-run --release -p lazy-scan --features ort-linked --target aarch64-apple-ios
+          cargo test --locked --no-run --release -p lazy-scan --features ort-linked --target aarch64-apple-ios-sim --test fixtures --message-format=json | jq -r 'select(.executable != null) | .executable' > target/ios-sim-tests.txt
+      - name: Run the linked tests in a simulator
+        run: |
+          udid="$(xcrun simctl list devices available | grep -m1 iPhone | grep -oE '[0-9A-F]{8}(-[0-9A-F]{4}){3}-[0-9A-F]{12}')"
+          xcrun simctl boot "$udid"
+          xcrun simctl bootstatus "$udid" -b
+          export SIMCTL_CHILD_LAZYKIT_ROOT="$GITHUB_WORKSPACE"
+          export SIMCTL_CHILD_LAZY_SCAN_MODELS="$PWD/lazy-scan-model/models"
+          export SIMCTL_CHILD_LAZY_SCAN_REQUIRE_MODEL=1
+          xcrun simctl spawn "$udid" "$(cat target/ios-sim-tests.txt)" --nocapture

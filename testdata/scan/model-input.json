@@ -1,0 +1,13 @@
+{
+  "about": "CornerModelInput: a photo stretched to 256 x 256 as blue, green and red planes of 0 to 1. Values are f32 as printed by C# (R round trip), compared exactly; sum is the f64 sum of all 196608 values in order. From Lazy Scan's CornerModelInputTests (Swift and C# pin the same numbers).",
+  "photo": {"width": 300, "height": 200, "red": "(x * 7 + y * 3) & 255", "green": "(x * y) & 255", "blue": "(x + 2 * y) & 255"},
+  "values": [
+    {"index": 0, "value": 0.00033700981293804944},
+    {"index": 1, "value": 0.00493259821087122},
+    {"index": 255, "value": 0.16829043626785278},
+    {"index": 25637, "value": 0.7822610139846802},
+    {"index": 131071, "value": 0.4466605484485626},
+    {"index": 163969, "value": 0.30775123834609985}
+  ],
+  "sum": 96996.50867031487
+}

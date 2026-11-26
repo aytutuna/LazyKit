@@ -10,6 +10,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 import lazycheck
 
 GOOD_LICENSE = "Required Notice: Copyright (c) 2026 ALAZY INC. (https://alazy.app)\n\nPolyForm Noncommercial License 1.0.0\n"
+NEW_SPELLING = GOOD_LICENSE.replace("ALAZY INC.", "Alazy Inc.")
 
 
 def run(files, rule, app="print"):
@@ -38,11 +39,15 @@ class RuleTests(unittest.TestCase):
         self.red({"LICENSE": "Required Notice: Copyright (c) 2026 Aytu (https://alazy.app)\nPolyForm Noncommercial License 1.0.0"}, "licence")
         self.red({}, "licence")
         self.green({"LICENSE": GOOD_LICENSE}, "licence")
+        self.green({"LICENSE": NEW_SPELLING}, "licence")
+        self.red({"LICENSE": GOOD_LICENSE.replace("ALAZY INC.", "Alazy Corp")}, "licence")
 
     def test_publisher(self):
         self.red({"mac/Info.plist": "<string>Copyright © 2026 Aytu</string>"}, "publisher")
         self.red({"site/index.html": "<p>Published by Aytu Tuna</p>"}, "publisher")
         self.green({"mac/Info.plist": "<string>Copyright © 2026 ALAZY INC.</string>"}, "publisher")
+        self.green({"mac/Info.plist": "<string>Copyright © 2026 Alazy Inc.</string>"}, "publisher")
+        self.red({"mac/Info.plist": "<string>Copyright © 2026 alazy inc</string>"}, "publisher")
 
     def test_open_source(self):
         self.red({"site/index.html": "<p>Lazy Print is open source.</p>"}, "open-source")
