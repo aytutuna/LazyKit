@@ -17,6 +17,7 @@ env:
   CARGO_TERM_COLOR: always
   WASM_BINDGEN_CLI: 0.2.130
   CARGO_NDK: 4.1.2
+  NDK_VERSION: 27.3.13750724
 
 defaults:
   run:
@@ -102,7 +103,7 @@ jobs:
       - run: cargo ndk --version 2>/dev/null | grep -qx "cargo-ndk ${{ env.CARGO_NDK }}" || cargo install cargo-ndk --version ${{ env.CARGO_NDK }} --locked
       - name: Build
         run: |
-          export ANDROID_NDK_HOME="$ANDROID_NDK_LATEST_HOME"
+          export ANDROID_NDK_HOME="$ANDROID_SDK_ROOT/ndk/$NDK_VERSION"
           cargo ndk -t arm64-v8a -t x86_64 -P 26 -o out/jniLibs build --release -p lazy-link-ffi
       - name: Size
         run: ls -l out/jniLibs/*/liblazy_link_ffi.so | awk '{print $9, $5}' | tee -a "$GITHUB_STEP_SUMMARY"
@@ -205,7 +206,7 @@ jobs:
           key: scan-models-android-${{ hashFiles('rust/lazy-scan-model/scripts/fetch.sh', 'tools/patch_einsum.py') }}
       - run: bash lazy-scan-model/scripts/fetch.sh lazy-scan-model/models models
       - run: bash lazy-scan-model/scripts/fetch.sh lazy-scan-model/models android
-      - run: echo "ANDROID_NDK_HOME=$ANDROID_NDK_LATEST_HOME" >> "$GITHUB_ENV"
+      - run: echo "ANDROID_NDK_HOME=$ANDROID_SDK_ROOT/ndk/$NDK_VERSION" >> "$GITHUB_ENV"
       - name: Build the tests for arm64
         run: cargo ndk -t arm64-v8a -P 26 test --no-run --release -p lazy-scan --features ort
       - name: Allow the emulator to use KVM
