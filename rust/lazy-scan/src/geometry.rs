@@ -42,6 +42,68 @@ impl Quad {
         })
     }
 
+    /// The area enclosed, in square pixels.
+    pub fn area(&self) -> f64 {
+        self.signed_area().abs()
+    }
+
+    /// `point` lies inside the outline or within `tolerance` pixels outside it. The quad must be convex.
+    pub fn contains(&self, point: Point, tolerance: f64) -> bool {
+        (0..4).all(|i| {
+            let (a, b) = (self.0[i], self.0[(i + 1) & 3]);
+            let len = a.distance_to(b);
+            if len <= 0.0 {
+                return false;
+            }
+            // how far outside edge a to b the point is, positive outside for a clockwise quad
+            let outside = ((b.x - a.x) * (a.y - point.y) - (b.y - a.y) * (a.x - point.x)) / len;
+            !(outside > tolerance)
+        })
+    }
+
+    /// The area this outline and `other` share (both convex and clockwise): this quad clipped by each edge of the other in
+    /// turn (Sutherland and Hodgman).
+    pub fn intersection_area(&self, other: &Quad) -> f64 {
+        let mut polygon: Vec<Point> = self.0.to_vec();
+        for edge in 0..4 {
+            if polygon.is_empty() {
+                break;
+            }
+            let (a, b) = (other.0[edge], other.0[(edge + 1) & 3]);
+            let input = std::mem::take(&mut polygon);
+            for k in 0..input.len() {
+                let current = input[k];
+                let previous = input[(k + input.len() - 1) % input.len()];
+                let side = |p: Point| (b.x - a.x) * (p.y - a.y) - (b.y - a.y) * (p.x - a.x);
+                let (sc, sp) = (side(current), side(previous));
+                let crossing = || {
+                    let t = sp / (sp - sc);
+                    Point::new(
+                        previous.x + (current.x - previous.x) * t,
+                        previous.y + (current.y - previous.y) * t,
+                    )
+                };
+                if sc >= 0.0 {
+                    if sp < 0.0 {
+                        polygon.push(crossing());
+                    }
+                    polygon.push(current);
+                } else if sp >= 0.0 {
+                    polygon.push(crossing());
+                }
+            }
+        }
+        if polygon.len() < 3 {
+            return 0.0;
+        }
+        let mut sum = 0.0;
+        for i in 0..polygon.len() {
+            let (p, q) = (polygon[i], polygon[(i + 1) % polygon.len()]);
+            sum += p.x * q.y - q.x * p.y;
+        }
+        sum.abs() / 2.0
+    }
+
     pub fn edge(&self, i: usize) -> f64 {
         self.0[i & 3].distance_to(self.0[(i + 1) & 3])
     }

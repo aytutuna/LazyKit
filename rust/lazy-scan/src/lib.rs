@@ -8,6 +8,7 @@ mod enhancer;
 pub mod frame_quality;
 mod geometry;
 mod live;
+pub mod multi_quad;
 mod photo;
 mod pipeline;
 mod refiner;
