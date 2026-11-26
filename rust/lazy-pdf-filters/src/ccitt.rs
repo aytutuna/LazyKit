@@ -20,7 +20,8 @@ pub struct Options {
 pub fn decode(data: &[u8], o: &Options, max_size: u64) -> Result<Vec<u8>> {
     let (k, columns, rows) = (o.k, o.columns, o.rows);
     let stride = columns.div_ceil(8);
-    if rows > 0 && rows as u64 * stride as u64 > max_size {
+    // The size is a usize below, so a limit past what the target addresses must not let it wrap.
+    if rows > 0 && rows as u64 * stride as u64 > max_size.min(usize::MAX as u64) {
         return Err(FilterError::too_big());
     }
     let mut output = Output::new(
