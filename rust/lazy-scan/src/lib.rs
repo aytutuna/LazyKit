@@ -2,6 +2,7 @@
 //! Required Notice: Copyright (c) 2026 Alazy Inc. (https://alazy.app)
 
 mod background;
+mod camera_turn;
 mod color;
 mod corners;
 pub mod detector;
@@ -19,6 +20,7 @@ mod stability;
 pub mod warp;
 
 pub use background::{BackgroundMap, percentile};
+pub use camera_turn::{frame_candidate, frame_found, photo_outline};
 pub use color::is_effectively_gray;
 pub use corners::{
     Found, MIN_CONFIDENCE, SIDE, SURE_CONFIDENCE, acceptable, decode_heatmap, model_input,
