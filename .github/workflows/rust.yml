@@ -9,6 +9,8 @@ on:
       - testdata/scan/**
       - native/**
       - tools/**
+      - THIRD-PARTY-NOTICES.txt
+      - LICENSE
       - .github/workflows/rust.yml
 
 permissions:
