@@ -14,6 +14,7 @@ permissions:
 env:
   CARGO_TERM_COLOR: always
   WASM_BINDGEN_CLI: 0.2.130
+  CARGO_NDK: 4.1.2
 
 defaults:
   run:
@@ -24,7 +25,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
-      - uses: Swatinem/rust-cache@v2
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2
         with:
           workspaces: rust
       - run: cargo fmt --check
@@ -38,7 +39,7 @@ jobs:
         target: [x86_64-pc-windows-msvc, aarch64-pc-windows-msvc]
     steps:
       - uses: actions/checkout@v7
-      - uses: Swatinem/rust-cache@v2
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2
         with:
           workspaces: rust
           key: ${{ matrix.target }}
@@ -55,7 +56,7 @@ jobs:
     runs-on: macos-latest
     steps:
       - uses: actions/checkout@v7
-      - uses: Swatinem/rust-cache@v2
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2
         with:
           workspaces: rust
       - run: rustup target add aarch64-apple-ios aarch64-apple-ios-sim aarch64-apple-darwin x86_64-apple-darwin
@@ -88,15 +89,15 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
-      - uses: Swatinem/rust-cache@v2
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2
         with:
           workspaces: rust
       - run: rustup target add aarch64-linux-android x86_64-linux-android
       - uses: actions/cache@v4
         with:
           path: ~/.cargo/bin/cargo-ndk
-          key: cargo-ndk-${{ runner.os }}
-      - run: command -v cargo-ndk || cargo install cargo-ndk --locked
+          key: cargo-ndk-${{ env.CARGO_NDK }}-${{ runner.os }}
+      - run: cargo ndk --version 2>/dev/null | grep -qx "cargo-ndk ${{ env.CARGO_NDK }}" || cargo install cargo-ndk --version ${{ env.CARGO_NDK }} --locked
       - name: Build
         run: |
           export ANDROID_NDK_HOME="$ANDROID_NDK_LATEST_HOME"
@@ -111,7 +112,7 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: 24
-      - uses: Swatinem/rust-cache@v2
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2
         with:
           workspaces: rust
       - run: rustup target add wasm32-unknown-unknown
@@ -119,7 +120,7 @@ jobs:
         with:
           path: ~/.cargo/bin/wasm-bindgen
           key: wasm-bindgen-${{ env.WASM_BINDGEN_CLI }}
-      - run: command -v wasm-bindgen || cargo install wasm-bindgen-cli --version ${{ env.WASM_BINDGEN_CLI }} --locked
+      - run: wasm-bindgen --version 2>/dev/null | grep -qx "wasm-bindgen ${{ env.WASM_BINDGEN_CLI }}" || cargo install wasm-bindgen-cli --version ${{ env.WASM_BINDGEN_CLI }} --locked
       - run: cargo build --release -p lazy-link-wasm --target wasm32-unknown-unknown
       - run: wasm-bindgen --target nodejs --out-dir target/wasm-pkg target/wasm32-unknown-unknown/release/lazy_link_wasm.wasm
       - run: node --test lazy-link-wasm/tests/vectors.test.cjs
