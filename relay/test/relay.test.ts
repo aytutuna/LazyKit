@@ -432,6 +432,20 @@ describe("relay", () => {
     expect(sent).toEqual([["fcm", "tok", { room }]]);
   });
 
+  it("wakes the group when the host's control socket is open but never answers", async () => {
+    const sent: unknown[] = [];
+    useServices({ push: { send: async (platform, token, message) => void sent.push([platform, token, message]) } });
+    const room = newRoom();
+    const group = groupOf(room);
+    expect((await groupApi(group, "push", { device: "e".repeat(32), platform: "fcm", token: "tok" })).status).toBe(204);
+    const control = await open(room, "role=host");
+    const res = await ask(room, "role=guest");
+    expect(res.status).toBe(404);
+    expect(res.headers.get("x-relay-woken")).toBe("1");
+    expect(sent).toEqual([["fcm", "tok", { room }]]);
+    await control.closed;
+  });
+
   it("counts into the week of the bytes and forgets old weeks", async () => {
     const group = newGroup();
     const day = 86_400_000;

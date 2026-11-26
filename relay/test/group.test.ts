@@ -260,13 +260,15 @@ describe("rate limit", () => {
     expect(networkOf("192.0.2.1")).toBe("192.0.2.1");
   });
 
-  it("refuses unknown addresses while full of live ones and sweeps once a window", () => {
+  it("lets new addresses in while full of live ones by dropping the oldest, and sweeps once a window", () => {
     const l = new RateLimiter(5, 1000);
+    const size = () => (l as unknown as { seen: Map<string, unknown> }).seen.size;
     for (let i = 0; i < 10_000; i++) l.allow(`ip${i}`, 0);
-    expect(l.allow("new", 500)).toBe(false);
+    expect(l.allow("new", 500)).toBe(true);
+    expect(size()).toBe(10_000);
     expect(l.allow("ip1", 500)).toBe(true);
-    expect(l.allow("new", 1000)).toBe(true);
-    expect((l as unknown as { seen: Map<string, unknown> }).seen.size).toBe(1);
+    expect(l.allow("newer", 1000)).toBe(true);
+    expect(size()).toBeLessThan(10);
   });
 
   it("answers 503 with Retry-After from the worker once an address is over the limit", async () => {

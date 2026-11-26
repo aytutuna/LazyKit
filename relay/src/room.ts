@@ -68,12 +68,7 @@ export class Room extends DurableObject {
     const group = this.groupStub();
     if ((await group.status()).capped) return new Response("weekly cap reached", { status: 402 });
     const control = this.control();
-    if (!control) {
-      // The group's other devices may be closed phone apps; they are woken
-      // to connect and the guest tries again.
-      const woken = await group.wake(room, device);
-      return new Response("nobody waiting", { status: 404, headers: woken ? { "x-relay-woken": "1" } : {} });
-    }
+    if (!control) return this.nobodyWaiting(room, device);
     const open = this.ctx.getWebSockets("guest").filter((s) => s.readyState === WebSocket.OPEN).length;
     if (open + this.joining.size >= MAX_STREAMS) return new Response("too many streams", { status: 429 });
 
@@ -87,12 +82,24 @@ export class Room extends DurableObject {
     const ok = await joined;
     clearTimeout(timer);
     this.joining.delete(id);
-    if (!ok) return new Response("host did not answer", { status: 504 });
+    if (!ok) {
+      // A control socket that looks open but never answers is a suspended or
+      // killed app; treat it like no host so the push goes out.
+      control.close(1001, "not answering");
+      return this.nobodyWaiting(room, device);
+    }
 
     const pair = new WebSocketPair();
     this.ctx.acceptWebSocket(pair[1], ["guest", id]);
     pair[1].serializeAttachment({ seen: Date.now() });
     return new Response(null, { status: 101, webSocket: pair[0] });
+  }
+
+  // The group's other devices may be closed phone apps; they are woken to
+  // connect and the guest tries again.
+  private async nobodyWaiting(room: string, device: string): Promise<Response> {
+    const woken = await this.groupStub().wake(room, device);
+    return new Response("nobody waiting", { status: 404, headers: woken ? { "x-relay-woken": "1" } : {} });
   }
 
   private async acceptStream(id: string): Promise<Response> {

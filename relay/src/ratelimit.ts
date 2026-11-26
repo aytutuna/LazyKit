@@ -17,8 +17,9 @@ export class RateLimiter {
     if (this.seen.size >= MAX_KEYS && now - this.swept >= this.windowMs) this.sweep(now);
     let e = this.seen.get(key);
     if (!e) {
-      // Full of live entries: an unknown address waits for the next sweep.
-      if (this.seen.size >= MAX_KEYS) return false;
+      // Full of live entries: drop the oldest instead of refusing, so a flood
+      // of distinct sources cannot lock new users out.
+      if (this.seen.size >= MAX_KEYS) this.seen.delete(this.seen.keys().next().value!);
       e = { start: now, count: 0 };
       this.seen.set(key, e);
     } else if (now - e.start >= this.windowMs) {
