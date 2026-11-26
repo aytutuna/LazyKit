@@ -4,6 +4,7 @@ on:
   push:
     branches: [main, 'ci/**']
     paths:
+      - rust/Cargo.toml
       - rust/lazy-pdf-filters/**
       - testdata/pdf-filters/**
       - .github/workflows/pdf-filters-fuzz.yml
@@ -35,7 +36,7 @@ jobs:
       SECONDS_PER_TARGET: ${{ github.event_name == 'schedule' && 900 || 30 }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
-      - run: rustup toolchain install "$NIGHTLY" --profile minimal
+      - run: rustup toolchain install "$NIGHTLY" --profile minimal --component rustfmt
       - uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
         with:
           path: ~/.cargo/bin/cargo-fuzz
@@ -43,6 +44,8 @@ jobs:
       - run: cargo-fuzz --version 2>/dev/null | grep -qx "cargo-fuzz ${CARGO_FUZZ}" || cargo +"$NIGHTLY" install cargo-fuzz --version "$CARGO_FUZZ" --locked
       - name: Lock
         run: cargo +"$NIGHTLY" fetch --locked --manifest-path fuzz/Cargo.toml
+      - name: Format
+        run: cargo +"$NIGHTLY" fmt --check --manifest-path fuzz/Cargo.toml
       - name: Seeds
         run: |
           mkdir -p "fuzz/corpus/${{ matrix.target }}"
