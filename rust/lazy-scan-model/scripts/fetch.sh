@@ -29,17 +29,19 @@ has() { [ -f "$1" ] && [ "$(sha256 "$1")" = "$2" ]; }
 
 download() {
   local url="$1" file="$2" expected="$3"
-  curl -fsSL --retry 3 --retry-all-errors --retry-delay 10 -o "$file.part" "$url"
+  curl -fsSL --retry 3 --retry-all-errors --retry-delay 10 -o "$file.part" "$url" || { rm -f "$file.part"; return 1; }
   if [ "$(sha256 "$file.part")" != "$expected" ]; then
     rm -f "$file.part"
-    echo "$file: checksum mismatch" >&2
-    exit 1
+    echo "$url: checksum mismatch" >&2
+    return 1
   fi
   mv "$file.part" "$file"
 }
 
 if ! has "$out/$model" "$model_sha"; then
-  download "$copy/$model" "$out/$model" "$model_sha" || download "$upstream/$model" "$out/$model" "$model_sha"
+  download "$copy/$model" "$out/$model" "$model_sha" ||
+    download "$upstream/$model" "$out/$model" "$model_sha" ||
+    { echo "$model: not fetched" >&2; exit 1; }
 fi
 
 if ! has "$out/$patched" "$patched_sha"; then
@@ -58,15 +60,15 @@ if [ "$what" = models ]; then
 fi
 
 case "$(uname -s)" in
-  Darwin) entry=runtimes/osx-arm64/native/libonnxruntime.dylib; lib=libonnxruntime.dylib ;;
-  Linux) entry=runtimes/linux-x64/native/libonnxruntime.so; lib=libonnxruntime.so ;;
-  *) entry=runtimes/win-x64/native/onnxruntime.dll; lib=onnxruntime.dll ;;
+  Darwin) entry=runtimes/osx-arm64/native/libonnxruntime.dylib; lib=libonnxruntime.dylib; lib_sha=8e88284d3b4395b1e532831ac05eb0ffa3673a62df32349e1b0fd64542cb827d ;;
+  Linux) entry=runtimes/linux-x64/native/libonnxruntime.so; lib=libonnxruntime.so; lib_sha=ffc84d48e845cf0b562ba4ea5ca32aaafc0d4069019fef4f63095b307d0270ad ;;
+  *) entry=runtimes/win-x64/native/onnxruntime.dll; lib=onnxruntime.dll; lib_sha=114947d633e6844ce3c4b51ef6678f776628571d08a5763859c61642c8dcca9c ;;
 esac
-if [ ! -f "$out/$lib" ]; then
-  if ! has "$out/ort.nupkg" "$nupkg_sha"; then
-    download "$nupkg_url" "$out/ort.nupkg" "$nupkg_sha"
-  fi
+if ! has "$out/$lib" "$lib_sha"; then
+  download "$nupkg_url" "$out/ort.nupkg" "$nupkg_sha" || { echo "ONNX Runtime package not fetched" >&2; exit 1; }
   unzip -j -o -q "$out/ort.nupkg" "$entry" -d "$out"
+  rm -f "$out/ort.nupkg"
+  has "$out/$lib" "$lib_sha" || { echo "$lib is not the pinned library" >&2; exit 1; }
 fi
 
 echo "models and ONNX Runtime are in $out"

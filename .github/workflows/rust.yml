@@ -151,6 +151,9 @@ jobs:
       - name: Fetch the model and ONNX Runtime
         shell: bash
         run: bash lazy-scan-model/scripts/fetch.sh
+      - name: Lint the model backends
+        if: matrix.os == 'ubuntu-latest'
+        run: cargo clippy -p lazy-scan -p lazy-scan-model --all-targets --features tract,ort -- -D warnings
       - name: Test with tract and ONNX Runtime
         run: cargo test --release -p lazy-scan --features tract,ort -- --nocapture
 
@@ -170,6 +173,8 @@ jobs:
           key: scan-wasm
       - run: rustup target add wasm32-unknown-unknown wasm32-wasip1
       - run: bash lazy-scan-model/scripts/fetch.sh lazy-scan-model/models models
+      - name: Lint for the browser
+        run: cargo clippy -p lazy-scan -p lazy-scan-model --features tract --target wasm32-unknown-unknown -- -D warnings
       - name: Build for the browser
         run: cargo build --release -p lazy-scan --features tract --target wasm32-unknown-unknown
       - name: Test in WASI

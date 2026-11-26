@@ -2,9 +2,8 @@
 
 Six frames of the SmartDoc 2015 Challenge 1 dataset for the corner model's tests: one from each of
 background01 to background04 and two from background05, the cluttered desk where our own page search does
-worst (a cable across the page, more sheets under it, pens on it). Read by the Swift model tests
-(`Tests/LazyScanModelTests`, found next to the test file) and copied next to the C# test assembly
-by `windows/LazyScan.App.Tests`.
+worst (a cable across the page, more sheets under it, pens on it). Read by
+`rust/lazy-scan/tests/fixtures.rs`; the app repos keep identical copies (same SHA-256 as `SHA256SUMS`).
 
 The frames are 1920 × 1080 in the dataset. Here they are scaled to 1280 × 720 (Lanczos) and saved as
 JPEG at quality 90, and their ground-truth corners scaled by the same 2/3. `corners.json` lists each file
