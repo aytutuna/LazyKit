@@ -51,8 +51,7 @@ class Notices(unittest.TestCase):
     def test_the_committed_file_lists_the_inference_crates(self):
         text = (ROOT / "THIRD-PARTY-NOTICES.txt").read_text(encoding="utf-8")
         for name in ("tract-onnx ", "ort "):
-            self.assertIn("
-" + name, text)
+            self.assertIn("\n" + name, text)
 
 
 if __name__ == "__main__":
