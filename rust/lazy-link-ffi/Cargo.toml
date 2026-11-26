@@ -15,3 +15,7 @@ lazy-link = { path = "../lazy-link" }
 sha2 = "0.10"
 thiserror = "2"
 uniffi = { workspace = true }
+
+[target.'cfg(target_os = "android")'.dependencies]
+jni = "0.22"
+rustls-platform-verifier = "0.7.1"

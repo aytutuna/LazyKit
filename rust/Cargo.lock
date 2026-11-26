@@ -603,7 +603,9 @@ name = "lazy-link-ffi"
 version = "0.1.0"
 dependencies = [
  "async-trait",
+ "jni",
  "lazy-link",
+ "rustls-platform-verifier",
  "sha2",
  "thiserror",
  "uniffi",
