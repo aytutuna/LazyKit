@@ -211,3 +211,20 @@ fn the_test_data_matches_its_sums() {
         assert_eq!(digest, hash, "{name}");
     }
 }
+
+#[test]
+fn an_empty_image_comes_back_as_it_is() {
+    for (w, h) in [(0, 0), (0, 10), (10, 0)] {
+        let empty = Rgba::new(w, h, vec![]);
+        for mode in [EnhanceMode::Auto, EnhanceMode::Gray, EnhanceMode::Photo] {
+            let out = enhance(&empty, mode, 0.5);
+            assert_eq!((out.image.width, out.image.height), (w, h));
+            let want = if mode == EnhanceMode::Auto {
+                EnhanceMode::Color
+            } else {
+                mode
+            };
+            assert_eq!(out.mode, want);
+        }
+    }
+}

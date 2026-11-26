@@ -505,7 +505,7 @@ pub fn refine(image: &Rgba, quad: &Quad) -> Refinement {
         if let Some(line) = fit_side(&field, a, b, reach, outward) {
             lines.push(line);
             moved += 1;
-        } else if (a.x - b.x).hypot(a.y - b.y) >= 1.0 {
+        } else if a.distance_to(b) >= 1.0 {
             lines.push(through(a, b));
         } else {
             return unchanged(0.0);
@@ -520,8 +520,7 @@ pub fn refine(image: &Rgba, quad: &Quad) -> Refinement {
         }
     }
     let result = Quad(corners);
-    let near =
-        (0..4).all(|i| (result.0[i].x - q.0[i].x).hypot(result.0[i].y - q.0[i].y) <= 2.0 * reach);
+    let near = (0..4).all(|i| result.0[i].distance_to(q.0[i]) <= 2.0 * reach);
     // only an outline lying on its edges better than the one given: a page already on its edges is not moved onto another edge near it
     if moved > 0 && result.is_convex() && near {
         let (shares, fit_total) = backing(&field, &result);

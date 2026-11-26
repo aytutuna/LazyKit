@@ -18,7 +18,7 @@ impl OrtModel {
     /// `library` is onnxruntime.dll, libonnxruntime.so or libonnxruntime.dylib; `threads` 0 lets the runtime choose.
     pub fn load(library: &Path, onnx: &[u8], threads: usize) -> Result<Self, ModelError> {
         let load = |e: &dyn std::fmt::Display| ModelError::Load(e.to_string());
-        let mut shared = ENVIRONMENT.lock().unwrap();
+        let mut shared = ENVIRONMENT.lock().unwrap_or_else(|e| e.into_inner());
         let environment = match shared.as_ref() {
             Some(environment) => environment.clone(),
             None => {
@@ -50,9 +50,13 @@ impl CornerModel for OrtModel {
         let run = |e: ort::Error| ModelError::Run(e.to_string());
         let tensor = Tensor::from_array(([1usize, 3, 256, 256], input.to_vec().into_boxed_slice()))
             .map_err(run)?;
-        let mut session = self.session.lock().unwrap();
+        let mut session = self.session.lock().unwrap_or_else(|e| e.into_inner());
         let out = session.run(ort::inputs!["img" => tensor]).map_err(run)?;
-        let (shape, data) = out["heatmap"].try_extract_tensor::<f32>().map_err(run)?;
+        let (shape, data) = out
+            .get("heatmap")
+            .ok_or(ModelError::Shape)?
+            .try_extract_tensor::<f32>()
+            .map_err(run)?;
         let shape: Vec<usize> = shape.iter().map(|&d| d as usize).collect();
         heatmaps(data.to_vec(), &shape)
     }

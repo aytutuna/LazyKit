@@ -10,7 +10,8 @@ impl Point {
     }
 
     pub fn distance_to(self, other: Point) -> f64 {
-        (self.x - other.x).hypot(self.y - other.y)
+        let (dx, dy) = (self.x - other.x, self.y - other.y);
+        (dx * dx + dy * dy).sqrt()
     }
 }
 

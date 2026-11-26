@@ -15,6 +15,9 @@ pub struct Located {
 
 /// The photo through the corner model, the sanity checks and the edge refinement; `None` when no usable page is in it.
 pub fn locate(photo: &Rgba, model: &dyn CornerModel) -> Result<Option<Located>, ModelError> {
+    if photo.width == 0 || photo.height == 0 {
+        return Ok(None);
+    }
     let heat = model.run(&model_input(photo))?;
     let Some(found) = decode_heatmap(&heat.values, heat.width, heat.height) else {
         return Ok(None);

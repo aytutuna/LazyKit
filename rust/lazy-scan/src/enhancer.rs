@@ -58,17 +58,16 @@ pub fn tile_size(width: usize, height: usize) -> usize {
     MIN_TILE.max(width.max(height) / TILES_ALONG_LONG_SIDE)
 }
 
-pub fn paper_map(gray: &Gray) -> BackgroundMap {
+pub fn paper_map(gray: &Gray) -> Option<BackgroundMap> {
     let raw = BackgroundMap::estimate(
         gray,
         tile_size(gray.width, gray.height),
         BACKGROUND_PERCENTILE,
-    )
-    .unwrap();
+    )?;
     let filled = raw.raised_dark_tiles(DARK_TILE_SHARE);
     let floor = (MIN_BACKGROUND as u32)
         .max((filled.median_tile() as f64 * MIN_BACKGROUND_SHARE).floor() as u32);
-    filled.clamped_below(floor.min(255) as u8)
+    Some(filled.clamped_below(floor.min(255) as u8))
 }
 
 /// Light print on a dark ground (a chalkboard, a slide): no division by the paper can make its ground white.
@@ -246,8 +245,22 @@ fn light_on_dark(image: &Rgba, mode: EnhanceMode, threshold: f64) -> Enhanced {
     }
 }
 
+fn unchanged(image: &Rgba, mode: EnhanceMode) -> Enhanced {
+    Enhanced {
+        image: image.clone(),
+        mode: if mode == EnhanceMode::Auto {
+            EnhanceMode::Color
+        } else {
+            mode
+        },
+    }
+}
+
 /// `image` cleaned up as `mode` says; black and white cuts at `threshold` (0 to 1, `DEFAULT_THRESHOLD` is the usual).
 pub fn enhance(image: &Rgba, mode: EnhanceMode, threshold: f64) -> Enhanced {
+    if image.width == 0 || image.height == 0 {
+        return unchanged(image, mode);
+    }
     if mode == EnhanceMode::Photo {
         return Enhanced {
             image: photo(image, true),
@@ -259,7 +272,9 @@ pub fn enhance(image: &Rgba, mode: EnhanceMode, threshold: f64) -> Enhanced {
     if is_light_on_dark(&gray) {
         return light_on_dark(image, mode, threshold);
     }
-    let paper = paper_map(&gray);
+    let Some(paper) = paper_map(&gray) else {
+        return unchanged(image, mode);
+    };
     let lut = stretch(
         if mode == EnhanceMode::Whiteboard {
             0.0
