@@ -234,3 +234,23 @@ mod second_edge {
         assert!(r.support >= 0.95);
     }
 }
+
+#[test]
+fn photos_without_pixels_or_with_one_are_left_as_given() {
+    let quad = Quad::from_xy([[0.0, 0.0], [30.0, 0.0], [30.0, 30.0], [0.0, 30.0]]);
+    for (w, h) in [(0, 0), (0, 5), (5, 0), (1, 1), (2, 40), (15, 15)] {
+        let image = Rgba::filled(w, h, 200, 100, 50);
+        let field = build_field(&image);
+        assert_eq!(field.gx.len(), w * h);
+        let r = refine(&image, &quad);
+        assert_eq!(
+            r,
+            Refinement {
+                quad,
+                refined: false,
+                support: 0.0
+            },
+            "{w} x {h}"
+        );
+    }
+}

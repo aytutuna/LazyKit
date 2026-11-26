@@ -100,8 +100,12 @@ pub fn luma(image: &Rgba) -> Gray {
     }
 }
 
-/// Box-filter minification: each destination pixel is the mean, rounded down, of the source pixels it covers.
+/// Box-filter minification: each destination pixel is the mean, rounded down, of the source pixels it covers. An image
+/// without pixels, or a size of nothing, gives an image of no pixels.
 pub fn minified(image: &Rgba, width: usize, height: usize) -> Rgba {
+    if image.width == 0 || image.height == 0 || width == 0 || height == 0 {
+        return Rgba::new(0, 0, Vec::new());
+    }
     let mut out = vec![0u8; width * height * 4];
     let x_ratio = image.width as f64 / width as f64;
     let y_ratio = image.height as f64 / height as f64;
@@ -182,6 +186,16 @@ mod tests {
         }
         let out = minified(&Rgba::new(4, 1, data), 2, 1);
         assert_eq!(out.data, vec![10, 10, 10, 255, 20, 20, 20, 255]);
+    }
+
+    #[test]
+    fn minifying_nothing_or_to_nothing_gives_no_pixels() {
+        let empty = Rgba::new(0, 0, vec![]);
+        let one = Rgba::new(1, 1, vec![9, 8, 7, 255]);
+        assert_eq!(minified(&empty, 4, 4), empty);
+        assert_eq!(minified(&one, 0, 3), empty);
+        assert_eq!(minified(&one, 3, 0), empty);
+        assert_eq!(minified(&one, 1, 1), one);
     }
 
     #[test]

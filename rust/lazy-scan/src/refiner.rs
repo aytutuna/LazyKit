@@ -127,6 +127,10 @@ pub fn build_field(img: &Rgba) -> Field {
 
 // the gradient at a continuous point, bilinear between pixel centres
 fn gradient_at(f: &Field, x: f64, y: f64) -> (f64, f64) {
+    // a field under 3 pixels either way has no gradient anywhere
+    if f.w < 3 || f.h < 3 {
+        return (0.0, 0.0);
+    }
     let cx = (x - 0.5).max(1.0).min(f.w as f64 - 2.000001);
     let cy = (y - 0.5).max(1.0).min(f.h as f64 - 2.000001);
     let (x0, y0) = (cx.floor(), cy.floor());
