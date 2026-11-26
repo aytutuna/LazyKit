@@ -1,6 +1,7 @@
 import shutil
 import subprocess
 import sys
+import tempfile
 import unittest
 from pathlib import Path
 
@@ -43,6 +44,39 @@ class Notices(unittest.TestCase):
         text = notices.render(METADATA, PINS)
         self.assertIn("tool 1.2\n  MIT\n  https://example.org/tool.zip", text)
         self.assertNotIn("inner", text)
+
+    def test_equal_texts_are_listed_once_with_every_crate_that_has_them(self):
+        texts = {
+            ("zeta", "2.0.0"): [("LICENSE-MIT", "Copyright (c) A\r\nMIT text\n")],
+            ("alpha", "1.0.0"): [("LICENSE", "Copyright (c) A\nMIT text"), ("NOTICE", "Apache notice")],
+            ("beta", "1.0.0"): [("LICENSE", "Copyright (c) B\nMIT text")],
+        }
+        text = notices.render(METADATA, PINS, texts)
+        self.assertEqual(text.count("MIT text"), 2)
+        bar = "=" * 78
+        self.assertIn(f"Used by: alpha 1.0.0, zeta 2.0.0\n{bar}\nCopyright (c) A\nMIT text\n", text)
+        self.assertIn(f"Used by: alpha 1.0.0\n{bar}\nApache notice\n", text)
+        self.assertIn("Used by: beta 1.0.0", text)
+
+    def test_licence_files_are_read_from_each_crates_directory(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            (root / "LICENSE-APACHE").write_text("Apache text", encoding="utf-8")
+            (root / "COPYING").write_text("Copying text", encoding="utf-8")
+            (root / "Cargo.toml").write_text("", encoding="utf-8")
+            (root / "licensing.md").write_text("not a licence file", encoding="utf-8")
+            metadata = {
+                "workspace_members": [],
+                "packages": [{"id": "x 1.0.0", "name": "x", "version": "1.0.0", "manifest_path": str(root / "Cargo.toml")}],
+            }
+            found = notices.licence_texts(metadata)
+        self.assertEqual(found[("x", "1.0.0")], [("COPYING", "Copying text"), ("LICENSE-APACHE", "Apache text")])
+
+    def test_the_native_components_are_named(self):
+        text = notices.render(METADATA, PINS)
+        self.assertIn("ONNX Runtime 1.24.2 (MIT)", text)
+        self.assertIn("ThirdPartyNotices.txt", text)
+        self.assertIn("DocAligner FastViT-T8 corner model 1.1.1 (Apache-2.0)", text)
 
     @unittest.skipUnless(shutil.which("cargo"), "needs cargo")
     def test_the_committed_file_is_current(self):
