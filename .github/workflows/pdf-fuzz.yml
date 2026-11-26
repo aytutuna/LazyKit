@@ -5,6 +5,7 @@ on:
     branches: [main, 'ci/**']
     paths:
       - rust/lazy-pdf-syntax/**
+      - testdata/pdf/**
       - .github/workflows/pdf-fuzz.yml
   schedule:
     - cron: '23 4 * * 1'
@@ -39,7 +40,7 @@ jobs:
       - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2
         with:
           workspaces: rust/lazy-pdf-syntax/fuzz
-      - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+      - uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: rust/lazy-pdf-syntax/fuzz/corpus/${{ matrix.target }}
           key: pdf-fuzz-corpus-${{ matrix.target }}-${{ github.run_id }}
@@ -49,3 +50,16 @@ jobs:
       - run: cargo metadata --locked --format-version 1 --manifest-path fuzz/Cargo.toml > /dev/null
       - run: mkdir -p fuzz/corpus/${{ matrix.target }}
       - run: cargo fuzz run ${{ matrix.target }} fuzz/corpus/${{ matrix.target }} fuzz/seeds/${{ matrix.target }} -- -max_total_time=$SECONDS_TO_FUZZ -rss_limit_mb=2048
+      # A crash input and the corpus that led to it are kept even when the run fails.
+      - uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        if: always()
+        with:
+          path: rust/lazy-pdf-syntax/fuzz/corpus/${{ matrix.target }}
+          key: pdf-fuzz-corpus-${{ matrix.target }}-${{ github.run_id }}
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        if: failure()
+        with:
+          name: fuzz-crash-${{ matrix.target }}
+          path: rust/lazy-pdf-syntax/fuzz/artifacts/${{ matrix.target }}
+          retention-days: 14
+          if-no-files-found: ignore

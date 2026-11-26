@@ -118,11 +118,14 @@ pub struct Document {
     pub(crate) xref_is_stream: bool,
     pub(crate) next_object_number: u32,
     pub(crate) xref_rebuilt: bool,
+    pub(crate) xref_entries: u64,
 
     pub(crate) objects: HashMap<u32, Slot>,
     pub(crate) object_streams: HashMap<u32, ObjectStream>,
+    pub(crate) object_stream_bytes: usize,
     pub(crate) loading: HashSet<u32>,
     pub(crate) changed: BTreeSet<u32>,
+    pub(crate) originals: HashMap<u32, Vec<u8>>,
     pub(crate) deleted: BTreeSet<u32>,
     pub(crate) first_new: u32,
 
@@ -134,6 +137,7 @@ pub struct Document {
     pub(crate) pages: Option<Arc<Vec<Page>>>,
     pub(crate) pages_walked: bool,
     pub(crate) linearized: Option<bool>,
+    pub(crate) pdfa: Option<(Option<i32>, Option<String>)>,
 }
 
 impl Document {
@@ -160,10 +164,13 @@ impl Document {
             xref_is_stream: false,
             next_object_number: 0,
             xref_rebuilt: false,
+            xref_entries: 0,
             objects: HashMap::new(),
             object_streams: HashMap::new(),
+            object_stream_bytes: 0,
             loading: HashSet::new(),
             changed: BTreeSet::new(),
+            originals: HashMap::new(),
             deleted: BTreeSet::new(),
             first_new: u32::MAX,
             scan: None,
@@ -173,6 +180,7 @@ impl Document {
             pages: None,
             pages_walked: false,
             linearized: None,
+            pdfa: None,
         };
         document.load()?;
         Ok(document)
@@ -223,10 +231,18 @@ impl Document {
     }
 
     /// The crypt layer opens encrypted files; until it is here they are refused.
-    pub(crate) fn check_not_encrypted(&self) -> Result<(), ReadError> {
-        match self.trailer.get("Encrypt") {
-            None | Some(Object::Null) => Ok(()),
-            Some(_) => Err(ReadError::new(Problem::Encrypted, "The file is encrypted.")),
+    pub(crate) fn check_not_encrypted(&mut self) -> Result<(), ReadError> {
+        let entry = match self.trailer.get("Encrypt") {
+            None | Some(Object::Null) => return Ok(()),
+            Some(entry) => entry.clone(),
+        };
+        match self.flatten(Some(&entry), 3, false) {
+            Some(Object::Dict(_)) => {
+                Err(ReadError::new(Problem::Encrypted, "The file is encrypted."))
+            }
+            _ => Err(ReadError::damaged(
+                "The /Encrypt entry is not a dictionary.",
+            )),
         }
     }
 

@@ -28,6 +28,7 @@ type Section = BTreeMap<u32, Entry>;
 impl Document {
     pub(crate) fn load_cross_references(&mut self) -> Result<(), ReadError> {
         let start = self.find_start_xref()?;
+        self.xref_entries = 0;
         let mut visited = HashSet::new();
         let mut sections = Vec::new();
         let mut trailer: Option<Dict> = None;
@@ -64,9 +65,9 @@ impl Document {
                 }
                 if let Some(Object::Number(n)) = dictionary.get("Size")
                     && let Some(size) = n.integer()
-                    && size - 1 <= MAX_OBJECT_NUMBER as i64
+                    && (1..=MAX_OBJECT_NUMBER as i64 + 1).contains(&size)
                 {
-                    highest = highest.max((size - 1).max(0) as u32);
+                    highest = highest.max((size - 1) as u32);
                 }
                 offset = match dictionary.get("Prev") {
                     None => None,
@@ -99,7 +100,7 @@ impl Document {
         };
         let offset = Lexer::new(&self.data, at + "startxref".len()).try_read_unsigned();
         match offset {
-            Some(o) if o > 0 && (o as usize) < self.data.len() => Ok(o as u64),
+            Some(o) if o > 0 && (o as u64) < self.data.len() as u64 => Ok(o as u64),
             _ => Err(ReadError::damaged(
                 "startxref does not point into the file.",
             )),
@@ -130,7 +131,7 @@ impl Document {
                 let so = match stream_offset {
                     Object::Number(n) => n
                         .integer()
-                        .filter(|so| *so > 0 && (*so as usize) < self.data.len()),
+                        .filter(|so| *so > 0 && (*so as u64) < self.data.len() as u64),
                     _ => None,
                 };
                 let Some(so) = so else {
@@ -313,13 +314,32 @@ impl Document {
                 "A cross-reference stream's /Index has an odd count.",
             ));
         }
-        let data = self.stream_data(&stream)?;
         let entry_length: usize = widths.iter().sum();
         if entry_length == 0 {
             return Err(ReadError::damaged(
                 "A cross-reference stream's entries are empty.",
             ));
         }
+        let listed = index
+            .chunks(2)
+            .fold(0u64, |sum, pair| sum.saturating_add(pair[1]));
+        if listed > MAX_OBJECT_NUMBER as u64 + 1 {
+            return Err(ReadError::damaged(
+                "A cross-reference stream lists more entries than PDF has object numbers.",
+            ));
+        }
+        // Every entry of every section costs a table insert, so a chain of them is bounded together.
+        self.xref_entries += listed;
+        if self.xref_entries > 2 * (MAX_OBJECT_NUMBER as u64 + 1) {
+            return Err(ReadError::damaged(
+                "The cross-reference streams list too many entries.",
+            ));
+        }
+        let data = self.stream_data_limited(
+            &stream,
+            (MAX_OBJECT_NUMBER as usize + 1) * entry_length,
+            false,
+        )?;
         let mut highest = 0;
         let mut at = 0;
         for pair in index.chunks(2) {
