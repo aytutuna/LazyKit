@@ -3,20 +3,11 @@ import { DurableObject } from "cloudflare:workers";
 export const MAX_FRAME = 64 * 1024;
 export const MAX_BUFFERED = 8 * 1024 * 1024;
 export const MAX_STREAMS = 16;
-const KEEP_WEEKS = 8;
 const FLUSH_MS = 1000;
 const SWEEP_MS = 30_000;
 const CONTROL_IDLE_MS = 90_000;
 const STREAM_IDLE_MS = 120_000;
 const JOIN_MS = 10_000;
-
-// Monday 00:00 UTC of the week containing t, as YYYY-MM-DD.
-export function weekOf(t: number): string {
-  const d = new Date(t);
-  const back = (d.getUTCDay() + 6) % 7;
-  d.setUTCDate(d.getUTCDate() - back);
-  return d.toISOString().slice(0, 10);
-}
 
 // A room has one control socket, the host waiting for guests, and any number
 // of streams. A guest that connects gets a stream id sent to the host on the
@@ -24,7 +15,9 @@ export function weekOf(t: number): string {
 // room forwards binary frames between the two ends, one stream per TCP
 // connection of the phone link.
 export class Room extends DurableObject {
-  private usage: Record<string, number> = {};
+  private group?: string;
+  private hostDevice?: string;
+  private pending = 0;
   private unsaved = false;
   private joining = new Map<string, (ok: boolean) => void>();
 
@@ -32,16 +25,28 @@ export class Room extends DurableObject {
     super(ctx, env);
     ctx.setWebSocketAutoResponse(new WebSocketRequestResponsePair("ping", "pong"));
     ctx.blockConcurrencyWhile(async () => {
-      this.usage = (await ctx.storage.get<Record<string, number>>("usage")) ?? {};
+      this.group = await ctx.storage.get<string>("group");
+      this.hostDevice = await ctx.storage.get<string>("hostDevice");
     });
   }
 
   async fetch(req: Request): Promise<Response> {
     const url = new URL(req.url);
     const role = url.searchParams.get("role");
-    if (role === "host") return this.acceptHost();
-    if (role === "guest") return this.acceptGuest();
-    return this.acceptStream(url.searchParams.get("id") ?? "");
+    if (role === "stream") return this.acceptStream(url.searchParams.get("id") ?? "");
+    // A room belongs to the first group that uses it.
+    const group = url.searchParams.get("group") ?? "";
+    if (this.group === undefined) {
+      this.group = group;
+      await this.ctx.storage.put("group", group);
+    }
+    if (this.group !== group) return new Response("wrong group", { status: 403 });
+    if (role === "host") return this.acceptHost(url.searchParams.get("device") ?? "");
+    return this.acceptGuest(url.pathname.split("/").pop() ?? "");
+  }
+
+  private groupStub() {
+    return this.env.GROUPS.get(this.env.GROUPS.idFromName(this.group!));
   }
 
   private control(): WebSocket | undefined {
@@ -50,7 +55,9 @@ export class Room extends DurableObject {
 
   // A new host takes over from the old one, which may be a connection that
   // died without a close.
-  private async acceptHost(): Promise<Response> {
+  private async acceptHost(device: string): Promise<Response> {
+    this.hostDevice = device;
+    await this.ctx.storage.put("hostDevice", device);
     for (const old of this.ctx.getWebSockets("host")) old.close(1012, "replaced");
     const pair = new WebSocketPair();
     this.ctx.acceptWebSocket(pair[1], ["host"]);
@@ -59,9 +66,15 @@ export class Room extends DurableObject {
     return new Response(null, { status: 101, webSocket: pair[0] });
   }
 
-  private async acceptGuest(): Promise<Response> {
+  private async acceptGuest(room: string): Promise<Response> {
+    const group = this.groupStub();
+    if ((await group.status()).capped) return new Response("weekly cap reached", { status: 402 });
     const control = this.control();
-    if (!control) return new Response("nobody waiting", { status: 404 });
+    if (!control) {
+      // A closed phone app is woken to connect; the guest tries again.
+      const woken = this.hostDevice ? await group.wake(this.hostDevice, room) : false;
+      return new Response("nobody waiting", { status: 404, headers: woken ? { "x-relay-woken": "1" } : {} });
+    }
     const open = this.ctx.getWebSockets("guest").filter((s) => s.readyState === WebSocket.OPEN).length;
     if (open + this.joining.size >= MAX_STREAMS) return new Response("too many streams", { status: 429 });
 
@@ -136,15 +149,10 @@ export class Room extends DurableObject {
     if (this.ctx.getWebSockets().length > 0) await this.schedule(SWEEP_MS);
   }
 
-  getUsage(): Record<string, number> {
-    return { ...this.usage };
-  }
-
-  // The only place that decides what a byte is counted against; the room is
-  // the finest unit, so a group or device key can be added here later.
-  async count(bytes: number, now = Date.now()): Promise<void> {
-    const week = weekOf(now);
-    this.usage[week] = (this.usage[week] ?? 0) + bytes;
+  // Bytes are handed to the group in batches, so a busy stream costs one
+  // call a second.
+  async count(bytes: number): Promise<void> {
+    this.pending += bytes;
     if (!this.unsaved) {
       this.unsaved = true;
       await this.schedule(FLUSH_MS);
@@ -172,9 +180,16 @@ export class Room extends DurableObject {
   }
 
   private async flush(): Promise<void> {
+    const bytes = this.pending;
+    this.pending = 0;
     this.unsaved = false;
-    const oldest = weekOf(Date.now() - KEEP_WEEKS * 7 * 86_400_000);
-    for (const week of Object.keys(this.usage)) if (week < oldest) delete this.usage[week];
-    await this.ctx.storage.put("usage", this.usage);
+    if (bytes === 0 || this.group === undefined) return;
+    try {
+      if (await this.groupStub().record(bytes)) return;
+    } catch (e) {
+      this.pending += bytes;
+      throw e;
+    }
+    for (const ws of this.ctx.getWebSockets("guest")) this.end(ws, 1008, "weekly cap reached");
   }
 }

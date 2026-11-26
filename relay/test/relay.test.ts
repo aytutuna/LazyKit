@@ -1,12 +1,17 @@
 import { env, exports } from "cloudflare:workers";
 import { runDurableObjectAlarm, runInDurableObject } from "cloudflare:test";
-import { describe, expect, it } from "vitest";
-import { MAX_BUFFERED, MAX_FRAME, MAX_STREAMS, weekOf } from "../src/room";
+import { afterEach, describe, expect, it } from "vitest";
+import { useServices } from "../src/services";
+import { WEEKLY_CAP } from "../src/group";
+import { MAX_BUFFERED, MAX_FRAME, MAX_STREAMS } from "../src/room";
+import { weekOf } from "../src/week";
 
 declare const __BIG__: boolean;
 
 let n = 0;
 const newRoom = () => (++n).toString(16).padStart(64, "0");
+const newGroup = () => (++n).toString(16).padStart(32, "f");
+const DEVICE = "d".repeat(32);
 
 // The test config turns on web_socket_manual_reply_to_close, so a closed end
 // stays CLOSING until it answers; stall makes it never answer.
@@ -54,11 +59,17 @@ class Peer {
   }
 }
 
-const ask = (room: string, query: string) =>
-  exports.default.fetch(`https://alazy.app/relay/v1/${room}?${query}`, { headers: { Upgrade: "websocket" } });
+// Rooms in a test belong to the group named by the last half of the room id,
+// unless the test says otherwise.
+const groupOf = (room: string) => room.slice(32);
 
-async function open(room: string, query: string): Promise<Peer> {
-  const res = await ask(room, query);
+const ask = (room: string, query: string, group = groupOf(room)) =>
+  exports.default.fetch(`https://alazy.app/relay/v1/${room}?${query}&group=${group}&device=${DEVICE}`, {
+    headers: { Upgrade: "websocket" },
+  });
+
+async function open(room: string, query: string, group?: string): Promise<Peer> {
+  const res = await ask(room, query, group);
   expect(res.status).toBe(101);
   return new Peer(res.webSocket!);
 }
@@ -68,11 +79,11 @@ async function open(room: string, query: string): Promise<Peer> {
 class Host {
   streams: Peer[] = [];
   private waiting: (() => void)[] = [];
-  constructor(readonly room: string, readonly control: Peer) {
+  constructor(readonly room: string, readonly control: Peer, readonly group?: string) {
     control.ws.addEventListener("message", async (e) => {
       if (typeof e.data !== "string" || !e.data.startsWith("open ")) return;
       const id = e.data.slice("open ".length);
-      this.streams.push(await open(room, `role=stream&id=${id}`));
+      this.streams.push(await open(room, `role=stream&id=${id}`, group));
       this.waiting.splice(0).forEach((f) => f());
     });
   }
@@ -83,22 +94,30 @@ class Host {
   }
 }
 
-const host = async (room: string) => new Host(room, await open(room, "role=host"));
+const host = async (room: string, group?: string) => new Host(room, await open(room, "role=host", group), group);
 
 // A guest stream and the host end it was matched with.
 async function stream(h: Host): Promise<[Peer, Peer]> {
-  const guest = await open(h.room, "role=guest");
+  const guest = await open(h.room, "role=guest", h.group);
   return [guest, await h.stream()];
 }
 
+const groupApi = (group: string, path: string, body: unknown) =>
+  exports.default.fetch(`https://alazy.app/relay/v1/group/${group}/${path}`, {
+    method: "POST",
+    body: JSON.stringify(body),
+  });
+
 const bytes = (...v: number[]) => new Uint8Array(v);
 const stub = (room: string) => env.ROOMS.get(env.ROOMS.idFromName(room));
-const usage = (room: string) => stub(room).getUsage();
-const total = (u: Record<string, number>) => Object.values(u).reduce((a, b) => a + b, 0);
-const stored = (room: string) =>
-  runInDurableObject(stub(room), (_o, state) => state.storage.get<Record<string, number>>("usage"));
+const groupStub = (group: string) => env.GROUPS.get(env.GROUPS.idFromName(group));
+const used = async (group: string) => (await groupStub(group).status()).used;
+const stored = (group: string) =>
+  runInDurableObject(groupStub(group), (_o, state) => state.storage.get<Record<string, number>>("usage"));
 
 describe("relay", () => {
+  afterEach(() => useServices());
+
   it("matches a guest with the host and forwards both ways", async () => {
     const h = await host(newRoom());
     const [guest, side] = await stream(h);
@@ -249,7 +268,11 @@ describe("relay", () => {
     expect((await ask("abc", "role=host")).status).toBe(400);
     expect((await ask(newRoom(), "role=spy")).status).toBe(400);
     expect((await ask(newRoom(), "role=stream&id=zz")).status).toBe(400);
-    const plain = await exports.default.fetch(`https://alazy.app/relay/v1/${newRoom()}?role=host`);
+    const room = newRoom();
+    const base = `https://alazy.app/relay/v1/${room}?role=host`;
+    expect((await exports.default.fetch(`${base}&device=${DEVICE}`)).status).toBe(400);
+    expect((await exports.default.fetch(`${base}&group=${groupOf(room)}`)).status).toBe(400);
+    const plain = await exports.default.fetch(`${base}&group=${groupOf(room)}&device=${DEVICE}`);
     expect(plain.status).toBe(426);
     const other = await exports.default.fetch("https://alazy.app/relay/v2/x");
     expect(other.status).toBe(404);
@@ -288,56 +311,119 @@ describe("relay", () => {
     await side.closed;
   });
 
-  it("counts forwarded bytes per room and week, both directions", async () => {
-    const room = newRoom();
-    const other = newRoom();
-    const h = await host(room);
+  it("counts forwarded bytes per group, both directions", async () => {
+    const group = newGroup();
+    const h = await host(newRoom(), group);
     const [guest, side] = await stream(h);
     guest.ws.send(new Uint8Array(1500));
     side.ws.send(new Uint8Array(500));
     await side.until(1500);
     await guest.until(500);
-    expect((await usage(room))[weekOf(Date.now())]).toBe(2000);
-    expect(total(await usage(other))).toBe(0);
+    await runDurableObjectAlarm(stub(h.room));
+    expect(await used(group)).toBe(2000);
+    expect(await used(newGroup())).toBe(0);
+  });
+
+  it("adds up the rooms of one group", async () => {
+    const group = newGroup();
+    for (const size of [100, 250]) {
+      const h = await host(newRoom(), group);
+      const [guest, side] = await stream(h);
+      guest.ws.send(new Uint8Array(size));
+      await side.until(size);
+      await runDurableObjectAlarm(stub(h.room));
+    }
+    expect(await used(group)).toBe(350);
   });
 
   it("saves the count shortly after it changes", async () => {
-    const room = newRoom();
-    const h = await host(room);
+    const group = newGroup();
+    const h = await host(newRoom(), group);
     const [guest, side] = await stream(h);
     guest.ws.send(new Uint8Array(300));
     await side.until(300);
-    expect(await stored(room)).toBeUndefined();
-    expect(await runDurableObjectAlarm(stub(room))).toBe(true);
-    expect((await stored(room))?.[weekOf(Date.now())]).toBe(300);
+    expect(await stored(group)).toBeUndefined();
+    expect(await runDurableObjectAlarm(stub(h.room))).toBe(true);
+    expect((await stored(group))?.[weekOf(Date.now())]).toBe(300);
   });
 
   it("keeps the count after the stream closes", async () => {
-    const room = newRoom();
-    const h = await host(room);
+    const group = newGroup();
+    const h = await host(newRoom(), group);
     const [guest, side] = await stream(h);
     guest.ws.send(new Uint8Array(300));
     await side.until(300);
     guest.ws.close(1000);
     await side.closed;
-    expect(total((await stored(room)) ?? {})).toBe(300);
+    expect(await used(group)).toBe(300);
+  });
+
+  it("refuses a guest from another group", async () => {
+    const room = newRoom();
+    await host(room);
+    expect((await ask(room, "role=guest", newGroup())).status).toBe(403);
+    expect((await ask(room, "role=host", newGroup())).status).toBe(403);
+  });
+
+  it("refuses a guest once the group is over its cap, and closes its streams", async () => {
+    const group = newGroup();
+    const h = await host(newRoom(), group);
+    const [guest, side] = await stream(h);
+    await groupStub(group).record(WEEKLY_CAP - 10);
+    guest.ws.send(new Uint8Array(100));
+    await side.until(100);
+    await runDurableObjectAlarm(stub(h.room));
+    expect((await guest.closed).code).toBe(1008);
+    await side.closed;
+    expect((await ask(h.room, "role=guest", group)).status).toBe(402);
+  });
+
+  it("lets a paid group past the cap", async () => {
+    const group = newGroup();
+    const h = await host(newRoom(), group);
+    await groupStub(group).record(WEEKLY_CAP);
+    expect((await ask(h.room, "role=guest", group)).status).toBe(402);
+    await runInDurableObject(groupStub(group), async (g) => {
+      useServices({ verifier: { verify: async () => ({ until: Date.now() + 86_400_000 }) } });
+      await g.buy("apple", "receipt");
+    });
+    const [guest, side] = await stream(h);
+    guest.ws.send(new Uint8Array(100));
+    await side.until(100);
+  });
+
+  it("wakes the host's device when nobody is waiting", async () => {
+    const sent: unknown[] = [];
+    useServices({ push: { send: async (platform, token, message) => void sent.push([platform, token, message]) } });
+    const room = newRoom();
+    const group = groupOf(room);
+    const h = await host(room);
+    h.control.ws.close(1000);
+    await h.control.closed;
+    expect((await ask(room, "role=guest")).status).toBe(404);
+    expect(sent).toEqual([]);
+
+    expect((await groupApi(group, "push", { device: DEVICE, platform: "fcm", token: "tok" })).status).toBe(204);
+    const res = await ask(room, "role=guest");
+    expect(res.status).toBe(404);
+    expect(res.headers.get("x-relay-woken")).toBe("1");
+    expect(sent).toEqual([["fcm", "tok", { room }]]);
   });
 
   it("counts into the week of the bytes and forgets old weeks", async () => {
-    const room = newRoom();
+    const group = newGroup();
     const day = 86_400_000;
     const now = Date.now();
-    await runInDurableObject(stub(room), async (o, state) => {
-      await o.count(10, now - 100 * day);
-      await o.count(20, now - 7 * day);
-      await o.count(30, now);
-      await o.alarm();
-      expect(Object.keys(o.getUsage())).toEqual([weekOf(now - 7 * day), weekOf(now)]);
-      expect(await state.storage.get("usage")).toEqual(o.getUsage());
+    await runInDurableObject(groupStub(group), async (g, state) => {
+      await g.record(10, now - 100 * day);
+      await g.record(20, now - 7 * day);
+      await g.record(30, now);
+      expect(await state.storage.get("usage")).toEqual({
+        [weekOf(now - 7 * day)]: 20,
+        [weekOf(now)]: 30,
+      });
     });
-    const u = await usage(room);
-    expect(u[weekOf(now)]).toBe(30);
-    expect(u[weekOf(now - 7 * day)]).toBe(20);
+    expect(await used(group)).toBe(30);
   });
 
   it.runIf(__BIG__)("streams 1 GB", async () => {
@@ -358,6 +444,7 @@ describe("relay", () => {
     await side.until(goal);
     const secs = (Date.now() - t0) / 1000;
     console.log(`1 GB through the relay in ${secs.toFixed(1)} s`);
-    expect(total(await usage(h.room))).toBe(goal);
+    await runDurableObjectAlarm(stub(h.room));
+    expect(await used(groupOf(h.room))).toBe(goal);
   }, 600_000);
 });
