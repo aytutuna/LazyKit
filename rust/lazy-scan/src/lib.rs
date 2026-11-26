@@ -2,6 +2,7 @@
 //! Required Notice: Copyright (c) 2026 Alazy Inc. (https://alazy.app)
 
 mod background;
+pub mod bilevel;
 mod camera_turn;
 mod color;
 mod corners;
