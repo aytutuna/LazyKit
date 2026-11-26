@@ -148,17 +148,14 @@ fn jbig2_region_rows_below_the_page_are_not_decoded() {
 }
 
 #[test]
-fn jbig2_adaptive_pixel_must_precede_the_pixel_it_codes() {
-    for bad in [
+fn jbig2_adaptive_pixel_may_lie_after_the_pixel_it_codes() {
+    for at in [
         [3, 40, 0, 0, 0, 0, 0, 0],
         [0, 0, 0, 0, 0, 0, 0, 0],
         [3, -1, -3, -1, 2, -2, 1, 0],
     ] {
         let mut data = page(61, 40);
-        data.extend(generic_region(1, 61, 40, 0, 0, bad));
-        assert_eq!(jbig2(&data, 0, 0).unwrap_err().problem, Problem::Damaged);
+        data.extend(generic_region(1, 61, 40, 0, 0, at));
+        assert!(jbig2(&data, 0, 0).is_ok());
     }
-    let mut data = page(61, 40);
-    data.extend(generic_region(1, 61, 40, 0, 0, AT));
-    assert!(jbig2(&data, 0, 0).is_ok());
 }

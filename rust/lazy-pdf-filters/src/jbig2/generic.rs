@@ -69,13 +69,6 @@ pub(crate) fn decode(
     skip: Option<&Bitmap>,
     at: &[i32],
 ) -> Result<Bitmap> {
-    // 6.2.5.4: an adaptive pixel is one that is already decoded. Far-off or later ones would also send
-    // every pixel down the slow path.
-    if at.chunks(2).any(|p| p[1] > 0 || p[1] == 0 && p[0] >= 0) {
-        return Err(FilterError::damaged(
-            "A JBIG2 adaptive template pixel is not before the pixel it codes.",
-        ));
-    }
     let mut bitmap = Bitmap::new(width, height, budget)?;
     if width == 0 || height == 0 {
         return Ok(bitmap);
