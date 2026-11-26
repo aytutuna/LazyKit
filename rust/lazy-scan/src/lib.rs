@@ -6,6 +6,7 @@ mod color;
 mod corners;
 mod enhancer;
 mod geometry;
+mod refiner;
 
 pub use background::{BackgroundMap, percentile};
 pub use color::is_effectively_gray;
@@ -17,3 +18,4 @@ pub use enhancer::{
     photo, tile_size,
 };
 pub use geometry::{Point, Quad, aspect};
+pub use refiner::{Refinement, build_field, placement, refine};
