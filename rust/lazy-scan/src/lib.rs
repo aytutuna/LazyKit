@@ -7,6 +7,7 @@ mod corners;
 mod enhancer;
 pub mod frame_quality;
 mod geometry;
+mod live;
 mod pipeline;
 mod refiner;
 mod stability;
@@ -22,3 +23,13 @@ pub use enhancer::{
 };
 pub use geometry::{Point, Quad, aspect};
 pub use lazy_scan_model::{CornerModel, Heatmaps, ModelError};
+pub use live::{
+    Detection, HOLD_MS, LiveFrame, LiveQuadFilter, LiveQuadTracker, LiveUpdate, MIN_FRAME_GAP_MS,
+    PageThumbnail, Steadied,
+};
+pub use pipeline::{Located, locate};
+pub use refiner::{Refinement, build_field, placement, refine};
+pub use stability::{
+    CapturePlacement, CaptureQuality, CaptureStability, CaptureState, Decision, Observation,
+    Options,
+};
