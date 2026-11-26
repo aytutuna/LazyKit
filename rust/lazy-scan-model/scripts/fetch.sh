@@ -58,9 +58,12 @@ sha256() {
 
 has() { [ -f "$1" ] && [ "$(sha256 "$1")" = "$2" ]; }
 
-# one digest over the paths and contents of everything under $1 except the stamp, so an edited, added or missing file shows
+# one digest over the paths and contents of everything under $1 except the top-level stamp, so an edited, added or missing file
+# shows; a symlink counts by its target
 tree_sha() {
-  (cd "$1" && find . -type f ! -name stamp | LC_ALL=C sort | while read -r f; do echo "$f $(sha256 "$f")"; done) |
+  (cd "$1" && find . \( -type f -o -type l \) ! -path ./stamp | LC_ALL=C sort | while read -r f; do
+    if [ -L "$f" ]; then echo "$f -> $(readlink "$f")"; else echo "$f $(sha256 "$f")"; fi
+  done) |
     if command -v sha256sum >/dev/null 2>&1; then sha256sum | cut -d ' ' -f 1; else shasum -a 256 | cut -d ' ' -f 1; fi
 }
 
