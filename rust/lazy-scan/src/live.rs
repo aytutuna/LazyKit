@@ -1,4 +1,5 @@
 use crate::corners::{Found, MIN_CONFIDENCE, acceptable};
+use crate::detector;
 use crate::frame_quality;
 use crate::geometry::{Point, Quad};
 use crate::stability::{
@@ -236,6 +237,24 @@ pub struct Detection {
     pub confidence: f64,
     /// A page was seen but the frame cuts it off.
     pub cut_off: bool,
+}
+
+/// A live frame is searched at this long side.
+pub const ANALYSIS_LONG_SIDE: usize = 480;
+
+/// The page search the apps hand the tracker: the edge-based detector on the frame (searched at ANALYSIS_LONG_SIDE), with the
+/// outline of a moment ago as its hint. A page the frame cuts off is reported as such when the detector saw its outline.
+pub fn edge_search(image: &Rgba, hint: Option<&Quad>) -> Detection {
+    let options = detector::Options {
+        analysis_long_side: ANALYSIS_LONG_SIDE,
+        ..Default::default()
+    };
+    let found = detector::detect(image, hint, &options);
+    Detection {
+        quad: found.quad,
+        confidence: found.confidence,
+        cut_off: found.rejection == detector::Rejection::CutOff && found.candidate.is_some(),
+    }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]

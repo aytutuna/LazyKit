@@ -503,3 +503,38 @@ fn a_models_page_that_the_frame_edge_squeezes_to_nothing_is_not_taken() {
     // not taken, so the search looked
     assert_eq!(asked.get(), 2);
 }
+
+#[test]
+fn the_edge_search_finds_the_page_without_the_model() {
+    use common::photo_scenes::{HEIGHT, WIDTH, WOOD_MAP, wood_scene};
+    let image = Arc::new(wood_scene());
+    let mut t = LiveQuadTracker::default();
+    let mut outline = None;
+    for i in 0..4 {
+        let frame = LiveFrame {
+            image: Arc::clone(&image),
+            timestamp_ms: i as f64 * 100.0,
+            model: None,
+        };
+        outline = t.process(&frame, lazy_scan::edge_search).unwrap().outline;
+    }
+    let truth = WOOD_MAP
+        .corners()
+        .scaled(1.0 / WIDTH as f64, 1.0 / HEIGHT as f64);
+    let outline = outline.expect("the page is drawn from its second sighting");
+    assert!(outline.max_corner_distance(&truth) < 0.02, "{outline:?}");
+
+    // a frame with no page on it draws nothing and the tracker says so
+    let empty = Arc::new(common::photo_scenes::plain_scene());
+    let mut t = LiveQuadTracker::default();
+    for i in 0..3 {
+        let frame = LiveFrame {
+            image: Arc::clone(&empty),
+            timestamp_ms: i as f64 * 100.0,
+            model: None,
+        };
+        let update = t.process(&frame, lazy_scan::edge_search).unwrap();
+        assert_eq!(update.outline, None);
+        assert_eq!(update.state, CaptureState::NoPage);
+    }
+}
