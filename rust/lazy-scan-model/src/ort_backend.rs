@@ -1,7 +1,7 @@
 use crate::{CornerModel, Heatmaps, INPUT_VALUES, ModelError, heatmaps};
 use ort::environment::Environment;
 use ort::session::Session;
-use ort::value::Tensor;
+use ort::value::TensorRef;
 #[cfg(feature = "ort")]
 use std::path::Path;
 use std::sync::{Arc, Mutex};
@@ -81,8 +81,7 @@ impl CornerModel for OrtModel {
             return Err(ModelError::Shape);
         }
         let run = |e: ort::Error| ModelError::Run(e.to_string());
-        let tensor = Tensor::from_array(([1usize, 3, 256, 256], input.to_vec().into_boxed_slice()))
-            .map_err(run)?;
+        let tensor = TensorRef::from_array_view(([1usize, 3, 256, 256], input)).map_err(run)?;
         let mut session = self.session.lock().unwrap_or_else(|e| e.into_inner());
         let out = session.run(ort::inputs!["img" => tensor]).map_err(run)?;
         let (shape, data) = out

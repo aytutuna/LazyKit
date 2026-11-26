@@ -3,6 +3,11 @@
 
 use std::fmt;
 
+#[cfg(all(feature = "ort", feature = "ort-linked"))]
+compile_error!(
+    "the features ort and ort-linked are exclusive: one loads the library, the other links it"
+);
+
 #[cfg(any(feature = "ort", feature = "ort-linked"))]
 mod ort_backend;
 #[cfg(feature = "tract")]

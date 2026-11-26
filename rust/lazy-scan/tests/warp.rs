@@ -88,7 +88,10 @@ fn plans_follow_the_apps() {
             p["estimate"].as_f64().unwrap(),
             &name,
         );
-        assert_eq!(est.focal_length, p["focal"].as_f64(), "{name}");
+        match p["focal"].as_f64() {
+            Some(f) => near(est.focal_length.expect(&name), f, &name),
+            None => assert_eq!(est.focal_length, None, "{name}"),
+        }
         let plan = warp::plan(&q, w, h, &options(&p["options"])).unwrap();
         assert_eq!((plan.width, plan.height), size_of(p), "{name}");
         let paper = plan.paper.map(|m| match m.paper {
