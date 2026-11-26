@@ -46,6 +46,29 @@ class CheckPins(unittest.TestCase):
         pins = pin("tool", A, 'url = "https://example.org/other/tool/9.9"') + pin("inner", B, 'from = "tool"')
         self.assertTrue(any("url" in p for p in self.problems(pins)))
 
+    def test_a_version_the_address_does_not_carry(self):
+        url = 'url = "https://example.org/pkg/tool/1.0"\nversion = "2.0"'
+        pins = pin("tool", A, url) + pin("inner", B, 'from = "tool"')
+        self.assertTrue(any("tool: version 2.0" in p for p in self.problems(pins)))
+
+    def test_a_matching_version_is_clean(self):
+        url = 'url = "https://example.org/pkg/tool/1.0"\nversion = "1.0"'
+        pins = pin("tool", A, url) + pin("inner", B, 'from = "tool"')
+        self.assertEqual(self.problems(pins), [])
+
+    def test_a_version_variable_no_pin_has(self):
+        url = 'url = "https://example.org/pkg/tool/1.0"\nversion = "1.0"'
+        pins = pin("tool", A, url) + pin("inner", B, 'from = "tool"')
+        problems = self.problems(pins, FETCH + "tool_version=1.1\n")
+        self.assertTrue(any("tool_version=1.1" in p for p in problems))
+
+    def test_a_url_made_of_a_base_and_a_file_the_script_never_joins(self):
+        fetch = f'base="https://example.org/a"\nfile=x.bin\nstray=y.bin\nsum={A}\nother={B}\ndownload "$base/$file" f {A}\n'
+        good = pin("tool", A, 'url = "https://example.org/a/x.bin"') + pin("inner", B, 'from = "tool"')
+        self.assertEqual(self.problems(good, fetch), [])
+        bad = pin("tool", A, 'url = "https://example.org/a/y.bin"') + pin("inner", B, 'from = "tool"')
+        self.assertTrue(any("tool: url https://example.org/a/y.bin" in p for p in self.problems(bad, fetch)))
+
     def test_a_pin_from_nothing(self):
         pins = pin("tool", A) + pin("inner", B, 'from = "missing"')
         self.assertTrue(any("neither a url" in p for p in self.problems(pins)))

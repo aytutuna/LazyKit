@@ -17,6 +17,7 @@ HEX = re.compile(r"\b[0-9a-f]{64}\b")
 
 def check(pins_text, fetch_text):
     pins = tomllib.loads(pins_text).get("pin", [])
+    downloads = download_urls(fetch_text)
     problems = []
     names = {p.get("name") for p in pins}
     if len(names) != len(pins):
@@ -43,8 +44,16 @@ def check(pins_text, fetch_text):
         if "path" in p and not path_in_script(p["path"], fetch_text):
             problems.append(f"{name}: path {p['path']} is not what fetch.sh extracts")
         for key in ("url", "upstream"):
-            if key in p and not in_script(p[key], fetch_text):
+            if key in p and p[key] not in downloads:
                 problems.append(f"{name}: {key} {p[key]} is not what fetch.sh downloads")
+        if "version" in p and not any(
+            re.search(rf"(?<![\d.]){re.escape(p['version'])}(?![\d.])", p[key]) for key in ("url", "upstream") if key in p
+        ):
+            problems.append(f"{name}: version {p['version']} is not in its download address")
+    versions = {p.get("version") for p in pins}
+    for var, value in assignments(fetch_text).items():
+        if var.endswith("_version") and value not in versions:
+            problems.append(f"fetch.sh has {var}={value} but no pin has that version")
     pinned = {p.get("sha256") for p in pins}
     for digest in sorted(set(HEX.findall(fetch_text)) - pinned):
         problems.append(f"fetch.sh holds digest {digest} that no pin lists")
@@ -57,10 +66,26 @@ def path_in_script(path, fetch_text):
     return path in fetch_text or generic in fetch_text
 
 
-def in_script(url, fetch_text):
-    # the script writes a download as a base address and a file name: `$copy/$model` with copy=... and model=...
-    base, _, leaf = url.rpartition("/")
-    return base in fetch_text and leaf in fetch_text
+def assignments(fetch_text):
+    """The script's plain `name=value` and `name="value"` lines, each value with earlier variables filled in."""
+    values = {}
+    for m in re.finditer(r'^(\w+)=("?)(.*?)\2$', fetch_text, re.M):
+        values[m.group(1)] = expand(m.group(3), values)
+    return values
+
+
+def expand(text, values):
+    return re.sub(r"\$\{?(\w+)\}?", lambda m: values.get(m.group(1), m.group(0)), text)
+
+
+def download_urls(fetch_text):
+    """Every address the script can fetch: a variable holding a URL, or the argument of a `download` call with the variables
+    filled in (the script writes one as `$copy/$model`)."""
+    values = assignments(fetch_text)
+    urls = {v for v in values.values() if "://" in v}
+    for m in re.finditer(r'\bdownload\s+"([^"]+)"', fetch_text):
+        urls.add(expand(m.group(1), values))
+    return urls
 
 
 def main(argv):
