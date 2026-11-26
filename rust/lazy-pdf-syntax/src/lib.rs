@@ -15,6 +15,7 @@ mod repair;
 mod save;
 mod streams;
 mod writer;
+mod xmp;
 mod xref;
 
 pub use document::{Document, Entry, EntryKind, MAX_OBJECT_NUMBER, Value};

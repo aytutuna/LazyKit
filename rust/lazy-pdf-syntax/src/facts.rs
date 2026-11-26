@@ -3,6 +3,9 @@
 use crate::document::Document;
 use crate::lexer::Lexer;
 use crate::object::Object;
+use crate::xmp::read_pdfa_id;
+
+const MAX_METADATA_SIZE: usize = 1 << 24;
 
 impl Document {
     /// The file is signed: its form says signatures exist (/SigFlags bit 1) or the catalog carries signature
@@ -63,6 +66,42 @@ impl Document {
             _ => false,
         };
         self.linearized = Some(found);
+        found
+    }
+
+    /// The file starts with a linearization dictionary, whether or not an update has been added since.
+    pub fn was_linearized(&self) -> bool {
+        self.linearization_dictionary().is_some()
+    }
+
+    /// The PDF/A part its XMP metadata claims (1, 2, 3, 4); none when it claims none.
+    pub fn pdfa_part(&mut self) -> Option<i32> {
+        self.pdfa_identification().0
+    }
+
+    /// The PDF/A conformance level its metadata claims ("A", "B", "U"); none when it claims none.
+    pub fn pdfa_conformance(&mut self) -> Option<String> {
+        self.pdfa_identification().1
+    }
+
+    fn pdfa_identification(&mut self) -> (Option<i32>, Option<String>) {
+        if let Some(known) = &self.pdfa {
+            return known.clone();
+        }
+        let catalog = self.catalog_dict();
+        // Metadata that cannot be read claims nothing.
+        let found = match self
+            .lookup(&catalog, "Metadata")
+            .map(|m| m.into_shared())
+            .as_deref()
+        {
+            Some(Object::Stream(metadata)) => self
+                .stream_data_limited(metadata, MAX_METADATA_SIZE, false)
+                .map(|xmp| read_pdfa_id(&xmp))
+                .unwrap_or_default(),
+            _ => (None, None),
+        };
+        self.pdfa = Some(found.clone());
         found
     }
 

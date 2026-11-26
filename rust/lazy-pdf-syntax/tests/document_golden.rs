@@ -118,9 +118,12 @@ fn describe(file: Vec<u8>, layout: bool) -> Vec<String> {
     } else {
         format!("version {version} encrypted no")
     });
-    // No fixture carries metadata, so no file claims a PDF/A part; that identification is not ported yet.
+    let pdfa = match document.pdfa_part() {
+        Some(part) => format!("{part}{}", document.pdfa_conformance().unwrap_or_default()),
+        None => String::new(),
+    };
     lines.push(format!(
-        "facts signed {} certified {} xfa {} tagged {} linearized {} pdfa ",
+        "facts signed {} certified {} xfa {} tagged {} linearized {} pdfa {pdfa}",
         yes(document.is_signed()),
         yes(document.is_certified()),
         yes(document.has_xfa()),
