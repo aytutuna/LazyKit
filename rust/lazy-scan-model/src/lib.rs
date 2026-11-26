@@ -3,12 +3,12 @@
 
 use std::fmt;
 
-#[cfg(feature = "ort")]
+#[cfg(any(feature = "ort", feature = "ort-linked"))]
 mod ort_backend;
 #[cfg(feature = "tract")]
 mod tract_backend;
 
-#[cfg(feature = "ort")]
+#[cfg(any(feature = "ort", feature = "ort-linked"))]
 pub use ort_backend::OrtModel;
 #[cfg(feature = "tract")]
 pub use tract_backend::TractModel;

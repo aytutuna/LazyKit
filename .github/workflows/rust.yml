@@ -220,3 +220,20 @@ jobs:
           arch: x86_64
           working-directory: rust
           script: cargo ndk -t x86_64 -P 26 test --release -p lazy-scan --features ort --config "target.x86_64-linux-android.runner=['bash','${{ github.workspace }}/rust/scripts/run-android.sh']" -- --nocapture
+
+  scan-ios:
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: rust
+          key: scan-ios
+      - run: rustup target add aarch64-apple-ios aarch64-apple-ios-sim
+      - run: bash lazy-scan-model/scripts/fetch.sh lazy-scan-model/models ios
+      - name: Build the tests linked with the ONNX Runtime xcframework
+        run: |
+          export ORT_IOS_XCFWK_LOCATION="$PWD/lazy-scan-model/models/ios/onnxruntime.xcframework"
+          for target in aarch64-apple-ios aarch64-apple-ios-sim; do
+            cargo test --no-run --release -p lazy-scan --features ort-linked --target $target
+          done

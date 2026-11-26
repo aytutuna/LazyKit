@@ -9,6 +9,7 @@ publish.workspace = true
 [features]
 tract = ["lazy-scan-model/tract"]
 ort = ["lazy-scan-model/ort"]
+ort-linked = ["lazy-scan-model/ort-linked"]
 
 [dependencies]
 lazy-image = { path = "../lazy-image" }

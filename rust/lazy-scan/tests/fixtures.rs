@@ -1,7 +1,7 @@
 // DocAligner's model on the SmartDoc frames of testdata/scan/pages: every corner within 1.5 % of the photo's diagonal of the
 // ground truth (Lazy Scan's tolerance), the page taken, and the two runtimes agreeing. Needs rust/lazy-scan-model/scripts/fetch.sh
 // to have run; skipped without the models unless LAZY_SCAN_REQUIRE_MODEL=1, which CI sets.
-#![cfg(any(feature = "tract", feature = "ort"))]
+#![cfg(any(feature = "tract", feature = "ort", feature = "ort-linked"))]
 
 mod common;
 
@@ -158,6 +158,17 @@ fn ort(file: &str) -> Option<(lazy_scan_model::OrtModel, Vec<Quad>)> {
     let model = lazy_scan_model::OrtModel::load(&library, &bytes, 0).unwrap();
     let found = check("ort", &model, &photos());
     Some((model, found))
+}
+
+// the build for iOS links ONNX Runtime in; the test is built there and run where a simulator is at hand
+#[cfg(feature = "ort-linked")]
+#[test]
+fn linked_ort_finds_every_page() {
+    let Some(bytes) = available("fastvit_t8_h_e_bifpn_256_fp32.onnx") else {
+        return;
+    };
+    let model = lazy_scan_model::OrtModel::load_linked(&bytes, 0).unwrap();
+    check("linked ort", &model, &photos());
 }
 
 #[cfg(feature = "tract")]
