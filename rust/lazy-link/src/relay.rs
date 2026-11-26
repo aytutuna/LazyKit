@@ -3,6 +3,7 @@
 //! Required Notice: Copyright (c) 2026 Alazy Inc. (https://alazy.app)
 
 use futures_util::{SinkExt, StreamExt};
+use rustls_platform_verifier::BuilderVerifierExt;
 use sha2::{Digest, Sha256};
 use std::fmt;
 use std::io;
@@ -301,7 +302,10 @@ impl Relay {
         } else {
             format!("{base}/{room}?{query}&group={}", self.group)
         };
-        match tokio::time::timeout(within, tokio_tungstenite::connect_async(url)).await {
+        let connector = tokio_tungstenite::Connector::Rustls(Arc::new(tls_config()?));
+        let connecting =
+            tokio_tungstenite::connect_async_tls_with_config(url, None, false, Some(connector));
+        match tokio::time::timeout(within, connecting).await {
             Ok(res) => Ok(res?.0),
             Err(_) => Err(RelayError::Transport(
                 "the relay did not answer in time".into(),
@@ -352,6 +356,17 @@ impl Relay {
         .await
         .map_err(|e| RelayError::Transport(e.to_string()))?
     }
+}
+
+// The same system trust store the HTTP calls use. rustls-native-certs finds none on iPhone or
+// Android, so the socket cannot rely on tokio-tungstenite's own roots.
+fn tls_config() -> Result<rustls::ClientConfig, RelayError> {
+    let provider = Arc::new(rustls::crypto::ring::default_provider());
+    rustls::ClientConfig::builder_with_provider(provider)
+        .with_safe_default_protocol_versions()
+        .and_then(|b| b.with_platform_verifier())
+        .map(|b| b.with_no_client_auth())
+        .map_err(|e| RelayError::Transport(e.to_string()))
 }
 
 fn status_of(status: u16, body: &str) -> Result<GroupStatus, RelayError> {

@@ -14,7 +14,9 @@ serde_json = { version = "1", optional = true }
 sha2 = "0.10"
 subtle = "2"
 tokio = { version = "1.54.1", features = ["rt", "net", "time", "sync", "macros", "io-util"], optional = true }
-tokio-tungstenite = { version = "0.30.0", features = ["rustls-tls-native-roots"], optional = true }
+rustls = { version = "0.23", default-features = false, features = ["ring", "std", "tls12"], optional = true }
+rustls-platform-verifier = { version = "0.7.1", optional = true }
+tokio-tungstenite = { version = "0.30.0", features = ["__rustls-tls"], optional = true }
 ureq = { version = "3.5.2", default-features = false, features = ["rustls", "platform-verifier"], optional = true }
 
 [dev-dependencies]
@@ -23,4 +25,4 @@ tokio = { version = "1", features = ["rt-multi-thread", "test-util"] }
 
 [features]
 # The relay client; the plain protocol code builds without it, and so does the wasm crate.
-relay = ["dep:tokio", "dep:tokio-tungstenite", "dep:futures-util", "dep:getrandom", "dep:ureq", "dep:serde_json"]
+relay = ["dep:tokio", "dep:tokio-tungstenite", "dep:rustls", "dep:rustls-platform-verifier", "dep:futures-util", "dep:getrandom", "dep:ureq", "dep:serde_json"]
