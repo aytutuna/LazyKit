@@ -5,6 +5,7 @@ use crate::stability::{
     CapturePlacement, CaptureQuality, CaptureStability, CaptureState, Observation, Options,
 };
 use lazy_image::{Rgba, luma};
+use std::sync::Arc;
 
 /// A page missed for this long is gone: its outline stays up until then.
 pub const HOLD_MS: f64 = 300.0;
@@ -222,8 +223,8 @@ impl PageThumbnail {
 
 /// One camera frame: the photo the page search reads (small, in the display's orientation), when it was taken and, if the
 /// corner model ran on it, what the model found.
-pub struct LiveFrame<'a> {
-    pub image: &'a Rgba,
+pub struct LiveFrame {
+    pub image: Arc<Rgba>,
     pub timestamp_ms: f64,
     pub model: Option<Found>,
 }
@@ -268,7 +269,7 @@ pub struct LiveQuadTracker {
     frame_size: (usize, usize),
     resuming: bool,
     photographed: bool,
-    latest: Option<Rgba>,
+    latest: Option<Arc<Rgba>>,
     photographed_look: Option<PageThumbnail>,
 }
 
@@ -298,9 +299,11 @@ impl LiveQuadTracker {
         }
     }
 
-    /// The model's page in the frame's pixels, when it is sure enough to be taken and a document's shape.
+    /// The model's page in the frame's pixels, when it is sure enough to be taken and a document's shape, its corners
+    /// named from the top left as the apps' MultiQuadPicker does.
     fn model_page(found: &Found, w: f64, h: f64) -> Option<Quad> {
-        acceptable(found, w, h).then(|| found.quad.scaled(w, h).clamped_to_photo(w, h))
+        acceptable(found, w, h)
+            .then(|| Quad::from_corners(found.quad.scaled(w, h).0).clamped_to_photo(w, h))
     }
 
     /// Reads one frame. `search` is the page search (edges) for frames the model did not place; it gets the page of a
@@ -342,9 +345,9 @@ impl LiveQuadTracker {
                 cut_off: false,
             },
             None if model_lately => Detection::default(),
-            None => search(frame.image, hint.as_ref()),
+            None => search(&frame.image, hint.as_ref()),
         };
-        let reading = frame_quality::measure(frame.image, detection.quad.as_ref());
+        let reading = frame_quality::measure(&frame.image, detection.quad.as_ref());
 
         if self.resuming {
             // the time the camera was stopped is not time without the page
@@ -363,11 +366,11 @@ impl LiveQuadTracker {
             brightness: Some(reading.brightness),
         };
         let mut decision = self.stability.update(&observation);
-        self.latest = Some(frame.image.clone());
+        self.latest = Some(Arc::clone(&frame.image));
         // the page came back after a shake or a hand over it and held still: it is the page already taken
         if decision.should_capture
             && let (Some(look), Some(page)) = (&self.photographed_look, &steadied.page)
-            && PageThumbnail::new(frame.image, Some(page)).matches(look)
+            && PageThumbnail::new(&frame.image, Some(page)).matches(look)
         {
             decision.should_capture = false;
             self.photographed = true;

@@ -8,6 +8,7 @@ use lazy_scan::{
     CaptureState, Detection, Found, LiveFrame, LiveQuadFilter, LiveQuadTracker, LiveUpdate, Quad,
 };
 use std::cell::Cell;
+use std::sync::Arc;
 
 fn sheet() -> Quad {
     moved(0.0)
@@ -48,7 +49,7 @@ fn step(
 ) -> Option<LiveUpdate> {
     tracker.process(
         &LiveFrame {
-            image,
+            image: Arc::new(image.clone()),
             timestamp_ms: t,
             model: None,
         },
@@ -387,12 +388,12 @@ fn the_models_page_is_taken_when_sure_and_the_search_waits_while_the_model_answe
         Detection::default()
     };
     let stub = Quad::from_xy([[10.0, 8.0], [50.0, 8.0], [50.0, 40.0], [10.0, 40.0]]);
-    let image = Rgba::filled(64, 48, 90, 90, 90);
+    let image = Arc::new(Rgba::filled(64, 48, 90, 90, 90));
     let mut t = LiveQuadTracker::default();
     let feed = |t: &mut LiveQuadTracker, ms: f64, model: Option<Found>| {
         t.process(
             &LiveFrame {
-                image: &image,
+                image: Arc::clone(&image),
                 timestamp_ms: ms,
                 model,
             },
@@ -421,9 +422,31 @@ fn the_models_page_is_taken_when_sure_and_the_search_waits_while_the_model_answe
 }
 
 #[test]
+fn the_models_corners_come_out_from_the_top_left_whatever_order_it_gave() {
+    let stub = Quad::from_xy([[10.0, 8.0], [50.0, 8.0], [50.0, 40.0], [10.0, 40.0]]);
+    // the model's first corner is the page's top right
+    let turned = Quad([stub.0[1], stub.0[2], stub.0[3], stub.0[0]]);
+    let image = Arc::new(Rgba::filled(64, 48, 90, 90, 90));
+    let mut t = LiveQuadTracker::default();
+    let mut last = None;
+    for ms in [0.0, 100.0] {
+        let frame = LiveFrame {
+            image: Arc::clone(&image),
+            timestamp_ms: ms,
+            model: Some(found(turned, 64.0, 48.0, 0.9)),
+        };
+        last = t.process(&frame, nothing).unwrap().outline;
+    }
+    let expected = stub.scaled(1.0 / 64.0, 1.0 / 48.0);
+    for (a, b) in last.unwrap().0.iter().zip(expected.0) {
+        assert!(a.distance_to(b) < 1e-9);
+    }
+}
+
+#[test]
 fn the_model_flickering_does_not_hand_the_outline_to_the_search() {
     let asked = Cell::new(0);
-    let image = quality_frame(false, 0, 255);
+    let image = Arc::new(quality_frame(false, 0, 255));
     let mut t = LiveQuadTracker::default();
     let mut outlines = Vec::new();
     for i in 0..20usize {
@@ -431,7 +454,7 @@ fn the_model_flickering_does_not_hand_the_outline_to_the_search() {
         let u = t
             .process(
                 &LiveFrame {
-                    image: &image,
+                    image: Arc::clone(&image),
                     timestamp_ms: i as f64 * 100.0,
                     model,
                 },

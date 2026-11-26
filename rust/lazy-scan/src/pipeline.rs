@@ -30,7 +30,7 @@ pub fn locate(photo: &Rgba, model: &dyn CornerModel) -> Result<Option<Located>, 
     let refined = refine(photo, &given);
     let (quad, sure) = placement(Some(&refined), &given, found.confidence, w, h);
     Ok(Some(Located {
-        quad,
+        quad: Quad::from_corners(quad.0),
         confidence: found.confidence,
         sure,
     }))
@@ -78,6 +78,17 @@ mod tests {
         assert!(!found.sure);
         assert!((found.quad.0[0].x - 13.5 / 64.0 * 640.0).abs() < 1e-9);
         assert!(found.confidence > 0.89);
+    }
+
+    #[test]
+    fn a_page_turned_in_the_frame_is_named_from_its_top_left() {
+        // the model's first corner is the page's top right here
+        let turned = spots([(50, 14), (48, 56), (9, 52), (12, 10)]);
+        let photo = Rgba::filled(640, 480, 120, 120, 120);
+        let found = locate(&photo, &Fixed(Some(turned))).unwrap().unwrap();
+        assert!((found.quad.0[0].x - 13.5 / 64.0 * 640.0).abs() < 1e-9);
+        assert!((found.quad.0[0].y - 11.5 / 64.0 * 480.0).abs() < 1e-9);
+        assert!(found.quad.0[1].x > found.quad.0[0].x);
     }
 
     #[test]
