@@ -270,7 +270,7 @@ pub fn estimate_aspect_with_focal(
     image_height: f64,
     focal_length: f64,
 ) -> AspectEstimate {
-    if !(focal_length > 0.0) || !focal_length.is_finite() {
+    if focal_length <= 0.0 || focal_length.is_nan() || !focal_length.is_finite() {
         return estimate_aspect(quad, image_width, image_height);
     }
     let fallback = AspectEstimate {
@@ -506,7 +506,7 @@ pub fn prefilter_factor(quad: &Quad, width: usize, height: usize) -> usize {
     let w0 = quad.edge(0).max(quad.edge(2));
     let h0 = quad.edge(1).max(quad.edge(3));
     let shrink = (w0 / width as f64).max(h0 / height as f64);
-    if !(shrink > PREFILTER_ABOVE) || !shrink.is_finite() {
+    if shrink <= PREFILTER_ABOVE || shrink.is_nan() || !shrink.is_finite() {
         return 1;
     }
     shrink.floor().min(MAX_OUTPUT_SIDE as f64) as usize
