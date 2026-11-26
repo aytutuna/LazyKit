@@ -3,11 +3,17 @@
 
 mod background;
 mod color;
+mod corners;
 mod enhancer;
+mod geometry;
 
 pub use background::{BackgroundMap, percentile};
 pub use color::is_effectively_gray;
+pub use corners::{
+    Found, MIN_CONFIDENCE, SIDE, SURE_CONFIDENCE, acceptable, decode_heatmap, model_input,
+};
 pub use enhancer::{
     DEFAULT_THRESHOLD, EnhanceMode, Enhanced, MAX_PHOTO_GAIN, enhance, is_light_on_dark, paper_map,
     photo, tile_size,
 };
+pub use geometry::{Point, Quad, aspect};

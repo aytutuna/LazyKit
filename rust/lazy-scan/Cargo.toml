@@ -10,5 +10,5 @@ publish.workspace = true
 lazy-image = { path = "../lazy-image" }
 
 [dev-dependencies]
-serde_json = "1"
+serde_json = { version = "1", features = ["float_roundtrip"] }
 sha2 = "0.10"
