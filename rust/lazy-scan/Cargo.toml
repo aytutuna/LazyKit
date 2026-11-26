@@ -1,0 +1,21 @@
+[package]
+name = "lazy-scan"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license-file.workspace = true
+publish.workspace = true
+
+[features]
+tract = ["lazy-scan-model/tract"]
+ort = ["lazy-scan-model/ort"]
+ort-linked = ["lazy-scan-model/ort-linked"]
+
+[dependencies]
+lazy-image = { path = "../lazy-image" }
+lazy-scan-model = { path = "../lazy-scan-model" }
+
+[dev-dependencies]
+serde_json = { version = "1", features = ["float_roundtrip"] }
+sha2 = "0.10"
+jpeg-decoder = { version = "0.3", default-features = false }
