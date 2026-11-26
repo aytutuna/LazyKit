@@ -205,6 +205,28 @@ test("arguments of the wrong kind throw instead of trapping", () => {
   assert.equal(link.normalizeShortCode(undefined) ?? null, null);
 });
 
+test("byte arguments must be a Uint8Array", async () => {
+  const signer = { sign: (hash) => new Uint8Array(sign(hash)) };
+  const message = /must be a Uint8Array/;
+  for (const bad of ["abcd", [1, 2, 3], { length: 4 }, new ArrayBuffer(4), undefined, null, 5]) {
+    const what = String(bad);
+    assert.throws(() => link.checkCode(bad), message, what);
+    assert.throws(() => link.matchCode(bad, "ABCDEFGH"), message, what);
+    assert.throws(() => link.spkiFingerprint(bad), message, what);
+    assert.throws(() => link.hashBytes(bad), message, what);
+    assert.throws(() => link.signData(signer, bad), message, what);
+    await assert.rejects(link.signDataAsync(signer, bad), message, what);
+  }
+  assert.equal(link.hashBytes(new Uint8Array(0)), crypto.createHash("sha256").digest("hex"));
+});
+
+test("pattern length must be a whole number in range", () => {
+  for (const bad of [-1, 1.5, NaN, Infinity, -Infinity, 2 ** 32, 2 ** 32 + 3, undefined]) {
+    assert.throws(() => link.patternBytes(bad), { message: /whole number/ }, String(bad));
+  }
+  assert.equal(link.patternBytes(0).length, 0);
+});
+
 test("pattern bytes have a cap", () => {
   assert.throws(() => link.patternBytes(256 * 1024 * 1024 + 1), { message: "at most 256 MiB" });
   assert.deepEqual(Array.from(link.patternBytes(3)), [0, 1, 2]);
