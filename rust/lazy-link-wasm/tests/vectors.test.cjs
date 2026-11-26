@@ -153,6 +153,22 @@ test("async signing accepts a plain value and a thenable", async () => {
   await assert.rejects(link.signDataAsync({ sign: () => { throw new Error("locked"); } }, data), { message: "locked" });
 });
 
+test("an async signer that reads the hash late still sees its own copy", async () => {
+  const data = Uint8Array.from([3, 1, 4, 1, 5]);
+  const late = {
+    sign: async (hash) => {
+      await new Promise((r) => setTimeout(r, 10));
+      return new Uint8Array(sign(hash));
+    },
+  };
+  const first = link.signDataAsync(late, data);
+  link.patternBytes(64 << 20);
+  link.hashBytes(Uint8Array.from([7, 7, 7]));
+  const second = link.signDataAsync(late, Uint8Array.from([2, 7, 1]));
+  assert.deepEqual(Buffer.from(await first), expected(data));
+  assert.deepEqual(Buffer.from(await second), expected(Uint8Array.from([2, 7, 1])));
+});
+
 test("arguments of the wrong kind throw instead of trapping", () => {
   const entropy = new Uint8Array(8);
   assert.throws(() => new link.PairingSession(0, "0123456789abcdef", entropy), { message: "the pairing token must be a Uint8Array" });

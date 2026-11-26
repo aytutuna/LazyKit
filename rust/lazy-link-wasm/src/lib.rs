@@ -243,13 +243,13 @@ extern "C" {
     pub type Signer;
 
     #[wasm_bindgen(method, catch)]
-    fn sign(this: &Signer, hash: &[u8]) -> Result<JsValue, JsValue>;
+    fn sign(this: &Signer, hash: Uint8Array) -> Result<JsValue, JsValue>;
 
     /// The same with `sign` returning a promise or a plain value.
     pub type AsyncSigner;
 
     #[wasm_bindgen(method, catch, js_name = sign)]
-    fn sign_later(this: &AsyncSigner, hash: &[u8]) -> Result<JsValue, JsValue>;
+    fn sign_later(this: &AsyncSigner, hash: Uint8Array) -> Result<JsValue, JsValue>;
 }
 
 fn signature(value: JsValue) -> Result<Vec<u8>, JsValue> {
@@ -261,12 +261,12 @@ fn signature(value: JsValue) -> Result<Vec<u8>, JsValue> {
 
 #[wasm_bindgen(js_name = signData)]
 pub fn sign_data(signer: &Signer, data: &[u8]) -> Result<Vec<u8>, JsValue> {
-    signature(signer.sign(&Sha256::digest(data))?)
+    signature(signer.sign(Uint8Array::from(&Sha256::digest(data)[..]))?)
 }
 
 #[wasm_bindgen(js_name = signDataAsync)]
 pub async fn sign_data_async(signer: &AsyncSigner, data: Vec<u8>) -> Result<Vec<u8>, JsValue> {
-    let value = signer.sign_later(&Sha256::digest(&data))?;
+    let value = signer.sign_later(Uint8Array::from(&Sha256::digest(&data)[..]))?;
     signature(JsFuture::from(js_sys::Promise::resolve(&value)).await?)
 }
 
