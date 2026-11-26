@@ -3,15 +3,17 @@ import { NotConfiguredError, ReceiptRejectedError, TokenGoneError, services, typ
 import { purchaseKey } from "./purchase";
 import { weekOf } from "./week";
 
-export const WEEKLY_CAP = 5 * 1024 ** 3;
+export const WEEKLY_CAP = 5_000_000_000;
 export const MAX_DEVICES = 32;
 export const MAX_TOKEN = 4096;
 const KEEP_WEEKS = 8;
 const WAKE_GAP_MS = 10_000;
+const DEVICE_KEEP_MS = 90 * 86_400_000;
 
 interface Device {
   platform: Platform;
   token: string;
+  seen: number;
 }
 
 export interface GroupStatus {
@@ -68,7 +70,7 @@ export class Group extends DurableObject<Cloudflare.Env> {
     try {
       const { until, purchase } = await services().verifier.verify(store, receipt, group);
       const owner = this.env.PURCHASES.get(this.env.PURCHASES.idFromName(await purchaseKey(store, purchase)));
-      if (!(await owner.bind(group))) return "bound";
+      if (!(await owner.bind(group, until))) return "bound";
       if (until > this.paidUntil) {
         this.paidUntil = until;
         await this.ctx.storage.put("paidUntil", until);
@@ -81,9 +83,14 @@ export class Group extends DurableObject<Cloudflare.Env> {
     }
   }
 
-  async setPush(device: string, platform: Platform, token: string): Promise<boolean> {
-    if (!(device in this.devices) && Object.keys(this.devices).length >= MAX_DEVICES) return false;
-    this.devices[device] = { platform, token };
+  // A full group makes room by dropping devices that have not registered
+  // for a long time, so lost phones do not block new ones for good.
+  async setPush(device: string, platform: Platform, token: string, now = Date.now()): Promise<boolean> {
+    if (!(device in this.devices) && Object.keys(this.devices).length >= MAX_DEVICES) {
+      for (const [id, d] of Object.entries(this.devices)) if (now - d.seen > DEVICE_KEEP_MS) delete this.devices[id];
+      if (Object.keys(this.devices).length >= MAX_DEVICES) return false;
+    }
+    this.devices[device] = { platform, token, seen: now };
     await this.ctx.storage.put("devices", this.devices);
     return true;
   }

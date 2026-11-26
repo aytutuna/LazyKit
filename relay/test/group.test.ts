@@ -1,8 +1,9 @@
 import { env, exports } from "cloudflare:workers";
-import { runInDurableObject } from "cloudflare:test";
+import { runDurableObjectAlarm, runInDurableObject } from "cloudflare:test";
 import { afterEach, describe, expect, it } from "vitest";
 import { MAX_DEVICES, WEEKLY_CAP } from "../src/group";
 import { RateLimiter, networkOf } from "../src/ratelimit";
+import { purchaseKey } from "../src/purchase";
 import { ReceiptRejectedError, TokenGoneError, useServices } from "../src/services";
 
 let n = 0;
@@ -116,6 +117,27 @@ describe("group", () => {
     expect((await stub(b).status()).paid).toBe(false);
   });
 
+  it("keeps a purchase only as a hash of the group and forgets it when the paid time ends", async () => {
+    const until = Date.now() + 60_000;
+    useServices({ verifier: { verify: async () => ({ until, purchase: "gone" }) } });
+    const group = newGroup();
+    expect((await post(group, "/paid", { store: "apple", receipt: "r" })).status).toBe(200);
+    const owner = env.PURCHASES.get(env.PURCHASES.idFromName(await purchaseKey("apple", "gone")));
+    await runInDurableObject(owner, async (_o, state) => {
+      const kept = await state.storage.get<{ group: string; until: number }>("bound");
+      expect(kept?.group).toMatch(/^[0-9a-f]{64}$/);
+      expect(kept?.group).not.toContain(group);
+      expect(await state.storage.getAlarm()).toBe(until);
+      await state.storage.put("bound", { group: kept!.group, until: Date.now() - 1 });
+    });
+    expect(await runDurableObjectAlarm(owner)).toBe(true);
+    await runInDurableObject(owner, async (_o, state) => {
+      expect(await state.storage.get("bound")).toBeUndefined();
+    });
+    // Once forgotten, the same purchase is no longer tied to the first group.
+    expect(await owner.bind(newGroup(), until + 1000)).toBe(true);
+  });
+
   it("keeps purchases of different stores apart", async () => {
     useServices({ verifier: { verify: async () => ({ until: Date.now() + 60_000, purchase: "same-id" }) } });
     expect((await post(newGroup(), "/paid", { store: "apple", receipt: "r" })).status).toBe(200);
@@ -186,6 +208,17 @@ describe("group", () => {
     }
     expect((await post(group, "/push", { device: device(MAX_DEVICES + 1), platform: "fcm", token: "t" })).status).toBe(409);
     expect((await post(group, "/push", { device: device(1), platform: "fcm", token: "new" })).status).toBe(204);
+  });
+
+  it("makes room for a new device by dropping ones that went quiet", async () => {
+    const g = stub(newGroup());
+    const day = 86_400_000;
+    const now = Date.now();
+    for (let i = 1; i <= MAX_DEVICES; i++) expect(await g.setPush(device(i), "fcm", "t", now - 100 * day)).toBe(true);
+    expect(await g.setPush(device(MAX_DEVICES + 1), "fcm", "t", now)).toBe(true);
+    expect(await g.setPush(device(MAX_DEVICES + 2), "fcm", "t", now)).toBe(true);
+    for (let i = 3; i <= MAX_DEVICES; i++) await g.setPush(device(i), "fcm", "t", now);
+    expect(await g.setPush(device(MAX_DEVICES + 3), "fcm", "t", now)).toBe(false);
   });
 
   it("does not wake a device twice in a few seconds", async () => {

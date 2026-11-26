@@ -191,7 +191,7 @@ async fn a_group_starts_unpaid_and_receipts_are_not_checked_yet() {
     let status = a.status().await.unwrap();
     assert!(!status.paid && !status.capped);
     assert_eq!(status.used, 0);
-    assert_eq!(status.cap, 5 * 1024 * 1024 * 1024);
+    assert_eq!(status.cap, 5_000_000_000);
     assert!(matches!(
         a.pay(Store::Apple, "receipt").await,
         Err(RelayError::NotConfigured)
