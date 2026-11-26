@@ -337,15 +337,27 @@ fn match_runs(starts: &[i64], ends: &[i64], i: usize, limits: &Limits) -> Option
     PatchCode::from_bars(wide)
 }
 
+/// The most pixels a separator sheet may have (256 MB of gray; A3 at 600 dpi is 70 million).
+pub const MAX_SHEET_PIXELS: usize = 1 << 28;
+
 /// The separator sheet to print, `width_inches` x `height_inches` at `dpi`: white, with `code` in black bars across the sheet
 /// 1 in from the top and again 1 in from the bottom, turned half a turn there, so the sheet reads the same code fed either
 /// way round; and in the middle "SEPARATOR SHEET", the code and how to use and print it. Printed at real size, its bars have
-/// the standard widths.
-pub fn render_sheet(code: PatchCode, width_inches: f64, height_inches: f64, dpi: u32) -> GrayImage {
+/// the standard widths. `None` when the sheet would hold more than `MAX_SHEET_PIXELS` pixels.
+pub fn render_sheet(
+    code: PatchCode,
+    width_inches: f64,
+    height_inches: f64,
+    dpi: u32,
+) -> Option<GrayImage> {
     let d = dpi as f64;
     let w = ((width_inches * d).round() as i64).max(1);
     let h = ((height_inches * d).round() as i64).max(1);
-    let mut pixels = vec![255u8; (w * h) as usize];
+    let len = usize::try_from(w)
+        .ok()?
+        .checked_mul(usize::try_from(h).ok()?)
+        .filter(|len| *len <= MAX_SHEET_PIXELS)?;
+    let mut pixels = vec![255u8; len];
 
     let narrow = round_pixels(NARROW_BAR_HUNDREDTHS, d).max(1);
     let wide = round_pixels(WIDE_BAR_HUNDREDTHS, d).max(1);
@@ -400,14 +412,14 @@ pub fn render_sheet(code: PatchCode, width_inches: f64, height_inches: f64, dpi:
     for (text, top, cell) in texts {
         draw_text(&mut pixels, w, h, text, top, cell);
     }
-    GrayImage::new(
+    Some(GrayImage::new(
         Gray {
             width: w as usize,
             height: h as usize,
             data: pixels,
         },
         d,
-    )
+    ))
 }
 
 // Fills the rectangle [x, y, width, height] with `value`, clipped to the sheet.

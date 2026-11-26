@@ -61,7 +61,7 @@ fn fixtures_are_the_same_bytes_on_every_platform() {
         patch(PatchCode::Patch2, true, pages::STRAIGHT),
         patch(PatchCode::PatchT, false, pages::PLUS_2_POINT_5),
         pages::ruled_table(),
-        render_sheet(PatchCode::PatchT, 8.5, 11.0, 100),
+        render_sheet(PatchCode::PatchT, 8.5, 11.0, 100).unwrap(),
     ];
     let sums: Vec<u32> = made.iter().map(pages::checksum).collect();
     assert_eq!(
@@ -153,7 +153,7 @@ fn bars_shorter_than_an_inch_and_a_half_are_not_a_code() {
 #[test]
 fn the_separator_sheet_reads_its_code_either_way_round_at_any_resolution() {
     for code in PatchCode::ALL {
-        let sheet = render_sheet(code, 8.5, 11.0, 100);
+        let sheet = render_sheet(code, 8.5, 11.0, 100).unwrap();
         assert_eq!((sheet.width(), sheet.height()), (850, 1100));
         let hit = detect(&sheet).unwrap();
         assert_eq!(hit.code, code);
@@ -186,14 +186,14 @@ fn the_separator_sheet_reads_its_code_either_way_round_at_any_resolution() {
         );
     }
     // A4 at 300 dpi, read at the analysis resolution
-    let a4 = render_sheet(PatchCode::PatchT, 8.27, 11.69, 300);
+    let a4 = render_sheet(PatchCode::PatchT, 8.27, 11.69, 300).unwrap();
     assert_eq!((a4.width(), a4.height()), (2481, 3507));
     assert_eq!(detect(&a4).map(|h| h.code), Some(PatchCode::PatchT));
 }
 
 #[test]
 fn the_separator_sheet_has_the_standard_bar_widths() {
-    let sheet = render_sheet(PatchCode::PatchT, 8.5, 11.0, 300);
+    let sheet = render_sheet(PatchCode::PatchT, 8.5, 11.0, 300).unwrap();
     // down the middle column from the top: white to 1 in, then narrow 24, gap 24, wide 60, gap 24, narrow 24, gap 24, wide
     // 60 (0.08 and 0.20 in at 300 dpi)
     let x = sheet.width() / 2;
@@ -218,4 +218,14 @@ fn the_separator_sheet_has_the_standard_bar_widths() {
     assert!(!(540..630).any(row_has_ink));
     assert!(!(2670..2760).any(row_has_ink));
     assert!((1100..2200).any(row_has_ink));
+}
+
+#[test]
+fn a_separator_sheet_too_big_to_hold_is_refused() {
+    let t = PatchCode::PatchT;
+    assert!(render_sheet(t, 1e12, 1e12, 600).is_none());
+    assert!(render_sheet(t, 1e9, 1e9, u32::MAX).is_none());
+    assert!(render_sheet(t, f64::INFINITY, 11.0, 300).is_none());
+    assert!(render_sheet(t, 100.0, 100.0, 300).is_none());
+    assert!(render_sheet(t, 8.5, 11.0, 300).is_some());
 }
