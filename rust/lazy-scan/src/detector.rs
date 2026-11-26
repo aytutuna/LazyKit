@@ -4,6 +4,7 @@ use crate::geometry::{Point, Quad};
 use crate::refiner::smooth;
 use crate::warp::{MATCHED, PAPER_ASPECT_TOLERANCE, estimate_aspect, match_paper};
 use lazy_image::{Rgba, minified};
+use std::sync::OnceLock;
 
 // Finds the four corners of a sheet of paper in a camera photo, as Lazy Scan's PhotoDocumentDetector does: a page seen at an
 // angle (any convex quadrilateral) on a table that may be textured, dark, light or close to the paper's own colour, with the
@@ -136,15 +137,18 @@ const COS1: f64 = 0.99984769515639127;
 #[allow(clippy::excessive_precision)]
 const SIN1: f64 = 0.017452406437283512;
 
-pub(crate) fn angle_tables() -> ([f64; 181], [f64; 181]) {
-    let mut c = [0.0; 181];
-    let mut s = [0.0; 181];
-    c[0] = 1.0;
-    for k in 1..=180 {
-        c[k] = c[k - 1] * COS1 - s[k - 1] * SIN1;
-        s[k] = s[k - 1] * COS1 + c[k - 1] * SIN1;
-    }
-    (c, s)
+pub(crate) fn angle_tables() -> &'static ([f64; 181], [f64; 181]) {
+    static TABLES: OnceLock<([f64; 181], [f64; 181])> = OnceLock::new();
+    TABLES.get_or_init(|| {
+        let mut c = [0.0; 181];
+        let mut s = [0.0; 181];
+        c[0] = 1.0;
+        for k in 1..=180 {
+            c[k] = c[k - 1] * COS1 - s[k - 1] * SIN1;
+            s[k] = s[k - 1] * COS1 + c[k - 1] * SIN1;
+        }
+        (c, s)
+    })
 }
 
 // the corner `i` of a quad, round the outline
@@ -213,7 +217,8 @@ impl Field {
     }
 
     pub fn diagonal(&self) -> f64 {
-        ((self.w * self.w + self.h * self.h) as f64).sqrt()
+        let (w, h) = (self.w as f64, self.h as f64);
+        (w * w + h * h).sqrt()
     }
 
     /// The gradient at a continuous point, bilinear between pixel centres (clamped inside the gradient's area).
@@ -1030,6 +1035,15 @@ mod tests {
 
     fn square(x: f64, y: f64, size: f64) -> Quad {
         Quad::from_xy([[x, y], [x + size, y], [x + size, y + size], [x, y + size]])
+    }
+
+    #[test]
+    fn the_angle_tables_are_built_once_and_turn_by_degrees() {
+        assert!(std::ptr::eq(angle_tables(), angle_tables()));
+        let (c, s) = angle_tables();
+        assert_eq!((c[0], s[0]), (1.0, 0.0));
+        assert!((c[90]).abs() < 1e-12 && (s[90] - 1.0).abs() < 1e-12);
+        assert!((c[180] + 1.0).abs() < 1e-12 && s[180].abs() < 1e-12);
     }
 
     #[test]
