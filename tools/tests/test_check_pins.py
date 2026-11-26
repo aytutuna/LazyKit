@@ -78,8 +78,8 @@ class CheckPins(unittest.TestCase):
 
     def test_a_pin_with_nothing_to_tie_it(self):
         pins = pin("tool", A) + pin("inner", "c" * 64, 'from = "tool"')
-        self.assertTrue(any("inner: no var or path" in p for p in self.problems(pins, FETCH + "c" * 64 + "
-")))
+        problems = self.problems(pins, FETCH + "c" * 64 + "\n")
+        self.assertTrue(any("inner: no var or path" in p for p in problems))
 
     def test_the_real_files_agree(self):
         root = Path(__file__).resolve().parent.parent.parent
