@@ -103,7 +103,7 @@ pub fn photo_of(page: &Rgba, quad: &Quad, width: usize, height: usize) -> Rgba {
 /// Every colour value mapped through `f`.
 pub fn map_pixels(img: &Rgba, f: impl Fn(u8) -> u8) -> Rgba {
     let mut data = img.data.clone();
-    for p in data.chunks_exact_mut(4) {
+    for p in data.as_chunks_mut::<4>().0.iter_mut() {
         for v in &mut p[..3] {
             *v = f(*v);
         }

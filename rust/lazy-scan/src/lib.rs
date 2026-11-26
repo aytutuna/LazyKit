@@ -7,6 +7,7 @@ mod corners;
 mod enhancer;
 mod geometry;
 mod refiner;
+mod stability;
 
 pub use background::{BackgroundMap, percentile};
 pub use color::is_effectively_gray;
@@ -19,3 +20,7 @@ pub use enhancer::{
 };
 pub use geometry::{Point, Quad, aspect};
 pub use refiner::{Refinement, build_field, placement, refine};
+pub use stability::{
+    CapturePlacement, CaptureQuality, CaptureStability, CaptureState, Decision, Observation,
+    Options,
+};
