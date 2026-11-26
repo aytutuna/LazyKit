@@ -726,16 +726,14 @@ mod objects {
 
     #[test]
     fn with_largest_only_the_one_biggest_print_is_outlined() {
-        let script = Script::new(vec![three_prints()]);
+        let mut prints = three_prints();
+        prints[1] = print(30.0, 2.0, 52.0, 18.0);
+        let script = Script::new(vec![prints.clone()]);
         let mut live = tracker(LiveSearch::Objects(CaptureKind::Photo));
         live.set_largest_only(true);
         let update = read(&mut live, &script, 0.0).unwrap();
         assert_eq!(update.outlines.len(), 1);
-        let biggest = three_prints()
-            .into_iter()
-            .max_by(|a, b| a.area().total_cmp(&b.area()))
-            .unwrap();
-        assert!(update.outlines[0].max_corner_distance(&shares(&biggest)) < 1e-4);
+        assert!(update.outlines[0].max_corner_distance(&shares(&prints[1])) < 1e-4);
     }
 
     #[test]
@@ -786,5 +784,38 @@ mod objects {
         let read = ticket.read_page(&f, nothing);
         live.reset();
         assert!(live.finish_page(&ticket, &f, read).is_none());
+    }
+
+    #[test]
+    fn largest_only_keeps_the_first_of_equal_prints() {
+        let script = Script::new(vec![three_prints()]);
+        let mut live = tracker(LiveSearch::Objects(CaptureKind::Photo));
+        live.set_largest_only(true);
+        let update = read(&mut live, &script, 0.0).unwrap();
+        assert_eq!(update.outlines.len(), 1);
+        assert!(update.outlines[0].max_corner_distance(&shares(&three_prints()[0])) < 1e-4);
+    }
+
+    #[test]
+    fn an_answer_from_before_a_restart_of_the_clock_or_the_frame_size_is_dropped() {
+        let script = Script::new(vec![three_prints()]);
+        let mut live = tracker(LiveSearch::Objects(CaptureKind::Photo));
+        let f = frame(1000.0);
+        let ticket = live.begin(&f).unwrap();
+        let read = ticket.read_objects(&f, |i, k| script.find(i, k));
+        // the camera started again: an earlier time
+        assert!(live.begin(&frame(10.0)).is_some());
+        assert!(live.finish_objects(&ticket, &f, read.clone()).is_none());
+
+        let f = frame(2000.0);
+        let ticket = live.begin(&f).unwrap();
+        let read = ticket.read_objects(&f, |i, k| script.find(i, k));
+        let other = LiveFrame {
+            image: Arc::new(Rgba::filled(64, 48, 90, 90, 90)),
+            timestamp_ms: 3000.0,
+            model: None,
+        };
+        assert!(live.begin(&other).is_some());
+        assert!(live.finish_objects(&ticket, &f, read).is_none());
     }
 }

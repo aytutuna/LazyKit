@@ -655,12 +655,14 @@ impl LiveQuadTracker {
         if let Some(last) = self.last_searched {
             if t < last {
                 self.clear_state();
+                self.generation += 1;
             } else if t - last < gap {
                 return None;
             }
         }
         if (width, height) != self.frame_size {
             self.clear_state();
+            self.generation += 1;
             self.frame_size = (width, height);
         }
         self.last_searched = Some(t);
@@ -802,10 +804,10 @@ impl LiveQuadTracker {
         let (width, height) = (frame.image.width, frame.image.height);
         let ObjectReading { mut found, quality } = read;
         if self.largest_only
-            && let Some(largest) = found
-                .iter()
-                .copied()
-                .max_by(|a, b| a.area().total_cmp(&b.area()))
+            && let Some(largest) = found.iter().copied().reduce(|best, q| {
+                // the first of equal areas stays, as Swift's max(by:) keeps it
+                if q.area() > best.area() { q } else { best }
+            })
         {
             found = vec![largest];
         }
