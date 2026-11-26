@@ -36,6 +36,36 @@ impl Rgba {
     }
 }
 
+impl Rgba {
+    /// Turned clockwise on screen by `quarter_turns` quarter turns, any integer.
+    pub fn rotated_quarter_turns(&self, quarter_turns: i32) -> Rgba {
+        let turns = quarter_turns.rem_euclid(4);
+        if turns == 0 {
+            return self.clone();
+        }
+        let (w, h) = (self.width, self.height);
+        let (nw, nh) = if turns % 2 == 1 { (h, w) } else { (w, h) };
+        let mut data = vec![0u8; nw * nh * 4];
+        for dy in 0..nh {
+            for dx in 0..nw {
+                // each destination pixel looks up its source pixel
+                let (sx, sy) = match turns {
+                    1 => (dy, h - 1 - dx),
+                    2 => (w - 1 - dx, h - 1 - dy),
+                    _ => (w - 1 - dy, dx),
+                };
+                let (si, di) = ((sy * w + sx) * 4, (dy * nw + dx) * 4);
+                data[di..di + 4].copy_from_slice(&self.data[si..si + 4]);
+            }
+        }
+        Rgba {
+            width: nw,
+            height: nh,
+            data,
+        }
+    }
+}
+
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Gray {
     pub width: usize,
@@ -104,6 +134,22 @@ pub fn minified(image: &Rgba, width: usize, height: usize) -> Rgba {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn turning_moves_the_top_left_pixel_to_the_top_right() {
+        let mut data = Vec::new();
+        for v in 0..6u8 {
+            data.extend_from_slice(&[v, 0, 0, 255]);
+        }
+        let image = Rgba::new(3, 2, data);
+        let first = |i: &Rgba| i.data.iter().step_by(4).copied().collect::<Vec<_>>();
+        let cw = image.rotated_quarter_turns(1);
+        assert_eq!((cw.width, cw.height), (2, 3));
+        assert_eq!(first(&cw), [3, 0, 4, 1, 5, 2]);
+        assert_eq!(first(&image.rotated_quarter_turns(2)), [5, 4, 3, 2, 1, 0]);
+        assert_eq!(first(&image.rotated_quarter_turns(-1)), [2, 5, 1, 4, 0, 3]);
+        assert_eq!(image.rotated_quarter_turns(4), image);
+    }
 
     #[test]
     fn luma_rounds_half_up() {

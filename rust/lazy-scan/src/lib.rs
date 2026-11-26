@@ -11,6 +11,7 @@ mod live;
 mod pipeline;
 mod refiner;
 mod stability;
+pub mod warp;
 
 pub use background::{BackgroundMap, percentile};
 pub use color::is_effectively_gray;
