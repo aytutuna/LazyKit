@@ -51,7 +51,7 @@ def main(argv):
     args = [a for a in argv[1:] if a != "--check"]
     root = Path(args[0]) if args else Path(__file__).resolve().parent.parent
     out = subprocess.run(
-        ["cargo", "metadata", "--format-version", "1", "--locked", "--manifest-path", str(root / "rust" / "Cargo.toml")],
+        ["cargo", "metadata", "--format-version", "1", "--locked", "--all-features", "--manifest-path", str(root / "rust" / "Cargo.toml")],
         check=True, capture_output=True, text=True,
     ).stdout
     text = render(json.loads(out), (root / "native" / "pins.toml").read_text(encoding="utf-8"))
