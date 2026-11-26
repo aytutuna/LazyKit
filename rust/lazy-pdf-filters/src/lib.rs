@@ -4,6 +4,9 @@
 //! Required Notice: Copyright (c) 2026 Alazy Inc. (https://alazy.app)
 
 mod ascii;
+pub mod ccitt;
+mod ccitt_codes;
+pub mod dct;
 mod error;
 pub mod flate;
 mod lzw;
@@ -15,6 +18,8 @@ pub use params::{Params, Value};
 
 /// The most a filter chain may expand to unless the caller says otherwise.
 pub const DEFAULT_MAX_SIZE: u64 = 256 << 20;
+
+const MAX_COLUMNS: i32 = 1 << 20;
 
 /// One entry of a stream's /Filter, with its /DecodeParms.
 #[derive(Clone, Debug, PartialEq)]
@@ -102,6 +107,7 @@ pub fn run(data: &[u8], filters: &[Filter], options: &Options) -> Result<Decoded
             "ASCIIHexDecode" | "AHx" => data = ascii::decode_hex(&data, max_size)?,
             "ASCII85Decode" | "A85" => data = ascii::decode_85(&data, max_size)?,
             "RunLengthDecode" | "RL" => data = ascii::decode_run_length(&data, max_size)?,
+            "CCITTFaxDecode" | "CCF" => data = decode_ccitt(&data, parms, max_size)?,
             "Crypt" => {
                 // Decryption is the document layer's; /Identity leaves the data alone (ISO 32000-1 7.4.10).
                 if !matches!(parms.and_then(|p| p.name("Name")), None | Some("Identity")) {
@@ -135,4 +141,22 @@ pub fn run(data: &[u8], filters: &[Filter], options: &Options) -> Result<Decoded
         codec: None,
         parms: None,
     })
+}
+
+fn decode_ccitt(data: &[u8], parms: Option<&Params>, max_size: u64) -> Result<Vec<u8>> {
+    let columns = params::int(parms, "Columns", 1728);
+    if !(1..=MAX_COLUMNS).contains(&columns) {
+        return Err(FilterError::damaged(
+            "A CCITT stream has /Columns out of range.",
+        ));
+    }
+    let options = ccitt::Options {
+        k: params::int(parms, "K", 0),
+        columns: columns as usize,
+        rows: params::int(parms, "Rows", 0).max(0) as usize,
+        byte_align: params::flag(parms, "EncodedByteAlign"),
+        end_of_line: params::flag(parms, "EndOfLine"),
+        black_is_1: params::flag(parms, "BlackIs1"),
+    };
+    ccitt::decode(data, &options, max_size)
 }

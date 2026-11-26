@@ -1,4 +1,4 @@
-use lazy_pdf_filters::{Filter, Params, Problem, Value, decode};
+use lazy_pdf_filters::{Filter, Params, Problem, Value, dct, decode, decode_to_codec};
 
 fn one(name: &str) -> [Filter; 1] {
     [Filter::new(name, None)]
@@ -39,6 +39,16 @@ fn lzw_stops_at_the_cap() {
 }
 
 #[test]
+fn ccitt_rows_are_checked_against_the_cap_before_allocating() {
+    let mut parms = Params::new();
+    parms
+        .set("Columns", Value::Int(1 << 20))
+        .set("Rows", Value::Int(1 << 20));
+    let filter = [Filter::new("CCITTFaxDecode", Some(parms))];
+    too_big(decode(b"\x00", &filter, 1 << 20));
+}
+
+#[test]
 fn predictor_row_is_bounded_by_the_data() {
     let mut parms = Params::new();
     parms
@@ -46,4 +56,39 @@ fn predictor_row_is_bounded_by_the_data() {
         .set("Columns", Value::Int(i32::MAX as i64));
     let filter = [Filter::new("LZWDecode", Some(parms))];
     assert!(decode(b"\x80\x0b\x60\x50\x22\x0c\x0c\x85\x01", &filter, 1 << 20).is_ok());
+}
+
+#[test]
+fn codec_stops_the_chain_and_keeps_its_parameters() {
+    let mut parms = Params::new();
+    parms.set("ColorTransform", Value::Int(0));
+    let chain = [
+        Filter::new("AHx", None),
+        Filter::new("DCT", Some(parms.clone())),
+    ];
+    let decoded = decode_to_codec(b"4142>", &chain, 1 << 20).unwrap();
+    assert_eq!(decoded.data, b"AB");
+    assert_eq!(decoded.codec.as_deref(), Some("DCTDecode"));
+    assert_eq!(decoded.parms, Some(parms));
+    assert_eq!(
+        decode(b"4142>", &chain, 1 << 20).unwrap_err().message,
+        "The /DCT filter is an image codec."
+    );
+}
+
+#[test]
+fn jpeg_header_and_adobe_marker() {
+    let jpeg = [
+        0xff, 0xd8, 0xff, 0xee, 0x00, 0x0e, b'A', b'd', b'o', b'b', b'e', 0, 100, 0, 0, 0, 0, 0,
+        0xff, 0xc0, 0x00, 0x11, 8, 0x00, 0x20, 0x00, 0x30, 4, 1, 0x11, 0, 2, 0x11, 0, 3, 0x11, 0,
+    ];
+    assert!(dct::has_adobe_marker(&jpeg));
+    let header = dct::read_header(&jpeg).unwrap();
+    assert_eq!(
+        (header.width, header.height, header.components),
+        (0x30, 0x20, 4)
+    );
+    assert!(header.adobe);
+    assert!(!dct::has_adobe_marker(&jpeg[..2]));
+    assert_eq!(dct::read_header(b"not a jpeg"), None);
 }

@@ -57,3 +57,7 @@ impl Params {
 pub(crate) fn int(params: Option<&Params>, key: &str, fallback: i32) -> i32 {
     params.map_or(fallback, |p| p.int(key, fallback))
 }
+
+pub(crate) fn flag(params: Option<&Params>, key: &str) -> bool {
+    params.is_some_and(|p| p.flag(key))
+}
