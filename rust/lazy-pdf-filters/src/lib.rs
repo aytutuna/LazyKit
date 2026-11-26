@@ -9,6 +9,7 @@ mod ccitt_codes;
 pub mod dct;
 mod error;
 pub mod flate;
+mod jbig2;
 mod lzw;
 mod output;
 mod params;
@@ -44,6 +45,11 @@ pub struct Options {
     pub strict: bool,
     /// Stop at an image codec (DCT, JPX) and hand back its input instead of failing.
     pub stop_at_codec: bool,
+    /// Leave JBIG2Decode coded too, for a caller that changes only the filters in front of it.
+    pub keep_jbig2: bool,
+    /// A JBIG2 page that could only be partly decoded is damage, for a caller that would write the
+    /// missing part out as if it were white.
+    pub whole_jbig2: bool,
 }
 
 impl Default for Options {
@@ -52,6 +58,8 @@ impl Default for Options {
             max_size: DEFAULT_MAX_SIZE,
             strict: false,
             stop_at_codec: false,
+            keep_jbig2: false,
+            whole_jbig2: false,
         }
     }
 }
