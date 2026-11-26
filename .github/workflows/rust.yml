@@ -231,15 +231,28 @@ jobs:
           workspaces: rust
           key: scan-ios
       - run: rustup target add aarch64-apple-ios aarch64-apple-ios-sim
+      - uses: actions/cache@v4
+        with:
+          path: rust/lazy-scan-model/models
+          key: scan-models-ios-${{ hashFiles('rust/lazy-scan-model/scripts/fetch.sh', 'tools/patch_einsum.py') }}
+      - run: bash lazy-scan-model/scripts/fetch.sh lazy-scan-model/models models
       - run: bash lazy-scan-model/scripts/fetch.sh lazy-scan-model/models ios
       - name: Build the tests linked with the ONNX Runtime xcframework
         run: |
           export ORT_IOS_XCFWK_LOCATION="$PWD/lazy-scan-model/models/ios/onnxruntime.xcframework"
           # Rust links with -nodefaultlibs, and the runtime's @available and stack probe helpers come from clang's library
           runtime="$(xcrun clang --print-resource-dir)/lib/darwin"
-          ls "$runtime" | grep ios
+          test -f "$runtime/libclang_rt.ios.a" -a -f "$runtime/libclang_rt.iossim.a"
           export CARGO_TARGET_AARCH64_APPLE_IOS_RUSTFLAGS="-C link-arg=$runtime/libclang_rt.ios.a"
           export CARGO_TARGET_AARCH64_APPLE_IOS_SIM_RUSTFLAGS="-C link-arg=$runtime/libclang_rt.iossim.a"
-          for target in aarch64-apple-ios aarch64-apple-ios-sim; do
-            cargo test --no-run --release -p lazy-scan --features ort-linked --target $target
-          done
+          cargo test --no-run --release -p lazy-scan --features ort-linked --target aarch64-apple-ios
+          cargo test --no-run --release -p lazy-scan --features ort-linked --target aarch64-apple-ios-sim --test fixtures --message-format=json | jq -r 'select(.executable != null) | .executable' > target/ios-sim-tests.txt
+      - name: Run the linked tests in a simulator
+        run: |
+          udid="$(xcrun simctl list devices available | grep -m1 iPhone | grep -oE '[0-9A-F]{8}(-[0-9A-F]{4}){3}-[0-9A-F]{12}')"
+          xcrun simctl boot "$udid"
+          xcrun simctl bootstatus "$udid" -b
+          export SIMCTL_CHILD_LAZYKIT_ROOT="$GITHUB_WORKSPACE"
+          export SIMCTL_CHILD_LAZY_SCAN_MODELS="$PWD/lazy-scan-model/models"
+          export SIMCTL_CHILD_LAZY_SCAN_REQUIRE_MODEL=1
+          xcrun simctl spawn "$udid" "$(cat target/ios-sim-tests.txt)" --nocapture
