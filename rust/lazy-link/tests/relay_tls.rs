@@ -27,12 +27,14 @@ async fn an_untrusted_certificate_is_refused() {
         &random_id(),
         &random_id(),
     );
-    assert!(matches!(
-        relay.connect(&room_id(b"tls test")).await,
-        Err(RelayError::Transport(_))
-    ));
-    assert!(matches!(
-        relay.status().await,
-        Err(RelayError::Transport(_))
-    ));
+    // Any network failure is a Transport error too, so the text has to name the certificate.
+    for res in [
+        relay.connect(&room_id(b"tls test")).await.map(|_| ()),
+        relay.status().await.map(|_| ()),
+    ] {
+        let Err(RelayError::Transport(e)) = res else {
+            panic!("the connection was accepted")
+        };
+        assert!(e.contains("certificate"), "{e}");
+    }
 }

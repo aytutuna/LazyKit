@@ -4,7 +4,7 @@
 //! runs them with `--ignored`. RELAY_URL names the relay, default http://127.0.0.1:8787/relay/v1.
 
 use lazy_link::relay::{
-    CLOSE_TOO_SLOW, MAX_FRAME, MAX_STREAMS, Platform, Relay, RelayError, Store, random_id, room_id,
+    MAX_FRAME, MAX_STREAMS, Platform, Relay, RelayError, Store, WINDOW_FRAMES, random_id, room_id,
 };
 use sha2::{Digest, Sha256};
 use std::time::Duration;
@@ -115,7 +115,7 @@ async fn the_room_holds_sixteen_streams_and_no_more() {
 
 #[tokio::test(flavor = "multi_thread")]
 #[ignore = "needs the relay on RELAY_URL"]
-async fn a_reader_that_stops_is_cut_off_and_the_writer_hears_why() {
+async fn a_reader_that_stops_makes_the_writer_wait() {
     let (a, b, room) = pair();
     let mut host = a.host(&room).await.unwrap();
     let (guest, stalled) = tokio::join!(b.connect(&room), host.accept());
@@ -123,27 +123,15 @@ async fn a_reader_that_stops_is_cut_off_and_the_writer_hears_why() {
     let _stalled = stalled.unwrap();
 
     let chunk = vec![5u8; MAX_FRAME];
-    let ended = timeout(Duration::from_secs(120), async {
-        let mut sent = 0usize;
-        while guest.write_all(&chunk).await.is_ok() {
-            sent += chunk.len();
-            assert!(
-                sent < 1024 * 1024 * 1024,
-                "the relay never cut the stream off"
-            );
-        }
-    })
-    .await;
-    assert!(ended.is_ok());
-    let mut code = guest.close_code();
-    for _ in 0..20 {
-        if code.is_some() {
-            break;
-        }
-        tokio::time::sleep(Duration::from_millis(100)).await;
-        code = guest.close_code();
+    let mut sent = 0usize;
+    while let Ok(res) = timeout(Duration::from_secs(3), guest.write_all(&chunk)).await {
+        res.unwrap();
+        sent += chunk.len();
+        assert!(sent < 64 * 1024 * 1024, "the writer never had to wait");
     }
-    assert_eq!(code, Some(CLOSE_TOO_SLOW));
+    // The window of frames plus what the pipe in front of the socket holds.
+    assert!(sent <= (WINDOW_FRAMES + 8) * MAX_FRAME, "{sent}");
+    assert_eq!(guest.close_code(), None);
 }
 
 #[tokio::test(flavor = "multi_thread")]
