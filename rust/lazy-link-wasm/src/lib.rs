@@ -321,7 +321,9 @@ pub fn hash_bytes(data: JsValue) -> Result<String, JsError> {
 #[wasm_bindgen(js_name = patternBytes)]
 pub fn pattern_bytes(len: f64) -> Result<Vec<u8>, JsError> {
     if len.fract() != 0.0 || !(0.0..=u32::MAX as f64).contains(&len) {
-        return Err(JsError::new("the length is a whole number from 0 to 2^32 - 1"));
+        return Err(JsError::new(
+            "the length is a whole number from 0 to 2^32 - 1",
+        ));
     }
     let len = len as u32;
     if len > MAX_PATTERN_BYTES {
