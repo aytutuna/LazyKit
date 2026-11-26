@@ -3,7 +3,7 @@
  "status": "wave 1 translations are a first pass and need the second reader",
  "terms": [
   {"id": "app-names", "en": "Lazy Scan, Lazy Print, Lazy PDF, Lazy Send, Lazy Collect", "keep": true, "note": "Never translated, never transliterated, in every script."},
-  {"id": "publisher", "en": "ALAZY INC.", "keep": true, "note": "Exact string, as in the notice line."},
+  {"id": "publisher", "en": "Alazy Inc.", "keep": true, "note": "Exact string, as in the notice line."},
   {"id": "computer", "en": "computer", "note": "Windows PC and Mac together", "tr": {"ja": "コンピューター", "de": "Computer", "fr": "ordinateur", "zh-Hans": "电脑", "ko": "컴퓨터", "es": "ordenador", "it": "computer", "pt-BR": "computador", "ru": "компьютер", "zh-Hant": "電腦", "nl": "computer", "tr": "bilgisayar"}},
   {"id": "phone", "en": "phone", "note": "iPhone and Android phone", "tr": {"ja": "スマートフォン", "de": "Smartphone", "fr": "téléphone", "zh-Hans": "手机", "ko": "휴대폰", "es": "teléfono", "it": "telefono", "pt-BR": "celular", "ru": "телефон", "zh-Hant": "手機", "nl": "telefoon", "tr": "telefon"}},
   {"id": "device", "en": "device", "note": "any paired computer, phone or tablet", "tr": {"ja": "デバイス", "de": "Gerät", "fr": "appareil", "zh-Hans": "设备", "ko": "기기", "es": "dispositivo", "it": "dispositivo", "pt-BR": "dispositivo", "ru": "устройство", "zh-Hant": "裝置", "nl": "apparaat", "tr": "cihaz"}},
