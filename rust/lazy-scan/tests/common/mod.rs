@@ -31,3 +31,5 @@ pub mod photo_scenes;
 pub mod scenes;
 
 pub mod pages;
+
+pub mod book;

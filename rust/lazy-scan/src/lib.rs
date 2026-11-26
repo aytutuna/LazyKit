@@ -24,6 +24,7 @@ pub mod patch_code;
 mod photo;
 mod pipeline;
 mod refiner;
+pub mod spine_shadow;
 mod stability;
 pub mod warp;
 
