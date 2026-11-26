@@ -234,6 +234,11 @@ jobs:
       - name: Build the tests linked with the ONNX Runtime xcframework
         run: |
           export ORT_IOS_XCFWK_LOCATION="$PWD/lazy-scan-model/models/ios/onnxruntime.xcframework"
+          # Rust links with -nodefaultlibs, and the runtime's @available and stack probe helpers come from clang's library
+          runtime="$(xcrun clang --print-resource-dir)/lib/darwin"
+          ls "$runtime" | grep ios
+          export CARGO_TARGET_AARCH64_APPLE_IOS_RUSTFLAGS="-C link-arg=$runtime/libclang_rt.ios.a"
+          export CARGO_TARGET_AARCH64_APPLE_IOS_SIM_RUSTFLAGS="-C link-arg=$runtime/libclang_rt.iossim.a"
           for target in aarch64-apple-ios aarch64-apple-ios-sim; do
             cargo test --no-run --release -p lazy-scan --features ort-linked --target $target
           done
