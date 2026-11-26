@@ -12,8 +12,8 @@ from pathlib import Path
 HEADER = """Third-party components of LazyKit
 
 LazyKit's own code is under the PolyForm Noncommercial License 1.0.0 (LICENSE). The components below keep their own
-licences; the licence files found in each crate's source are copied at the end, and ONNX Runtime and the corner model have
-their own section. The file is made by tools/notices.py from rust/Cargo.lock and native/pins.toml.
+licences; the licence files found in each crate's source are copied at the end, and ONNX Runtime, the corner model and
+pdf.js have their own section. The file is made by tools/notices.py from rust/Cargo.lock and native/pins.toml.
 
 UniFFI (MPL-2.0) is used unmodified; its source is at https://github.com/mozilla/uniffi-rs.
 """
