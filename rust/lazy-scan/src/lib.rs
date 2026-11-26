@@ -13,6 +13,7 @@ pub mod frame_quality;
 mod geometry;
 mod live;
 pub mod multi_quad;
+mod page_quality;
 mod photo;
 mod pipeline;
 mod refiner;
@@ -36,6 +37,10 @@ pub use live::{
     LiveQuadFilter, LiveQuadTracker, LiveSearch, LiveUpdate, MIN_FRAME_GAP_MS, MIN_OBJECT_GAP_MS,
     OBJECT_OUTLINE_HOLD_MS, ObjectOutput, ObjectReading, PageReading, PageThumbnail, Steadied,
     edge_search,
+};
+pub use page_quality::{
+    ANALYSIS, BLUR_BELOW, CUT_CONFIDENCE, DARK_BELOW, GLARE_FROM, GLARE_UNTIL, Issue, SMALL_BELOW,
+    frame_issues, glare_share, mean_luminance, page_issues, sharpness,
 };
 pub use photo::{
     Action, DpiRule, Filter, ImportPlan, Imported, MAX_DPI, MIN_DPI, NOMINAL_DPI, Orientation,
