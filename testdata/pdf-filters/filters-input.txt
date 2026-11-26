@@ -352,3 +352,4 @@ file FlateDecode - flate-repeat.bin 0 336:ff -
 file FlateDecode - flate-repeat.bin 0 373:ff -
 file FlateDecode - flate-repeat.bin 0 - 206
 file FlateDecode - flate-repeat.bin 1 - 206
+file FlateDecode - flate-chunk-edge.bin 0 - -

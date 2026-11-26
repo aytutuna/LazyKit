@@ -672,3 +672,5 @@
 < length=50867 fnv=727704b0
 > file FlateDecode - flate-repeat.bin 1 - 206
 < error damaged: A compressed stream breaks off.
+> file FlateDecode - flate-chunk-edge.bin 0 - -
+< length=65536 fnv=d5760e48

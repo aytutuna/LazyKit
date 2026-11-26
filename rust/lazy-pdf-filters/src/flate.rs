@@ -83,7 +83,7 @@ fn inflate_from(data: &[u8], max_size: u64, strict: bool) -> Result<(Vec<u8>, En
         let status = state.decompress(input, &mut buffer[at..at + limit], InflateFlush::NoFlush);
         let used = (state.total_in() - in_before) as usize;
         let written = (state.total_out() - out_before) as usize;
-        if room == 0 && written > 0 {
+        if room == 0 && written > 0 || offset % INPUT_CHUNK == 0 && used > 0 {
             call_start = at;
         }
         offset += used;
