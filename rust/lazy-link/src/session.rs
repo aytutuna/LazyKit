@@ -35,7 +35,8 @@ pub enum RedeemResult {
 }
 
 /// Where a token came from: an address, with the zone of a link-local IPv6 address, so that
-/// fe80::1%12 and fe80::1%13 are different peers as they are in the other implementations. An IPv4
+/// fe80::1%12 and fe80::1%13 are different peers, as in the C# one (the Kotlin and Swift apps drop
+/// the zone before counting). An IPv4
 /// address that arrived mapped into IPv6 is the same peer as the plain one.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct Peer {

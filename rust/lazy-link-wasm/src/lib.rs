@@ -162,20 +162,22 @@ pub fn normalize_short_code(value: JsValue) -> Result<Option<String>, JsError> {
 }
 
 #[wasm_bindgen(js_name = spkiFingerprint)]
-pub fn spki_fingerprint(spki_der: &[u8]) -> Vec<u8> {
-    lazy_link::spki_fingerprint(spki_der).to_vec()
+pub fn spki_fingerprint(spki_der: JsValue) -> Result<Vec<u8>, JsError> {
+    Ok(lazy_link::spki_fingerprint(&bytes(&spki_der, "the key")?).to_vec())
 }
 
 #[wasm_bindgen(js_name = checkCode)]
-pub fn check_code(fingerprint: &[u8]) -> String {
-    lazy_link::spaced(&lazy_link::check_code(fingerprint))
+pub fn check_code(fingerprint: JsValue) -> Result<String, JsError> {
+    let fingerprint = bytes(&fingerprint, "the fingerprint")?;
+    Ok(lazy_link::spaced(&lazy_link::check_code(&fingerprint)))
 }
 
 #[wasm_bindgen(js_name = matchCode)]
-pub fn match_code(fingerprint: &[u8], short_code: JsValue) -> Result<String, JsError> {
+pub fn match_code(fingerprint: JsValue, short_code: JsValue) -> Result<String, JsError> {
+    let fingerprint = bytes(&fingerprint, "the fingerprint")?;
     let short_code = text(&short_code, "the short code")?;
     Ok(lazy_link::spaced(&lazy_link::match_code(
-        fingerprint,
+        &fingerprint,
         &short_code,
     )))
 }
@@ -290,12 +292,14 @@ fn signature(value: JsValue) -> Result<Vec<u8>, JsValue> {
 }
 
 #[wasm_bindgen(js_name = signData)]
-pub fn sign_data(signer: &Signer, data: &[u8]) -> Result<Vec<u8>, JsValue> {
-    signature(signer.sign(Uint8Array::from(&Sha256::digest(data)[..]))?)
+pub fn sign_data(signer: &Signer, data: JsValue) -> Result<Vec<u8>, JsValue> {
+    let data = bytes(&data, "the data")?;
+    signature(signer.sign(Uint8Array::from(&Sha256::digest(&data)[..]))?)
 }
 
 #[wasm_bindgen(js_name = signDataAsync)]
-pub async fn sign_data_async(signer: &AsyncSigner, data: Vec<u8>) -> Result<Vec<u8>, JsValue> {
+pub async fn sign_data_async(signer: &AsyncSigner, data: JsValue) -> Result<Vec<u8>, JsValue> {
+    let data = bytes(&data, "the data")?;
     let value = signer.sign_later(Uint8Array::from(&Sha256::digest(&data)[..]))?;
     signature(JsFuture::from(js_sys::Promise::resolve(&value)).await?)
 }
@@ -307,15 +311,21 @@ pub fn panic_now(message: &str) -> u32 {
 }
 
 #[wasm_bindgen(js_name = hashBytes)]
-pub fn hash_bytes(data: &[u8]) -> String {
-    Sha256::digest(data)
+pub fn hash_bytes(data: JsValue) -> Result<String, JsError> {
+    Ok(Sha256::digest(bytes(&data, "the data")?)
         .iter()
         .map(|b| format!("{b:02x}"))
-        .collect()
+        .collect())
 }
 
 #[wasm_bindgen(js_name = patternBytes)]
-pub fn pattern_bytes(len: u32) -> Result<Vec<u8>, JsError> {
+pub fn pattern_bytes(len: f64) -> Result<Vec<u8>, JsError> {
+    if len.fract() != 0.0 || !(0.0..=u32::MAX as f64).contains(&len) {
+        return Err(JsError::new(
+            "the length is a whole number from 0 to 2^32 - 1",
+        ));
+    }
+    let len = len as u32;
     if len > MAX_PATTERN_BYTES {
         return Err(JsError::new("at most 256 MiB"));
     }
