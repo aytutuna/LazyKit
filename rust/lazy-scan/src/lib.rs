@@ -20,6 +20,7 @@ pub mod mask_ops;
 pub mod multi_quad;
 pub mod page_flatten;
 mod page_quality;
+pub mod patch_code;
 mod photo;
 mod pipeline;
 mod refiner;

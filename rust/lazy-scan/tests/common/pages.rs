@@ -290,3 +290,253 @@ pub fn enlarged(page: &GrayImage, factor: usize) -> Rgba {
 pub fn checksum(page: &GrayImage) -> u32 {
     super::fnv(&page.gray.data)
 }
+
+// ---- crop and straighten ----
+
+/// A turn by a small angle as exact fixed-point sine and cosine (x 65536), so every platform draws the same pixels without
+/// trigonometry.
+#[derive(Clone, Copy)]
+pub struct Turn {
+    pub sin: i64,
+    pub cos: i64,
+}
+
+pub const STRAIGHT: Turn = Turn { sin: 0, cos: 65536 };
+pub const PLUS_2: Turn = Turn {
+    sin: 2287,
+    cos: 65496,
+};
+pub const PLUS_2_POINT_5: Turn = Turn {
+    sin: 2859,
+    cos: 65474,
+};
+pub const MINUS_2_POINT_5: Turn = Turn {
+    sin: -2859,
+    cos: 65474,
+};
+pub const PLUS_3: Turn = Turn {
+    sin: 3430,
+    cos: 65446,
+};
+pub const MINUS_3: Turn = Turn {
+    sin: -3430,
+    cos: 65446,
+};
+
+/// The sheet of `sheet_on_backdrop`: 6 x 8 in.
+pub const SHEET_WIDTH: usize = 600;
+pub const SHEET_HEIGHT: usize = 800;
+
+/// Division rounding down (toward minus infinity), for negative offsets too.
+pub fn floor_div(a: i64, b: i64) -> i64 {
+    a.div_euclid(b)
+}
+
+/// A page of text: 34 lines of glyphs 6.5 in long, every 0.28 in, on noisy paper.
+pub fn text_page() -> GrayImage {
+    noisy(0x7E57_AA6E, 245, |p| {
+        let mut rng = Rng::new(0x7E57_AA6F);
+        for line in 0..34 {
+            text_line(p, 100, 100 + line * 28, 650, 40, &mut rng);
+        }
+    })
+}
+
+/// `page` with its content turned clockwise by `turn` about the centre (nearest pixel); what comes in from outside the page is
+/// `fill`.
+pub fn turned(page: &GrayImage, turn: Turn, fill: u8) -> GrayImage {
+    let (w, h) = (page.width() as i64, page.height() as i64);
+    let mut p = vec![0u8; (w * h) as usize];
+    let unit = 65536;
+    for y in 0..h {
+        let dy = 2 * y + 1 - h;
+        for x in 0..w {
+            let dx = 2 * x + 1 - w;
+            let sx = floor_div(dx * turn.cos + dy * turn.sin + w * unit, 2 * unit);
+            let sy = floor_div(-dx * turn.sin + dy * turn.cos + h * unit, 2 * unit);
+            p[(y * w + x) as usize] = if sx >= 0 && sx < w && sy >= 0 && sy < h {
+                page.gray.data[(sy * w + sx) as usize]
+            } else {
+                fill
+            };
+        }
+    }
+    GrayImage::new(
+        Gray {
+            width: w as usize,
+            height: h as usize,
+            data: p,
+        },
+        page.dpi,
+    )
+}
+
+fn sheet_text_line(p: &mut [u8], x: usize, y: usize, max_width: usize, ink: u8, rng: &mut Rng) {
+    const PICKS: [u32; 10] = [
+        0b00111, 0b01011, 0b01101, 0b01110, 0b10011, 0b10101, 0b10110, 0b11001, 0b11010, 0b11100,
+    ];
+    let mut bar = |bx: usize, by: usize, bw: usize, bh: usize| {
+        for py in by..by + bh {
+            for px in bx..bx + bw {
+                p[py * SHEET_WIDTH + px] = ink;
+            }
+        }
+    };
+    let mut cx = x;
+    loop {
+        let glyphs = 2 + rng.below(7);
+        if cx + glyphs * 7 > x + max_width {
+            break;
+        }
+        for _ in 0..glyphs {
+            let bits = PICKS[rng.below(10)];
+            if bits & 1 != 0 {
+                bar(cx, y, 1, 9);
+            }
+            if bits & 2 != 0 {
+                bar(cx + 4, y, 1, 9);
+            }
+            if bits & 4 != 0 {
+                bar(cx, y, 5, 1);
+            }
+            if bits & 8 != 0 {
+                bar(cx, y + 4, 5, 1);
+            }
+            if bits & 16 != 0 {
+                bar(cx, y + 8, 5, 1);
+            }
+            cx += 7;
+        }
+        cx += 7;
+    }
+}
+
+/// A 6 x 8 in sheet (`paper` with noise and 24 lines of glyphs) lying at the centre of the 850 x 1100 scan on a noisy
+/// `backdrop`, turned clockwise by `turn`, with a `shadow` px edge shadow (200) all around it when above 0.
+pub fn sheet_on_backdrop(
+    turn: Turn,
+    backdrop: i64,
+    paper: i64,
+    shadow: i64,
+    seed: u32,
+) -> GrayImage {
+    let (sw, sh) = (SHEET_WIDTH, SHEET_HEIGHT);
+    let mut sheet = vec![0u8; sw * sh];
+    let mut rng = Rng::new(seed);
+    for v in sheet.iter_mut() {
+        *v = clamp(paper + rng.noise());
+    }
+    let mut text = Rng::new(seed ^ 0x5A5A_5A5A);
+    for line in 0..24 {
+        sheet_text_line(&mut sheet, 60, 60 + line * 28, 480, 40, &mut text);
+    }
+
+    let mut p = vec![0u8; WIDTH * HEIGHT];
+    let mut noise = Rng::new(seed.wrapping_add(1));
+    let unit = 65536i64;
+    let (half_w, half_h) = (sw as i64 * unit, sh as i64 * unit);
+    let (outer_w, outer_h) = (
+        (sw as i64 + 2 * shadow) * unit,
+        (sh as i64 + 2 * shadow) * unit,
+    );
+    for y in 0..HEIGHT as i64 {
+        let dy = 2 * y + 1 - HEIGHT as i64;
+        for x in 0..WIDTH as i64 {
+            let dx = 2 * x + 1 - WIDTH as i64;
+            let u = dx * turn.cos + dy * turn.sin;
+            let v = -dx * turn.sin + dy * turn.cos;
+            let value = if u.abs() < half_w && v.abs() < half_h {
+                let sx = floor_div(u + half_w, 2 * unit);
+                let sy = floor_div(v + half_h, 2 * unit);
+                sheet[sy as usize * sw + sx as usize] as i64
+            } else if shadow > 0 && u.abs() < outer_w && v.abs() < outer_h {
+                200 + noise.noise()
+            } else {
+                backdrop + noise.noise()
+            };
+            p[y as usize * WIDTH + x as usize] = clamp(value);
+        }
+    }
+    page(p)
+}
+
+// ---- patch codes ----
+
+/// A separator sheet drawn at the standard widths at 100 dpi (narrow bars and gaps 8 px, wide bars 20 px, value 20) on noisy
+/// paper: `code` bars `length` px long, across the page from (275, 200) down, or with `vertical` down the page from
+/// (200, 400) across; five lines of text from y 850; the whole page turned clockwise by `turn`.
+pub fn patch_page(
+    code: lazy_scan::patch_code::PatchCode,
+    vertical: bool,
+    turn: Turn,
+    length: i64,
+) -> GrayImage {
+    let page = noisy(0x9A7C_0DE5, 245, |p| {
+        let mut pos = 200;
+        for wide in code.bars() {
+            let thickness = if wide { 20 } else { 8 };
+            if vertical {
+                fill(p, pos, 400, thickness, length, 20);
+            } else {
+                fill(p, 275, pos, length, thickness, 20);
+            }
+            pos += thickness + 8;
+        }
+        let mut rng = Rng::new(0x9A7C_0DE6);
+        for line in 0..5 {
+            text_line(p, 100, 850 + line * 28, 650, 40, &mut rng);
+        }
+    });
+    turned(&page, turn, 245)
+}
+
+/// A ruled table on noisy paper, long lines that are no patch code: a dark header band 24 px tall with a 2 px rule under it,
+/// 20 more rules every 28 px, four column rules, and under the table ten stripes 6 px tall, 8 px apart.
+pub fn ruled_table() -> GrayImage {
+    noisy(0x7AB1_E000, 245, |p| {
+        fill(p, 100, 150, 650, 24, 40);
+        for row in 0..=20 {
+            fill(p, 100, 174 + row * 28, 650, 2, 40);
+        }
+        for x in [100, 300, 500, 748] {
+            fill(p, x, 150, 2, 24 + 20 * 28 + 2, 40);
+        }
+        for k in 0..10 {
+            fill(p, 100, 820 + k * 14, 650, 6, 40);
+        }
+    })
+}
+
+/// The page turned half a turn (each pixel to the opposite corner).
+pub fn half_turned(page: &GrayImage) -> GrayImage {
+    let mut data = page.gray.data.clone();
+    data.reverse();
+    GrayImage::new(
+        Gray {
+            width: page.width(),
+            height: page.height(),
+            data,
+        },
+        page.dpi,
+    )
+}
+
+/// The page turned a quarter turn clockwise.
+pub fn quarter_turned(page: &GrayImage) -> GrayImage {
+    let (w, h) = (page.width(), page.height());
+    let mut p = vec![0u8; w * h];
+    // the new page is h wide and w tall; its pixel (x, y) is the old (y, h - 1 - x)
+    for y in 0..w {
+        for x in 0..h {
+            p[y * h + x] = page.gray.data[(h - 1 - x) * w + y];
+        }
+    }
+    GrayImage::new(
+        Gray {
+            width: h,
+            height: w,
+            data: p,
+        },
+        page.dpi,
+    )
+}
