@@ -1,0 +1,58 @@
+#!/usr/bin/env python3
+"""Checks native/pins.toml against rust/lazy-scan-model/scripts/fetch.sh: every pin's digest and download address is in the
+script, every digest the script holds is a pin, and every pin names a licence the cargo-deny allowlist would also take.
+Usage: check_pins.py [repo root]"""
+import re
+import sys
+import tomllib
+from pathlib import Path
+
+FETCH = Path("rust/lazy-scan-model/scripts/fetch.sh")
+PINS = Path("native/pins.toml")
+LICENCES = {"MIT", "Apache-2.0", "BSD-2-Clause", "BSD-3-Clause", "ISC", "Zlib"}
+HEX = re.compile(r"\b[0-9a-f]{64}\b")
+
+
+def check(pins_text, fetch_text):
+    pins = tomllib.loads(pins_text).get("pin", [])
+    problems = []
+    names = {p.get("name") for p in pins}
+    if len(names) != len(pins):
+        problems.append("a pin name is used twice")
+    for p in pins:
+        name = p.get("name", "?")
+        if not re.fullmatch(r"[0-9a-f]{64}", p.get("sha256", "")):
+            problems.append(f"{name}: no SHA-256")
+        if p.get("licence") not in LICENCES:
+            problems.append(f"{name}: licence {p.get('licence')!r} is not on the allowlist")
+        if "url" not in p and p.get("from") not in names:
+            problems.append(f"{name}: neither a url nor a pin to come from")
+        if p.get("sha256", "") not in fetch_text:
+            problems.append(f"{name}: its digest is not in fetch.sh")
+        for key in ("url", "upstream"):
+            if key in p and not in_script(p[key], fetch_text):
+                problems.append(f"{name}: {key} {p[key]} is not what fetch.sh downloads")
+    pinned = {p.get("sha256") for p in pins}
+    for digest in sorted(set(HEX.findall(fetch_text)) - pinned):
+        problems.append(f"fetch.sh holds digest {digest} that no pin lists")
+    return problems
+
+
+def in_script(url, fetch_text):
+    # the script writes a download as a base address and a file name: `$copy/$model` with copy=... and model=...
+    base, _, leaf = url.rpartition("/")
+    return base in fetch_text and leaf in fetch_text
+
+
+def main(argv):
+    root = Path(argv[1]) if len(argv) > 1 else Path(__file__).resolve().parent.parent
+    problems = check((root / PINS).read_text(encoding="utf-8"), (root / FETCH).read_text(encoding="utf-8"))
+    for problem in problems:
+        print(problem, file=sys.stderr)
+    if not problems:
+        print("pins.toml and fetch.sh agree")
+    return 1 if problems else 0
+
+
+if __name__ == "__main__":
+    sys.exit(main(sys.argv))
