@@ -17,9 +17,22 @@ pub const DEFAULT_MAX_SIZE: usize = 256 << 20;
 const MAX_GLOBALS: usize = 32 << 20;
 
 /// One stage of a stream's filter chain with its parameters.
-struct Stage {
-    filter: Vec<u8>,
-    parms: Vec<(Vec<u8>, Parm)>,
+#[derive(Debug, Clone, PartialEq)]
+pub struct Stage {
+    pub filter: Vec<u8>,
+    pub parms: Vec<(Vec<u8>, Parm)>,
+}
+
+/// A stream decoded as far as its image codec. `codec` is the stage left undone (DCT or JPX), with the parameters
+/// it needs; without one the data is fully decoded.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Decoded {
+    pub data: Vec<u8>,
+    pub codec: Option<Stage>,
+}
+
+fn is_codec(filter: &[u8]) -> bool {
+    matches!(filter, b"DCTDecode" | b"DCT" | b"JPXDecode")
 }
 
 impl Document {
@@ -54,6 +67,33 @@ impl Document {
         max_size: usize,
         strict: bool,
     ) -> Result<Vec<u8>, ReadError> {
+        let decoded = self.decode_stages(stream, max_size, strict, false)?;
+        Ok(decoded.data)
+    }
+
+    /// The stream's filters and their parameters as the file gives them, with a /JBIG2Globals stream decoded and
+    /// the image's size added to the JBIG2 stage.
+    pub fn filter_chain(&mut self, stream: &Stream) -> Result<Vec<Stage>, ReadError> {
+        self.decode_spec(stream, true, DEFAULT_MAX_SIZE)
+    }
+
+    /// The data of `stream` with its filters undone up to an image codec, which is left coded and returned with
+    /// its parameters. Output may not pass `max_size` bytes.
+    pub fn stream_data_to_codec(
+        &mut self,
+        stream: &Stream,
+        max_size: usize,
+    ) -> Result<Decoded, ReadError> {
+        self.decode_stages(stream, max_size, false, true)
+    }
+
+    fn decode_stages(
+        &mut self,
+        stream: &Stream,
+        max_size: usize,
+        strict: bool,
+        stop_at_codec: bool,
+    ) -> Result<Decoded, ReadError> {
         let stages = self.decode_spec(stream, true, max_size)?;
         // With no filter to hold it to the limit, a span that is too long is refused before it is copied.
         if stream.data.is_none()
@@ -65,6 +105,12 @@ impl Document {
         }
         let mut data = self.raw_data(stream);
         for stage in stages {
+            if stop_at_codec && is_codec(&stage.filter) {
+                return Ok(Decoded {
+                    data,
+                    codec: Some(stage),
+                });
+            }
             if stage.filter == b"Crypt" {
                 // Decryption is the crypt layer's; /Identity leaves the data alone (ISO 32000-1 7.4.10).
                 let named = stage.parms.iter().rev().find(|(k, _)| k == b"Name");
@@ -92,7 +138,7 @@ impl Document {
         if data.len() > max_size {
             return Err(ReadError::damaged("The stream is longer than the limit."));
         }
-        Ok(data)
+        Ok(Decoded { data, codec: None })
     }
 
     /// The stream's filters and their parameters, resolved. With `decoding` a /JBIG2Globals stream comes with its
@@ -226,7 +272,7 @@ impl Document {
     pub(crate) fn find_stream_end(&self, start: usize) -> usize {
         let mut end = self.next_endstream(start);
         if end.is_none() {
-            end = self.index_from(b"endobj", &self.last_endobj, start);
+            end = self.next_match(b"endobj", &self.last_endobj, &self.endobj_spans, start);
         }
         let mut end = end.unwrap_or(self.data.len());
         // The line break before the keyword is not data.
@@ -239,19 +285,44 @@ impl Document {
         end
     }
 
-    /// The first "endstream" at or after `start`. A search that found one at `at` from `lo` also answers every start
-    /// in between, so streams with a wrong /Length do not each scan on to the end of the file.
+    /// The first "endstream" at or after `start`.
     fn next_endstream(&self, start: usize) -> Option<usize> {
-        let mut known = self.endstream_spans.borrow_mut();
-        if let Some((&at, &lo)) = known.range(start..).next()
-            && lo <= start
-        {
-            return Some(at);
+        self.next_match(
+            b"endstream",
+            &self.last_endstream,
+            &self.endstream_spans,
+            start,
+        )
+    }
+
+    /// The first `pattern` at or after `start`. A search that found one at `at` from `lo` also answers every start
+    /// in between, and a start below `lo` only has to look as far as `lo`, so streams with a wrong /Length do not
+    /// each scan on to the end of the file, whatever order they are asked in.
+    fn next_match(
+        &self,
+        pattern: &[u8],
+        last: &std::cell::Cell<i64>,
+        spans: &std::cell::RefCell<std::collections::BTreeMap<usize, usize>>,
+        start: usize,
+    ) -> Option<usize> {
+        let mut known = spans.borrow_mut();
+        let mut limit = None;
+        if let Some((&at, &lo)) = known.range(start..).next() {
+            if lo <= start {
+                return Some(at);
+            }
+            limit = Some(lo + pattern.len() - 1);
         }
-        let at = self.index_from(b"endstream", &self.last_endstream, start)?;
-        let lo = known.get(&at).map_or(start, |&lo| lo.min(start));
-        known.insert(at, lo);
-        Some(at)
+        let found = match limit {
+            Some(limit) => {
+                crate::bytes::find(&self.data[..limit.min(self.data.len())], pattern, start)
+                    .or_else(|| known.range(start..).next().map(|(&at, _)| at))
+            }
+            None => self.index_from(pattern, last, start),
+        }?;
+        let lo = known.get(&found).map_or(start, |&lo| lo.min(start));
+        known.insert(found, lo);
+        Some(found)
     }
 
     /// The first `pattern` at or after `start`. Knowing the last one in the file spares a scan to the end for each
