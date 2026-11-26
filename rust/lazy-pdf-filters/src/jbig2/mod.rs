@@ -1,7 +1,21 @@
+/* Copyright 2012 Mozilla Foundation
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ *     http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+
 // Ported from pdf.js (src/core/jbig2.js: segment headers, SimpleSegmentVisitor) by way of Lazy PDF's C#
 // decoder, and changed: the page is composed with every combination operator, a segment that fails does not
 // stop the others, and every size and count is checked against the budget before anything is allocated.
-// See budget.rs for the licence.
 
 //! JBIG2Decode (ISO 32000-1 7.4.7; ITU-T T.88): the segments of an embedded stream, the globals first,
 //! drawn into one page that comes out as packed rows with 0 for black, as an image stream expects.
