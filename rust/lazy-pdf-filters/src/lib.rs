@@ -7,6 +7,7 @@ mod ascii;
 pub mod ccitt;
 mod ccitt_codes;
 pub mod dct;
+pub mod encode;
 mod error;
 pub mod flate;
 pub mod jbig2;

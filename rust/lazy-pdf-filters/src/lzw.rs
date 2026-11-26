@@ -1,10 +1,10 @@
 use crate::error::Result;
 use crate::output::Output;
 
-const CLEAR: usize = 256;
-const END: usize = 257;
-const FIRST: usize = 258;
-const TABLE_SIZE: usize = 4096;
+pub(crate) const CLEAR: usize = 256;
+pub(crate) const END: usize = 257;
+pub(crate) const FIRST: usize = 258;
+pub(crate) const TABLE_SIZE: usize = 4096;
 
 struct Table {
     prefix: [u16; TABLE_SIZE],
