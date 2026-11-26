@@ -1,15 +1,27 @@
 //! The wasm-bindgen surface of lazy-link for the browser and Node.
-//! Required Notice: Copyright (c) 2026 ALAZY INC. (https://alazy.app)
+//! Required Notice: Copyright (c) 2026 Alazy Inc. (https://alazy.app)
 
 use js_sys::Uint8Array;
 use sha2::{Digest, Sha256};
 use wasm_bindgen::prelude::*;
+
+const MAX_PATTERN_BYTES: u32 = 256 * 1024 * 1024;
 
 fn error_name(error: lazy_link::PairingUriError) -> &'static str {
     match error {
         lazy_link::PairingUriError::NotPairingCode => "notPairingCode",
         lazy_link::PairingUriError::NewerVersion => "newerVersion",
         lazy_link::PairingUriError::Damaged => "damaged",
+    }
+}
+
+/// Times are milliseconds since the epoch as JavaScript counts them: whole numbers a double holds exactly.
+fn time(ms: f64) -> Result<i64, JsError> {
+    const LIMIT: f64 = 9_007_199_254_740_991.0;
+    if ms.is_finite() && ms.abs() <= LIMIT {
+        Ok(ms as i64)
+    } else {
+        Err(JsError::new("a time is a finite number of milliseconds"))
     }
 }
 
@@ -23,6 +35,28 @@ pub struct PairingCode {
     pub addresses: Vec<String>,
     pub port: u16,
     pub token: String,
+}
+
+#[wasm_bindgen]
+impl PairingCode {
+    #[wasm_bindgen(constructor)]
+    pub fn new(
+        desktop_id: String,
+        name: String,
+        fingerprint: String,
+        addresses: Vec<String>,
+        port: u16,
+        token: String,
+    ) -> PairingCode {
+        PairingCode {
+            desktop_id,
+            name,
+            fingerprint,
+            addresses,
+            port,
+            token,
+        }
+    }
 }
 
 /// Throws an Error whose message is notPairingCode, newerVersion or damaged.
@@ -89,7 +123,7 @@ impl PairingSession {
         let token = token
             .try_into()
             .map_err(|_| JsError::new("a pairing token has 16 bytes"))?;
-        let inner = lazy_link::PairingSession::new(opened_ms as i64, token, code_entropy)
+        let inner = lazy_link::PairingSession::new(time(opened_ms)?, token, code_entropy)
             .ok_or_else(|| JsError::new("the short code needs 8 bytes of randomness"))?;
         Ok(PairingSession { inner })
     }
@@ -103,18 +137,57 @@ impl PairingSession {
         self.inner.short_code().to_owned()
     }
 
-    /// Returns accepted, wrongToken, expired, alreadyUsed or closed.
-    pub fn redeem(&self, token: Option<String>, now_ms: f64, peer: Option<String>) -> String {
+    /// When the session ends, in the same milliseconds as the time it was opened at.
+    #[wasm_bindgen(js_name = expiresMs)]
+    pub fn expires_ms(&self) -> f64 {
+        self.inner.expires_ms() as f64
+    }
+
+    #[wasm_bindgen(js_name = failedAttempts)]
+    pub fn failed_attempts(&self) -> u32 {
+        self.inner.failed_attempts()
+    }
+
+    /// Returns open, used, expired or closed.
+    #[wasm_bindgen(js_name = stateAt)]
+    pub fn state_at(&self, now_ms: f64) -> Result<String, JsError> {
+        use lazy_link::SessionState::*;
+        let state = match self.inner.state_at(time(now_ms)?) {
+            Open => "open",
+            Used => "used",
+            Expired => "expired",
+            Closed => "closed",
+        };
+        Ok(state.to_owned())
+    }
+
+    /// Milliseconds the session stays open after `now_ms`; zero once it is not open.
+    #[wasm_bindgen(js_name = remainingMs)]
+    pub fn remaining_ms(&self, now_ms: f64) -> Result<f64, JsError> {
+        Ok(self.inner.remaining_ms(time(now_ms)?) as f64)
+    }
+
+    /// Returns accepted, wrongToken, expired, alreadyUsed or closed. `peer` is an address as the
+    /// platform prints it, an IPv6 one possibly with its zone (fe80::1%12); anything else throws.
+    pub fn redeem(
+        &self,
+        token: Option<String>,
+        now_ms: f64,
+        peer: Option<String>,
+    ) -> Result<String, JsError> {
         use lazy_link::RedeemResult::*;
-        let peer = peer.and_then(|p| p.parse().ok());
-        match self.inner.redeem(token.as_deref(), now_ms as i64, peer) {
+        let peer = peer
+            .map(|p| p.parse::<lazy_link::Peer>())
+            .transpose()
+            .map_err(|()| JsError::new("the peer is not an address"))?;
+        let result = match self.inner.redeem(token.as_deref(), time(now_ms)?, peer) {
             Accepted => "accepted",
             WrongToken => "wrongToken",
             Expired => "expired",
             AlreadyUsed => "alreadyUsed",
             Closed => "closed",
-        }
-        .to_owned()
+        };
+        Ok(result.to_owned())
     }
 
     pub fn end(&self) {
@@ -128,7 +201,7 @@ extern "C" {
     pub type Signer;
 
     #[wasm_bindgen(method, catch)]
-    fn sign(this: &Signer, hash: &[u8]) -> Result<Uint8Array, JsValue>;
+    fn sign(this: &Signer, hash: &[u8]) -> Result<JsValue, JsValue>;
 
     /// The same with `sign` returning a promise.
     pub type AsyncSigner;
@@ -137,15 +210,21 @@ extern "C" {
     async fn sign_later(this: &AsyncSigner, hash: &[u8]) -> Result<JsValue, JsValue>;
 }
 
+fn signature(value: JsValue) -> Result<Vec<u8>, JsValue> {
+    value
+        .dyn_into::<Uint8Array>()
+        .map(|bytes| bytes.to_vec())
+        .map_err(|_| JsError::new("the signer must return a Uint8Array").into())
+}
+
 #[wasm_bindgen(js_name = signData)]
 pub fn sign_data(signer: &Signer, data: &[u8]) -> Result<Vec<u8>, JsValue> {
-    Ok(signer.sign(&Sha256::digest(data))?.to_vec())
+    signature(signer.sign(&Sha256::digest(data))?)
 }
 
 #[wasm_bindgen(js_name = signDataAsync)]
 pub async fn sign_data_async(signer: &AsyncSigner, data: Vec<u8>) -> Result<Vec<u8>, JsValue> {
-    let signature = signer.sign_later(&Sha256::digest(&data)).await?;
-    Ok(Uint8Array::new(&signature).to_vec())
+    signature(signer.sign_later(&Sha256::digest(&data)).await?)
 }
 
 /// A panic traps: the page sees a RuntimeError and the instance is not used again.
@@ -163,6 +242,9 @@ pub fn hash_bytes(data: &[u8]) -> String {
 }
 
 #[wasm_bindgen(js_name = patternBytes)]
-pub fn pattern_bytes(len: u32) -> Vec<u8> {
-    (0..len).map(|i| (i % 251) as u8).collect()
+pub fn pattern_bytes(len: u32) -> Result<Vec<u8>, JsError> {
+    if len > MAX_PATTERN_BYTES {
+        return Err(JsError::new("at most 256 MiB"));
+    }
+    Ok((0..len).map(|i| (i % 251) as u8).collect())
 }

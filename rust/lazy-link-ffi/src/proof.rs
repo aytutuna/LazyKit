@@ -46,8 +46,28 @@ pub fn hash_bytes(data: &[u8]) -> Result<String, LinkError> {
         .collect())
 }
 
+const MAX_PATTERN_BYTES: u32 = 256 * 1024 * 1024;
+
 /// `len` bytes of the pattern `i % 251`, the one the shared test data uses for large files.
 #[uniffi::export]
 pub fn pattern_bytes(len: u32) -> Result<Vec<u8>, LinkError> {
+    if len > MAX_PATTERN_BYTES {
+        return Err(LinkError::Invalid {
+            reason: "at most 256 MiB".into(),
+        });
+    }
     Ok((0..len).map(|i| (i % 251) as u8).collect())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn pattern_bytes_has_a_cap() {
+        assert_eq!(pattern_bytes(3).unwrap(), [0, 1, 2]);
+        assert_eq!(pattern_bytes(252).unwrap()[251], 0);
+        assert!(pattern_bytes(MAX_PATTERN_BYTES + 1).is_err());
+        assert!(pattern_bytes(u32::MAX).is_err());
+    }
 }

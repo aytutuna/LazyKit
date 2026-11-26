@@ -1,7 +1,6 @@
 //! The UniFFI surface of lazy-link for Swift, Kotlin and C#.
-//! Required Notice: Copyright (c) 2026 ALAZY INC. (https://alazy.app)
+//! Required Notice: Copyright (c) 2026 Alazy Inc. (https://alazy.app)
 
-use std::net::IpAddr;
 use std::sync::Arc;
 
 mod proof;
@@ -140,6 +139,25 @@ impl From<lazy_link::RedeemResult> for RedeemResult {
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, uniffi::Enum)]
+pub enum SessionState {
+    Open,
+    Used,
+    Expired,
+    Closed,
+}
+
+impl From<lazy_link::SessionState> for SessionState {
+    fn from(state: lazy_link::SessionState) -> Self {
+        match state {
+            lazy_link::SessionState::Open => Self::Open,
+            lazy_link::SessionState::Used => Self::Used,
+            lazy_link::SessionState::Expired => Self::Expired,
+            lazy_link::SessionState::Closed => Self::Closed,
+        }
+    }
+}
+
 #[derive(uniffi::Object)]
 pub struct PairingSession {
     inner: lazy_link::PairingSession,
@@ -173,19 +191,101 @@ impl PairingSession {
         self.inner.short_code().to_owned()
     }
 
-    /// `peer` is the address the token came from, or None when the caller does not know it.
+    /// When the session ends, in the same milliseconds as `opened_ms`.
+    pub fn expires_ms(&self) -> Result<i64, LinkError> {
+        Ok(self.inner.expires_ms())
+    }
+
+    pub fn failed_attempts(&self) -> Result<u32, LinkError> {
+        Ok(self.inner.failed_attempts())
+    }
+
+    pub fn state_at(&self, now_ms: i64) -> Result<SessionState, LinkError> {
+        Ok(self.inner.state_at(now_ms).into())
+    }
+
+    /// Milliseconds the session stays open after `now_ms`; zero once it is not open.
+    pub fn remaining_ms(&self, now_ms: i64) -> Result<i64, LinkError> {
+        Ok(self.inner.remaining_ms(now_ms))
+    }
+
+    /// `peer` is the address the token came from as the platform prints it (an IPv6 address may carry
+    /// its zone, `fe80::1%12`), or None when the caller does not know it. Anything else is an error.
     pub fn redeem(
         &self,
         token: Option<String>,
         now_ms: i64,
         peer: Option<String>,
     ) -> Result<RedeemResult, LinkError> {
-        let peer = peer.and_then(|p| p.parse::<IpAddr>().ok());
+        let peer = peer
+            .map(|p| p.parse::<lazy_link::Peer>())
+            .transpose()
+            .map_err(|()| LinkError::Invalid {
+                reason: "the peer is not an address".into(),
+            })?;
         Ok(self.inner.redeem(token.as_deref(), now_ms, peer).into())
     }
 
     /// Closes the session: no token is accepted any more. (Not `close`: Kotlin gives every object one.)
     pub fn end(&self) {
         self.inner.close();
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn session() -> Arc<PairingSession> {
+        PairingSession::new(0, vec![9; 16], vec![7, 3, 21, 0, 9, 31, 12, 5]).unwrap()
+    }
+
+    fn redeem(s: &PairingSession, peer: Option<&str>) -> Result<RedeemResult, LinkError> {
+        s.redeem(Some("wrong".into()), 1, peer.map(str::to_owned))
+    }
+
+    #[test]
+    fn peers_with_a_zone_count_apart() {
+        let s = session();
+        for _ in 0..5 {
+            assert_eq!(
+                redeem(&s, Some("fe80::1%12")).unwrap(),
+                RedeemResult::WrongToken
+            );
+        }
+        assert_eq!(
+            redeem(&s, Some("fe80::1%12")).unwrap(),
+            RedeemResult::Closed
+        );
+        assert_eq!(
+            redeem(&s, Some("fe80::1%wlan0")).unwrap(),
+            RedeemResult::WrongToken
+        );
+        assert_eq!(redeem(&s, None).unwrap(), RedeemResult::WrongToken);
+    }
+
+    #[test]
+    fn a_peer_that_is_no_address_is_an_error() {
+        let s = session();
+        assert!(matches!(
+            redeem(&s, Some("nope")),
+            Err(LinkError::Invalid { .. })
+        ));
+        assert!(matches!(
+            redeem(&s, Some("fe80::1%")),
+            Err(LinkError::Invalid { .. })
+        ));
+        assert_eq!(s.failed_attempts().unwrap(), 0);
+    }
+
+    #[test]
+    fn the_countdown_is_readable() {
+        let s = session();
+        assert_eq!(s.expires_ms().unwrap(), 300_000);
+        assert_eq!(s.state_at(299_999).unwrap(), SessionState::Open);
+        assert_eq!(s.state_at(300_000).unwrap(), SessionState::Expired);
+        assert_eq!(s.remaining_ms(100_000).unwrap(), 200_000);
+        s.end();
+        assert_eq!(s.state_at(0).unwrap(), SessionState::Closed);
     }
 }

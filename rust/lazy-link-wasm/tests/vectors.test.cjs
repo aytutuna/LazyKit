@@ -59,6 +59,57 @@ test("short codes are read and redeemed as the data says", () => {
   }
 });
 
+test("peers with a zone count apart and a bad peer throws", () => {
+  const session = new link.PairingSession(0, new Uint8Array(16).fill(9), Uint8Array.from([7, 3, 21, 0, 9, 31, 12, 5]));
+  for (let i = 0; i < 5; i++) assert.equal(session.redeem("wrong", 1, "fe80::1%12"), "wrongToken");
+  assert.equal(session.redeem("wrong", 1, "fe80::1%12"), "closed");
+  assert.equal(session.redeem("wrong", 1, "fe80::1%wlan0"), "wrongToken");
+  assert.equal(session.redeem("wrong", 1, undefined), "wrongToken");
+  assert.throws(() => session.redeem("wrong", 1, "nope"), { message: "the peer is not an address" });
+  assert.equal(session.failedAttempts(), 7);
+  session.free();
+});
+
+test("times must be finite numbers", () => {
+  const token = new Uint8Array(16).fill(9);
+  const entropy = new Uint8Array(8);
+  for (const bad of [NaN, Infinity, -Infinity, 1e300]) {
+    assert.throws(() => new link.PairingSession(bad, token, entropy));
+  }
+  const session = new link.PairingSession(0, token, entropy);
+  assert.throws(() => session.redeem("x", NaN, undefined));
+  assert.throws(() => session.redeem("x", undefined, undefined));
+  assert.throws(() => session.stateAt(NaN));
+  assert.throws(() => session.remainingMs(Infinity));
+  session.free();
+});
+
+test("the countdown can be read", () => {
+  const session = new link.PairingSession(1000, new Uint8Array(16), new Uint8Array(8));
+  assert.equal(session.expiresMs(), 301000);
+  assert.equal(session.stateAt(1000), "open");
+  assert.equal(session.remainingMs(101000), 200000);
+  assert.equal(session.stateAt(301000), "expired");
+  assert.equal(session.remainingMs(301000), 0);
+  session.end();
+  assert.equal(session.stateAt(1000), "closed");
+  session.free();
+});
+
+test("a pairing code can be built", () => {
+  const code = new link.PairingCode("id", "Desk", "fp", ["10.0.0.1"], 52734, "tok");
+  assert.equal(code.desktopId, "id");
+  assert.deepEqual(code.addresses, ["10.0.0.1"]);
+  assert.equal(code.port, 52734);
+});
+
+test("an expired session stays expired when the clock goes back", () => {
+  const session = new link.PairingSession(0, new Uint8Array(16), new Uint8Array(8));
+  assert.equal(session.redeem(session.token(), 300000, undefined), "expired");
+  assert.equal(session.redeem(session.token(), 1000, undefined), "expired");
+  session.free();
+});
+
 // The key stays in these objects: Rust only sees the hash going out and the signature coming back.
 const key = crypto.randomBytes(32);
 const sign = (hash) => crypto.createHmac("sha256", key).update(hash).digest();
@@ -80,6 +131,20 @@ test("async signing round trips", async () => {
   const later = { sign: async (hash) => { await new Promise((r) => setTimeout(r, 20)); return new Uint8Array(sign(hash)); } };
   const signature = await link.signDataAsync(later, data);
   assert.deepEqual(Buffer.from(signature), expected(data));
+});
+
+test("signers must return bytes", async () => {
+  const data = Uint8Array.from([1]);
+  const message = { message: "the signer must return a Uint8Array" };
+  assert.throws(() => link.signData({ sign: () => undefined }, data), message);
+  assert.throws(() => link.signData({ sign: () => [1, 2] }, data), message);
+  await assert.rejects(link.signDataAsync({ sign: async () => undefined }, data), message);
+  await assert.rejects(link.signDataAsync({ sign: async () => "text" }, data), message);
+});
+
+test("pattern bytes have a cap", () => {
+  assert.throws(() => link.patternBytes(256 * 1024 * 1024 + 1), { message: "at most 256 MiB" });
+  assert.deepEqual(Array.from(link.patternBytes(3)), [0, 1, 2]);
 });
 
 test("fifty megabytes cross both ways", () => {
