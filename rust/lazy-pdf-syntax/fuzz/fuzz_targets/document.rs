@@ -16,8 +16,10 @@ impl Filters for Flate {
         _strict: bool,
     ) -> Result<Vec<u8>, DecodeError> {
         match filter {
-            b"FlateDecode" | b"Fl" => miniz_oxide::inflate::decompress_to_vec_zlib_with_limit(data, max_size.min(1 << 20))
-                .map_err(|e| DecodeError::Damaged(format!("{e:?}"))),
+            b"FlateDecode" | b"Fl" => {
+                miniz_oxide::inflate::decompress_to_vec_zlib_with_limit(data, max_size.min(1 << 20))
+                    .map_err(|e| DecodeError::Damaged(format!("{e:?}")))
+            }
             _ => Err(DecodeError::Unsupported("filter".into())),
         }
     }

@@ -6,6 +6,7 @@ on:
     paths:
       - rust/lazy-pdf-syntax/**
       - testdata/pdf/**
+      - rust/rust-toolchain.toml
       - .github/workflows/pdf-fuzz.yml
   schedule:
     - cron: '23 4 * * 1'
@@ -45,11 +46,13 @@ jobs:
           path: rust/lazy-pdf-syntax/fuzz/corpus/${{ matrix.target }}
           key: pdf-fuzz-corpus-${{ matrix.target }}-${{ github.run_id }}
           restore-keys: pdf-fuzz-corpus-${{ matrix.target }}-
+      - run: cargo fmt --check
+        working-directory: rust/lazy-pdf-syntax/fuzz
       - run: cargo install cargo-fuzz --version "$CARGO_FUZZ" --locked
       # cargo-fuzz has no --locked of its own, so the lock file is checked here.
       - run: cargo metadata --locked --format-version 1 --manifest-path fuzz/Cargo.toml > /dev/null
       - run: mkdir -p fuzz/corpus/${{ matrix.target }}
-      - run: cargo fuzz run ${{ matrix.target }} fuzz/corpus/${{ matrix.target }} fuzz/seeds/${{ matrix.target }} -- -max_total_time=$SECONDS_TO_FUZZ -rss_limit_mb=2048
+      - run: cargo fuzz run ${{ matrix.target }} fuzz/corpus/${{ matrix.target }} fuzz/seeds/${{ matrix.target }} -- -max_total_time=$SECONDS_TO_FUZZ -rss_limit_mb=2048 -timeout=20
       # A crash input and the corpus that led to it are kept even when the run fails.
       - uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         if: always()
