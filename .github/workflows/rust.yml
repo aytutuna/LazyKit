@@ -30,8 +30,8 @@ jobs:
         with:
           workspaces: rust
       - run: cargo fmt --check
-      - run: cargo clippy --workspace --all-targets -- -D warnings
-      - run: cargo test --workspace
+      - run: cargo clippy --workspace --all-targets --locked -- -D warnings
+      - run: cargo test --workspace --locked
 
   windows:
     runs-on: windows-latest
@@ -47,7 +47,7 @@ jobs:
       - run: rustup target add ${{ matrix.target }}
       - name: Test
         if: matrix.target == 'x86_64-pc-windows-msvc'
-        run: cargo test --workspace
+        run: cargo test --workspace --locked
       - run: cargo build --release -p lazy-link-ffi --target ${{ matrix.target }}
       - name: Size
         shell: bash
@@ -61,7 +61,7 @@ jobs:
         with:
           workspaces: rust
       - run: rustup target add aarch64-apple-ios aarch64-apple-ios-sim aarch64-apple-darwin x86_64-apple-darwin
-      - run: cargo test --workspace
+      - run: cargo test --workspace --locked
       - name: Static libraries
         run: |
           for target in aarch64-apple-ios aarch64-apple-ios-sim aarch64-apple-darwin x86_64-apple-darwin; do
