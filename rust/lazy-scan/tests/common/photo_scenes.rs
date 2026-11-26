@@ -57,6 +57,7 @@ pub struct IntHomography {
     i: i64,
 }
 
+#[allow(clippy::too_many_arguments)]
 const fn hom(
     a: i64,
     b: i64,
