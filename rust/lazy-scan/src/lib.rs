@@ -5,6 +5,7 @@ mod background;
 mod color;
 mod corners;
 mod enhancer;
+pub mod frame_quality;
 mod geometry;
 mod pipeline;
 mod refiner;
@@ -21,9 +22,3 @@ pub use enhancer::{
 };
 pub use geometry::{Point, Quad, aspect};
 pub use lazy_scan_model::{CornerModel, Heatmaps, ModelError};
-pub use pipeline::{Located, locate};
-pub use refiner::{Refinement, build_field, placement, refine};
-pub use stability::{
-    CapturePlacement, CaptureQuality, CaptureStability, CaptureState, Decision, Observation,
-    Options,
-};

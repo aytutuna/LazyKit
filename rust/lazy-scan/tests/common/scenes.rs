@@ -111,3 +111,53 @@ pub fn map_pixels(img: &Rgba, f: impl Fn(u8) -> u8) -> Rgba {
     }
     Rgba::new(img.width, img.height, data)
 }
+
+pub const QUALITY_W: usize = 320;
+pub const QUALITY_H: usize = 240;
+
+/// Lazy Scan's QualityFrames: a wooden table and a sheet from (80, 40) to (240, 200), with lines of print if asked,
+/// blurred by a box of (2 blur + 1)^2 pixels and darkened to dim/255.
+pub fn quality_frame(printed: bool, blur: usize, dim: u32) -> Rgba {
+    let (w, h) = (QUALITY_W, QUALITY_H);
+    let mut color = vec![[0u32; 3]; w * h];
+    for y in 0..h {
+        for x in 0..w {
+            let mut c = [88, 80, 72];
+            if (80..240).contains(&x) && (40..200).contains(&y) {
+                let inked = printed
+                    && (96..224).contains(&x)
+                    && (56..184).contains(&y)
+                    && (y - 56) % 4 < 2
+                    && (x - 96) % 10 < 7;
+                c = if inked {
+                    [95, 92, 100]
+                } else {
+                    [205, 200, 192]
+                };
+            }
+            color[y * w + x] = c;
+        }
+    }
+    let mut data = vec![255u8; w * h * 4];
+    for y in 0..h {
+        for x in 0..w {
+            let (mut s, mut n) = ([0u32; 3], 0u32);
+            for yy in y.saturating_sub(blur)..h.min(y + blur + 1) {
+                for xx in x.saturating_sub(blur)..w.min(x + blur + 1) {
+                    for k in 0..3 {
+                        s[k] += color[yy * w + xx][k];
+                    }
+                    n += 1;
+                }
+            }
+            for k in 0..3 {
+                data[(y * w + x) * 4 + k] = (((s[k] + n / 2) / n * dim + 127) / 255) as u8;
+            }
+        }
+    }
+    Rgba::new(w, h, data)
+}
+
+pub fn quality_sheet() -> Quad {
+    Quad::from_xy([[80.0, 40.0], [240.0, 40.0], [240.0, 200.0], [80.0, 200.0]])
+}

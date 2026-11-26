@@ -1,0 +1,22 @@
+{
+  "about": "FrameQuality (Lazy Scan's FrameQualityTests, same in Swift and C#). Frames are the QualityFrames recipe: 320 x 240, a table (88, 80, 72), a sheet (205, 200, 192) from (80, 40) to (240, 200), print (95, 92, 100) as 2 px lines every 4 px with words of 7 px every 10 px inside (96, 56) to (224, 184), a box blur of (2 blur + 1)^2 kept inside the frame, then darkened by dim / 255. Pixel values are rounded half up. Readings are over the sheet unless region is null.",
+  "frames": [
+    {"name": "printed", "printed": true, "blur": 0, "dim": 255, "fnv": "44ca3ac5", "region": "sheet", "sharpness": 8481.175490779298, "brightness": 172.04818560380727, "quality": "good"},
+    {"name": "printed, whole frame", "printed": true, "blur": 0, "dim": 255, "region": null, "sharpness": 3013.975159875271, "brightness": 112.88583333333334},
+    {"name": "blank", "printed": false, "blur": 0, "dim": 255, "fnv": "4dc7ddc5", "region": "sheet", "sharpness": 689.5895300416419, "brightness": 195.2177275431291, "quality": "good"},
+    {"name": "blank, blurred", "printed": false, "blur": 2, "dim": 255, "fnv": "1eb25e85", "region": "sheet", "sharpness": 13.418652532892908, "brightness": 195.2177275431291, "quality": "blurry"},
+    {"name": "printed, blurred", "printed": true, "blur": 2, "dim": 255, "fnv": "ca5c90c9"},
+    {"name": "printed, dim", "printed": true, "blur": 0, "dim": 40, "fnv": "ccacde45", "region": "sheet", "sharpness": 189.7358715050565, "brightness": 26.668054729327782, "quality": "dark"}
+  ],
+  "areas": [
+    {"name": "the sheet", "quad": [[80, 40], [240, 40], [240, 200], [80, 200]], "area": [78, 38, 242, 202]},
+    {"name": "tilted and partly outside", "quad": [[10.5, -4], [300.2, 20], [330, 230.1], [4, 250]], "area": [2, 0, 320, 240]},
+    {"name": "inside", "quad": [[100.4, 50.6], [150, 50.6], [150, 90.2], [100.4, 90.2]], "area": [98, 48, 152, 93]},
+    {"name": "no region", "quad": null, "area": [0, 0, 320, 240]},
+    {"name": "outside the frame", "quad": [[400, 300], [500, 300], [500, 400], [400, 400]], "area": [0, 0, 320, 240]}
+  ],
+  "shutter": {
+    "about": "The sheet held still (1 px either way by frame parity, plus 70 px from frame 40) at 10 frames a second, 60 frames, confidence 0.9: blank blurred page for frames 0 to 11, dim printed page 12 to 17, sharp printed page after. Each frame measured over the page found.",
+    "fired": [18, 47]
+  }
+}
