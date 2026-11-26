@@ -174,6 +174,11 @@ impl Huffman {
         ))
     }
 
+    /// The lines of the table, for charging a kept table to the budget.
+    pub fn lines(&self) -> usize {
+        self.low.len()
+    }
+
     /// B.2: the table a tables segment holds.
     pub fn custom(data: &[u8], start: usize, end: usize) -> Result<Self> {
         if end.saturating_sub(start) < 9 || end > data.len() {
