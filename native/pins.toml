@@ -8,6 +8,7 @@ name = "onnxruntime-nuget"
 var = "nupkg_sha"
 version = "1.24.2"
 url = "https://www.nuget.org/api/v2/package/Microsoft.ML.OnnxRuntime/1.24.2"
+notices = "https://github.com/microsoft/onnxruntime/blob/v1.24.2/ThirdPartyNotices.txt"
 sha256 = "782564d3d68e87269ea1812cc94710ad06fe014faf093f01a6f89d0bd58719d3"
 licence = "MIT"
 
