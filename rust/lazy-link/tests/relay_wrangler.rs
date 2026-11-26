@@ -1,0 +1,197 @@
+#![cfg(feature = "relay")]
+//! The relay client against the real relay Worker, run with `wrangler dev` (relay/). These tests
+//! need it listening, so they are ignored by default; the `relay-client` workflow starts it and
+//! runs them with `--ignored`. RELAY_URL names the relay, default http://127.0.0.1:8787/relay/v1.
+
+use lazy_link::relay::{
+    CLOSE_TOO_SLOW, MAX_FRAME, MAX_STREAMS, Platform, Relay, RelayError, Store, random_id, room_id,
+};
+use sha2::{Digest, Sha256};
+use std::time::Duration;
+use tokio::io::{AsyncReadExt, AsyncWriteExt};
+use tokio::time::timeout;
+
+fn url() -> String {
+    std::env::var("RELAY_URL").unwrap_or_else(|_| "http://127.0.0.1:8787/relay/v1".into())
+}
+
+// Two devices of one person: same group, different device ids.
+fn pair() -> (Relay, Relay, String) {
+    let group = random_id();
+    (
+        Relay::new(&url(), &group, &random_id()),
+        Relay::new(&url(), &group, &random_id()),
+        room_id(random_id().as_bytes()),
+    )
+}
+
+fn pattern(len: usize, seed: u8) -> Vec<u8> {
+    (0..len)
+        .map(|i| (i as u8).wrapping_mul(31).wrapping_add(seed))
+        .collect()
+}
+
+#[tokio::test(flavor = "multi_thread")]
+#[ignore = "needs the relay on RELAY_URL"]
+async fn a_transfer_crosses_the_relay_between_two_cores() {
+    let (a, b, room) = pair();
+    let mut host = a.host(&room).await.unwrap();
+    let up = pattern(3 * 1024 * 1024 + 123, 1);
+    let down = pattern(2 * 1024 * 1024 + 7, 2);
+
+    let (up_len, down_len) = (up.len(), down.len());
+    let (up_hash, down_hash) = (Sha256::digest(&up), Sha256::digest(&down));
+    let server = tokio::spawn(async move {
+        let mut s = host.accept().await.unwrap();
+        let mut got = vec![0u8; up_len];
+        s.read_exact(&mut got).await.unwrap();
+        s.write_all(&down).await.unwrap();
+        s.flush().await.unwrap();
+        // Hold the stream open until the guest has read everything.
+        let mut rest = Vec::new();
+        s.read_to_end(&mut rest).await.unwrap();
+        Sha256::digest(&got)
+    });
+
+    let s = b.connect(&room).await.unwrap();
+    let (mut rd, mut wr) = tokio::io::split(s);
+    let writer = tokio::spawn(async move {
+        wr.write_all(&up).await.unwrap();
+        wr.flush().await.unwrap();
+        wr
+    });
+    let mut got = vec![0u8; down_len];
+    rd.read_exact(&mut got).await.unwrap();
+    let mut wr = writer.await.unwrap();
+    wr.shutdown().await.unwrap();
+    assert_eq!(Sha256::digest(&got), down_hash);
+    assert_eq!(server.await.unwrap(), up_hash);
+
+    // The relay counts what it forwarded against the group, a second after it was sent.
+    let want = (up_len + down_len) as u64;
+    let mut used = 0;
+    for _ in 0..20 {
+        used = b.status().await.unwrap().used;
+        if used >= want {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(500)).await;
+    }
+    assert_eq!(used, want);
+}
+
+#[tokio::test(flavor = "multi_thread")]
+#[ignore = "needs the relay on RELAY_URL"]
+async fn the_room_holds_sixteen_streams_and_no_more() {
+    let (a, b, room) = pair();
+    let mut host = a.host(&room).await.unwrap();
+    let mut guests = Vec::new();
+    let mut ends = Vec::new();
+    for _ in 0..MAX_STREAMS {
+        // A guest's connection is answered once the host has opened its end.
+        let (guest, end) = tokio::join!(b.connect(&room), host.accept());
+        guests.push(guest.unwrap());
+        ends.push(end.unwrap());
+    }
+    assert!(matches!(
+        b.connect(&room).await,
+        Err(RelayError::TooManyStreams)
+    ));
+    drop(guests.pop());
+    // The relay learns of the close from the guest's goodbye; its slot is free a moment later.
+    let mut freed = false;
+    for _ in 0..20 {
+        let (guest, _) = tokio::join!(
+            b.connect(&room),
+            timeout(Duration::from_millis(500), host.accept())
+        );
+        if guest.is_ok() {
+            freed = true;
+            break;
+        }
+    }
+    assert!(freed);
+}
+
+#[tokio::test(flavor = "multi_thread")]
+#[ignore = "needs the relay on RELAY_URL"]
+async fn a_reader_that_stops_is_cut_off_and_the_writer_hears_why() {
+    let (a, b, room) = pair();
+    let mut host = a.host(&room).await.unwrap();
+    let (guest, stalled) = tokio::join!(b.connect(&room), host.accept());
+    let mut guest = guest.unwrap();
+    let _stalled = stalled.unwrap();
+
+    let chunk = vec![5u8; MAX_FRAME];
+    let ended = timeout(Duration::from_secs(120), async {
+        let mut sent = 0usize;
+        while guest.write_all(&chunk).await.is_ok() {
+            sent += chunk.len();
+            assert!(
+                sent < 1024 * 1024 * 1024,
+                "the relay never cut the stream off"
+            );
+        }
+    })
+    .await;
+    assert!(ended.is_ok());
+    let mut code = guest.close_code();
+    for _ in 0..20 {
+        if code.is_some() {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(100)).await;
+        code = guest.close_code();
+    }
+    assert_eq!(code, Some(CLOSE_TOO_SLOW));
+}
+
+#[tokio::test(flavor = "multi_thread")]
+#[ignore = "needs the relay on RELAY_URL"]
+async fn another_group_cannot_use_the_room() {
+    let (a, _, room) = pair();
+    let _host = a.host(&room).await.unwrap();
+    let stranger = Relay::new(&url(), &random_id(), &random_id());
+    assert!(matches!(
+        stranger.connect(&room).await,
+        Err(RelayError::WrongGroup)
+    ));
+    assert!(matches!(
+        stranger.host(&room).await,
+        Err(RelayError::WrongGroup)
+    ));
+}
+
+#[tokio::test(flavor = "multi_thread")]
+#[ignore = "needs the relay on RELAY_URL"]
+async fn push_tokens_register_and_a_missing_host_is_reported() {
+    let (a, b, room) = pair();
+    a.register_push(Platform::Fcm, "token").await.unwrap();
+    drop(a.host(&room).await.unwrap());
+    // The relay sees the host's socket close a moment after the drop.
+    let mut res = b.connect(&room).await.map(drop);
+    for _ in 0..20 {
+        if res.is_err() {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(200)).await;
+        res = b.connect(&room).await.map(drop);
+    }
+    // No push keys are set on a local relay, so nobody is woken.
+    assert!(matches!(res, Err(RelayError::NoHost { woken: false })));
+    a.drop_push().await.unwrap();
+}
+
+#[tokio::test(flavor = "multi_thread")]
+#[ignore = "needs the relay on RELAY_URL"]
+async fn a_group_starts_unpaid_and_receipts_are_not_checked_yet() {
+    let (a, _, _) = pair();
+    let status = a.status().await.unwrap();
+    assert!(!status.paid && !status.capped);
+    assert_eq!(status.used, 0);
+    assert_eq!(status.cap, 5 * 1024 * 1024 * 1024);
+    assert!(matches!(
+        a.pay(Store::Apple, "receipt").await,
+        Err(RelayError::NotConfigured)
+    ));
+}

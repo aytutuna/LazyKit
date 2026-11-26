@@ -1,0 +1,50 @@
+name: relay-client
+
+on:
+  push:
+    branches: [main, 'ci/**']
+    paths:
+      - relay/**
+      - rust/**
+      - .github/workflows/relay-client.yml
+
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  client:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: 24
+          cache: npm
+          cache-dependency-path: relay/package-lock.json
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2
+        with:
+          workspaces: rust
+      - run: npm ci
+        working-directory: relay
+      - name: Start the relay
+        working-directory: relay
+        run: |
+          npx wrangler dev --local --ip 127.0.0.1 --port 8787 > ../wrangler.log 2>&1 &
+          for i in $(seq 60); do
+            curl -sf "http://127.0.0.1:8787/relay/v1/group/$(printf 'a%.0s' $(seq 32))" > /dev/null && exit 0
+            sleep 1
+          done
+          cat ../wrangler.log
+          exit 1
+      - name: Clippy
+        working-directory: rust
+        run: cargo clippy --locked -p lazy-link --features relay --all-targets -- -D warnings
+      - name: Test against stand-in servers
+        working-directory: rust
+        run: cargo test --locked -p lazy-link --features relay
+      - name: Test against the relay
+        working-directory: rust
+        run: cargo test --locked -p lazy-link --features relay --test relay_wrangler -- --ignored
