@@ -5,9 +5,10 @@ use common::photo_scenes::*;
 use lazy_image::Rgba;
 use lazy_scan::detector::{Detection, Options as DetectorOptions, Rejection, detect};
 use lazy_scan::{
-    Action, CornerModel, EnhanceMode, Filter, Heatmaps, ModelError, Orientation, Point, Quad,
-    Reason, clamped_to_photo, corrected_page, enhance, import_photo, moved_corner, oriented,
-    page_dpi, plan, plan_detection, refine, whole_photo_dpi, whole_photo_page,
+    Action, CornerModel, EnhanceMode, Filter, Heatmaps, ModelError, Orientation, PageSizing, Point,
+    Quad, Reason, clamped_to_photo, corrected_page, enhance, import_photo, moved_corner, oriented,
+    page_dpi, page_dpi_by_long_side, plan, plan_detection, refine, whole_photo_dpi,
+    whole_photo_page,
 };
 
 // a model that answers with a bright spot at each corner of a quad given in shares of the photo
@@ -54,7 +55,7 @@ fn pattern(w: usize, h: usize) -> Rgba {
 fn the_exif_tags_turn_a_photo_upright() {
     let upright = pattern(3, 2);
     // the tag says how the stored pixels are turned to show them
-    let turned = |tag| oriented(&upright, Orientation::from_exif(tag));
+    let turned = |tag| oriented(&upright, Orientation::from_exif(tag)).into_owned();
     assert_eq!(turned(1), upright);
     assert_eq!(turned(2), upright.mirrored());
     assert_eq!(turned(3), upright.rotated_quarter_turns(2));
@@ -98,6 +99,7 @@ fn a_photo_goes_to_a_finished_page_in_one_call() {
         Orientation::UPRIGHT,
         Some(&model),
         Filter::Original,
+        PageSizing::SCAN,
         Some("CA"),
     )
     .unwrap();
@@ -125,6 +127,7 @@ fn the_filter_is_applied_to_the_cut_out_page() {
         Orientation::UPRIGHT,
         Some(&model),
         Filter::Original,
+        PageSizing::SCAN,
         None,
     )
     .unwrap();
@@ -134,7 +137,15 @@ fn the_filter_is_applied_to_the_cut_out_page() {
         (Filter::BlackAndWhite, EnhanceMode::BlackAndWhite),
         (Filter::Whiteboard, EnhanceMode::Whiteboard),
     ] {
-        let got = import_photo(&photo, Orientation::UPRIGHT, Some(&model), filter, None).unwrap();
+        let got = import_photo(
+            &photo,
+            Orientation::UPRIGHT,
+            Some(&model),
+            filter,
+            PageSizing::SCAN,
+            None,
+        )
+        .unwrap();
         let expected = enhance(&plain.page.image, mode, 0.5);
         assert_eq!(got.page.image, expected.image, "{filter:?}");
         assert_eq!(got.page.mode, Some(expected.mode));
@@ -151,6 +162,7 @@ fn a_photo_stored_turned_comes_out_as_the_same_page() {
         Orientation::UPRIGHT,
         Some(&model),
         Filter::Original,
+        PageSizing::SCAN,
         None,
     )
     .unwrap();
@@ -161,6 +173,7 @@ fn a_photo_stored_turned_comes_out_as_the_same_page() {
         Orientation::from_exif(6),
         Some(&model),
         Filter::Original,
+        PageSizing::SCAN,
         None,
     )
     .unwrap();
@@ -171,6 +184,7 @@ fn a_photo_stored_turned_comes_out_as_the_same_page() {
         Orientation::from_exif(2),
         Some(&model),
         Filter::Original,
+        PageSizing::SCAN,
         None,
     )
     .unwrap();
@@ -182,8 +196,15 @@ fn without_a_model_or_a_page_the_editor_starts_from_the_inset_rectangle() {
     let photo = plain_scene();
     let broken = Spots(None);
     for model in [None, Some(&broken as &dyn CornerModel)] {
-        let got =
-            import_photo(&photo, Orientation::UPRIGHT, model, Filter::Original, None).unwrap();
+        let got = import_photo(
+            &photo,
+            Orientation::UPRIGHT,
+            model,
+            Filter::Original,
+            PageSizing::SCAN,
+            None,
+        )
+        .unwrap();
         assert_eq!(got.plan.action, Action::Review);
         assert_eq!(got.plan.corners, Quad::start(WIDTH as f64, HEIGHT as f64));
         assert!(!got.plan.by_model);
@@ -194,14 +215,24 @@ fn without_a_model_or_a_page_the_editor_starts_from_the_inset_rectangle() {
 #[test]
 fn a_photo_without_pixels_makes_no_page() {
     let empty = Rgba::new(0, 0, vec![]);
-    assert!(import_photo(&empty, Orientation::UPRIGHT, None, Filter::Enhanced, None).is_none());
-    assert!(whole_photo_page(&empty, Filter::Original, None).is_none());
+    assert!(
+        import_photo(
+            &empty,
+            Orientation::UPRIGHT,
+            None,
+            Filter::Enhanced,
+            PageSizing::SCAN,
+            None
+        )
+        .is_none()
+    );
+    assert!(whole_photo_page(&empty, Filter::Original, PageSizing::SCAN, None).is_none());
 }
 
 #[test]
 fn the_whole_photo_page_keeps_the_photo_and_sizes_it_by_its_shape() {
     let photo = plain_scene();
-    let page = whole_photo_page(&photo, Filter::Original, Some("US")).unwrap();
+    let page = whole_photo_page(&photo, Filter::Original, PageSizing::SCAN, Some("US")).unwrap();
     assert_eq!(page.image, photo);
     assert!(page.whole_photo);
     assert_eq!(page.dpi, whole_photo_dpi(360, 480, Some("US")));
@@ -304,7 +335,10 @@ fn the_photos_corners_are_named_again_before_the_page_is_cut_out() {
     let photo = wood_scene();
     let (got, _) = plan(&photo, None);
     let q = got.corners.0;
-    let page = |q: Quad| corrected_page(&photo, &q, Filter::Original).map(|p| checksum(&p.image));
+    let page = |q: Quad| {
+        corrected_page(&photo, &q, Filter::Original, PageSizing::SCAN, None)
+            .map(|p| checksum(&p.image))
+    };
     let expected = page(got.corners).unwrap();
     assert_eq!(page(Quad([q[2], q[3], q[0], q[1]])), Some(expected));
     assert_eq!(page(Quad([q[0], q[3], q[2], q[1]])), Some(expected));
@@ -312,7 +346,9 @@ fn the_photos_corners_are_named_again_before_the_page_is_cut_out() {
         corrected_page(
             &photo,
             &quad((0.0, 0.0), (10.0, 0.0), (20.0, 0.0), (30.0, 0.0)),
-            Filter::Original
+            Filter::Original,
+            PageSizing::SCAN,
+            None
         )
         .is_none()
     );
@@ -340,7 +376,14 @@ fn a_whole_photo_takes_the_resolution_of_its_shape() {
         &Default::default(),
     )
     .unwrap();
-    let page = corrected_page(&photo, &got.corners, Filter::Original).unwrap();
+    let page = corrected_page(
+        &photo,
+        &got.corners,
+        Filter::Original,
+        PageSizing::SCAN,
+        None,
+    )
+    .unwrap();
     assert_eq!(page.dpi, page_dpi(cut.dpi));
 }
 
@@ -376,4 +419,106 @@ fn the_corner_editor_keeps_an_outline_the_page_can_be_cut_out_along() {
         clamped_to_photo(&flat, 360.0, 480.0),
         Quad::start(360.0, 480.0)
     );
+}
+
+#[test]
+fn send_sizes_a_page_by_its_long_side_over_the_usual_paper() {
+    // the cases of Lazy Send's PagePipeline.pageDPI tests
+    let dpi = page_dpi_by_long_side;
+    assert_eq!(dpi(Some(12.0), 1000, None), 50);
+    assert_eq!(dpi(Some(5000.0), 1000, None), 1200);
+    assert_eq!(dpi(Some(199.6), 1000, None), 200);
+    assert_eq!(dpi(None, 2339, Some("DE")), 200);
+    assert_eq!(dpi(Some(f64::NAN), 2339, Some("DE")), 200);
+    assert_eq!(dpi(None, 2339, Some("us")), 213);
+    assert_eq!(dpi(None, 3000, None), 257);
+    assert_eq!(dpi(None, 100, Some("CA")), 50);
+    assert_eq!(dpi(None, 0, Some("CA")), 200);
+}
+
+fn flat(width: usize, height: usize) -> Rgba {
+    Rgba::new(width, height, vec![180; width * height * 4])
+}
+
+fn rect(x: f64, y: f64, w: f64, h: f64) -> Quad {
+    quad((x, y), (x + w, y), (x + w, y + h), (x, y + h))
+}
+
+#[test]
+fn send_caps_a_close_up_page_at_3508_pixels() {
+    // an A4 sheet filling a 3200 x 4500 photo
+    let photo = flat(3200, 4500);
+    let corners = rect(50.0, 50.0, 3100.0, 4384.0);
+    let scan = corrected_page(&photo, &corners, Filter::Original, PageSizing::SCAN, None).unwrap();
+    let send = corrected_page(&photo, &corners, Filter::Original, PageSizing::SEND, None).unwrap();
+    assert!(scan.image.height > 4000);
+    assert_eq!(send.image.height, 3508);
+    assert_eq!(send.dpi, 300);
+    assert!(send.dpi < scan.dpi);
+}
+
+#[test]
+fn send_sizes_a_page_that_matches_no_paper_by_the_usual_paper_of_the_region() {
+    // a receipt: 2.2 times as long as wide, no paper size has that shape
+    let photo = flat(1200, 2400);
+    let corners = rect(100.0, 100.0, 900.0, 2000.0);
+    let long = |p: &lazy_scan::Page| p.image.width.max(p.image.height);
+    let scan = corrected_page(
+        &photo,
+        &corners,
+        Filter::Original,
+        PageSizing::SCAN,
+        Some("US"),
+    )
+    .unwrap();
+    assert_eq!(scan.dpi, 200);
+    let us = corrected_page(
+        &photo,
+        &corners,
+        Filter::Original,
+        PageSizing::SEND,
+        Some("US"),
+    )
+    .unwrap();
+    let de = corrected_page(
+        &photo,
+        &corners,
+        Filter::Original,
+        PageSizing::SEND,
+        Some("DE"),
+    )
+    .unwrap();
+    assert_eq!(us.dpi, page_dpi_by_long_side(None, long(&us), Some("US")));
+    assert_eq!(de.dpi, page_dpi_by_long_side(None, long(&de), Some("DE")));
+    assert_eq!(long(&us), 2000);
+    assert_eq!(us.dpi, 182);
+    assert_eq!(de.dpi, 171);
+}
+
+#[test]
+fn send_sizes_a_whole_photo_without_matching_its_shape() {
+    // Letter-shaped, in a region that uses A4: long / 11.69, not the 11 in of the shape Scan matches
+    let photo = flat(2550, 3300);
+    let scan = whole_photo_page(&photo, Filter::Original, PageSizing::SCAN, Some("DE")).unwrap();
+    let send = whole_photo_page(&photo, Filter::Original, PageSizing::SEND, Some("DE")).unwrap();
+    assert_eq!(scan.dpi, whole_photo_dpi(2550, 3300, Some("DE")));
+    assert_eq!(send.dpi, 282);
+    assert_eq!((send.image.width, send.image.height), (2550, 3300));
+    let us = whole_photo_page(&photo, Filter::Original, PageSizing::SEND, Some("US")).unwrap();
+    assert_eq!(us.dpi, 300);
+}
+
+#[test]
+fn an_upright_photo_is_not_copied_and_odd_sizes_leave_a_quad_as_it_was() {
+    let photo = pattern(3, 2);
+    assert!(matches!(
+        oriented(&photo, Orientation::UPRIGHT),
+        std::borrow::Cow::Borrowed(_)
+    ));
+    let q = quad((50.0, 50.0), (300.0, 60.0), (290.0, 400.0), (40.0, 380.0));
+    for (w, h) in [(f64::NAN, 500.0), (400.0, -1.0), (f64::INFINITY, 500.0)] {
+        assert_eq!(clamped_to_photo(&q, w, h), q);
+        assert_eq!(moved_corner(&q, 0, Point::new(10.0, 10.0), w, h), q);
+        assert_eq!(q.clamped_to_photo(w, h), q);
+    }
 }

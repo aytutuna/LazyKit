@@ -34,9 +34,10 @@ pub use live::{
     MIN_FRAME_GAP_MS, PageThumbnail, Steadied, edge_search,
 };
 pub use photo::{
-    Action, Filter, ImportPlan, Imported, MAX_DPI, MIN_DPI, NOMINAL_DPI, Orientation, Page, Reason,
-    clamped_to_photo, corrected_page, import_photo, model_plan, moved_corner, oriented, page_dpi,
-    plan, plan_detection, whole_photo_dpi, whole_photo_page,
+    Action, DpiRule, Filter, ImportPlan, Imported, MAX_DPI, MIN_DPI, NOMINAL_DPI, Orientation,
+    Page, PageSizing, Reason, clamped_to_photo, corrected_page, import_photo, model_plan,
+    moved_corner, oriented, page_dpi, page_dpi_by_long_side, plan, plan_detection, whole_photo_dpi,
+    whole_photo_page,
 };
 pub use pipeline::{Located, locate};
 pub use refiner::{Refinement, build_field, placement, refine};

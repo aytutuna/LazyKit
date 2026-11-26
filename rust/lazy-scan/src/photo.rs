@@ -7,10 +7,11 @@ use crate::refiner::refine;
 use crate::warp::{self, DOCUMENTS, PAPER_ASPECT_TOLERANCE};
 use lazy_image::Rgba;
 use lazy_scan_model::CornerModel;
+use std::borrow::Cow;
 
 // A photo to a finished page, as Lazy Scan's PhotoImport and Lazy Send's page pipeline do it: turned upright by its
 // orientation tag, the page looked for (the corner model first), cut out along its corners with the perspective corrected,
-// then cleaned up with the chosen filter.
+// then cleaned up with the chosen filter. The two apps size the page differently; `PageSizing` picks the rules.
 
 /// The resolution of a page whose paper size is not known.
 pub const NOMINAL_DPI: u32 = 200;
@@ -62,17 +63,18 @@ impl Orientation {
     }
 }
 
-/// The photo the right way up.
-pub fn oriented(stored: &Rgba, orientation: Orientation) -> Rgba {
-    let image = if orientation.mirrored {
-        stored.mirrored()
-    } else {
-        stored.clone()
-    };
-    if orientation.quarter_turns.rem_euclid(4) == 0 {
-        image
-    } else {
-        image.rotated_quarter_turns(orientation.quarter_turns)
+/// The photo the right way up; borrowed as it is when it already is.
+pub fn oriented(stored: &Rgba, orientation: Orientation) -> Cow<'_, Rgba> {
+    let turns = orientation.quarter_turns.rem_euclid(4);
+    match (orientation.mirrored, turns) {
+        (false, 0) => Cow::Borrowed(stored),
+        (true, 0) => Cow::Owned(stored.mirrored()),
+        (false, _) => Cow::Owned(stored.rotated_quarter_turns(orientation.quarter_turns)),
+        (true, _) => Cow::Owned(
+            stored
+                .mirrored()
+                .rotated_quarter_turns(orientation.quarter_turns),
+        ),
     }
 }
 
@@ -155,6 +157,38 @@ pub fn model_plan(
     }))
 }
 
+/// How a page's resolution is worked out.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum DpiRule {
+    /// Lazy Scan's: a cut page takes the resolution of the paper size it matches, else `NOMINAL_DPI`; a whole photo takes the
+    /// paper its shape matches, else the usual paper's length in the user's region.
+    Scan,
+    /// Lazy Send's: a cut page takes the resolution of the paper size it matches, else its long side over the usual paper's
+    /// length in the user's region; a whole photo always does the latter, without matching its shape.
+    Send,
+}
+
+/// The size rules of a page made from a photo.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct PageSizing {
+    /// The longest side of a cut page in pixels; 0 for no limit. A whole photo is never scaled.
+    pub max_long_side: usize,
+    pub rule: DpiRule,
+}
+
+impl PageSizing {
+    /// Lazy Scan's PhotoImport: no cap.
+    pub const SCAN: PageSizing = PageSizing {
+        max_long_side: 0,
+        rule: DpiRule::Scan,
+    };
+    /// Lazy Send's PagePipeline: a cut page at most 3508 px long (A4 at 300 dpi), however close the camera was.
+    pub const SEND: PageSizing = PageSizing {
+        max_long_side: 3508,
+        rule: DpiRule::Send,
+    };
+}
+
 /// A page cut out of its photo.
 #[derive(Clone, Debug)]
 pub struct Page {
@@ -177,12 +211,24 @@ pub fn page_dpi(dpi: Option<f64>) -> u32 {
     }
 }
 
-fn usual_paper_long_inches(region: Option<&str>) -> f64 {
+fn usual_paper_long_inches(region: Option<&str>, a4: f64) -> f64 {
     let code = region.unwrap_or("").trim().to_uppercase();
     if LETTER_REGIONS.contains(&code.as_str()) {
         11.0
     } else {
-        11.6929
+        a4
+    }
+}
+
+/// Lazy Send's `pageDPI`: `dpi` rounded and kept within `MIN_DPI` to `MAX_DPI`; when it is not known, the resolution that
+/// makes `long_side` the long side of the usual paper where the user lives (11 in for Letter, 11.69 in for A4).
+pub fn page_dpi_by_long_side(dpi: Option<f64>, long_side: usize, region: Option<&str>) -> u32 {
+    match dpi {
+        Some(d) if d.is_finite() && d > 0.0 => page_dpi(Some(d)),
+        _ if long_side > 0 => page_dpi(Some(
+            long_side as f64 / usual_paper_long_inches(region, 11.69),
+        )),
+        _ => page_dpi(None),
     }
 }
 
@@ -199,7 +245,7 @@ pub fn whole_photo_dpi(width: usize, height: usize, region: Option<&str>) -> u32
             let (w, h) = m.paper.inches();
             w.max(h)
         }
-        None => usual_paper_long_inches(region),
+        None => usual_paper_long_inches(region, 11.6929),
     };
     page_dpi(Some(long / inches))
 }
@@ -216,13 +262,27 @@ fn cleaned(image: Rgba, filter: Filter) -> (Rgba, Option<EnhanceMode>) {
 
 /// The page cut out of `photo` along `corners` (named again from the top left), its perspective corrected, then cleaned up.
 /// `None` when the corners outline no page.
-pub fn corrected_page(photo: &Rgba, corners: &Quad, filter: Filter) -> Option<Page> {
+pub fn corrected_page(
+    photo: &Rgba,
+    corners: &Quad,
+    filter: Filter,
+    sizing: PageSizing,
+    region: Option<&str>,
+) -> Option<Page> {
     let named = Quad::from_corners(corners.0);
-    let (cut, plan) = warp::correct(photo, &named, &warp::Options::default())?;
+    let options = warp::Options {
+        max_long_side: sizing.max_long_side,
+        ..warp::Options::default()
+    };
+    let (cut, plan) = warp::correct(photo, &named, &options)?;
+    let dpi = match sizing.rule {
+        DpiRule::Scan => page_dpi(plan.dpi),
+        DpiRule::Send => page_dpi_by_long_side(plan.dpi, cut.width.max(cut.height), region),
+    };
     let (image, mode) = cleaned(cut, filter);
     Some(Page {
         image,
-        dpi: page_dpi(plan.dpi),
+        dpi,
         mode,
         corners: named,
         whole_photo: false,
@@ -230,11 +290,19 @@ pub fn corrected_page(photo: &Rgba, corners: &Quad, filter: Filter) -> Option<Pa
 }
 
 /// The whole photo as the page, with only the filter applied. `None` for a photo without pixels.
-pub fn whole_photo_page(photo: &Rgba, filter: Filter, region: Option<&str>) -> Option<Page> {
+pub fn whole_photo_page(
+    photo: &Rgba,
+    filter: Filter,
+    sizing: PageSizing,
+    region: Option<&str>,
+) -> Option<Page> {
     if photo.width == 0 || photo.height == 0 {
         return None;
     }
-    let dpi = whole_photo_dpi(photo.width, photo.height, region);
+    let dpi = match sizing.rule {
+        DpiRule::Scan => whole_photo_dpi(photo.width, photo.height, region),
+        DpiRule::Send => page_dpi_by_long_side(None, photo.width.max(photo.height), region),
+    };
     let (image, mode) = cleaned(photo.clone(), filter);
     Some(Page {
         image,
@@ -262,6 +330,9 @@ pub struct Imported {
 
 /// `quad` with every corner moved into the photo; the start rectangle when that leaves no usable outline.
 pub fn clamped_to_photo(quad: &Quad, width: f64, height: f64) -> Quad {
+    if !(width >= 0.0 && height >= 0.0 && width.is_finite() && height.is_finite()) {
+        return *quad;
+    }
     let clamped = quad.clamped_to_photo(width, height);
     if clamped.usable() {
         clamped
@@ -273,6 +344,9 @@ pub fn clamped_to_photo(quad: &Quad, width: f64, height: f64) -> Quad {
 /// `quad` with corner `index` (0 top left, then clockwise, wrapping) moved to `to`, kept within the photo; the quad as it was
 /// when the move would leave corners the page cannot be cut out along.
 pub fn moved_corner(quad: &Quad, index: usize, to: Point, width: f64, height: f64) -> Quad {
+    if !(width >= 0.0 && height >= 0.0 && width.is_finite() && height.is_finite()) {
+        return *quad;
+    }
     let mut corners = quad.0;
     corners[index & 3] = Point::new(to.x.clamp(0.0, width), to.y.clamp(0.0, height));
     let moved = Quad(corners);
@@ -349,6 +423,7 @@ pub fn import_photo(
     orientation: Orientation,
     model: Option<&dyn CornerModel>,
     filter: Filter,
+    sizing: PageSizing,
     region: Option<&str>,
 ) -> Option<Imported> {
     let photo = oriented(stored, orientation);
@@ -356,8 +431,8 @@ pub fn import_photo(
         return None;
     }
     let (plan, model_failed) = plan(&photo, model);
-    let page = corrected_page(&photo, &plan.corners, filter)
-        .or_else(|| whole_photo_page(&photo, filter, region))?;
+    let page = corrected_page(&photo, &plan.corners, filter, sizing, region)
+        .or_else(|| whole_photo_page(&photo, filter, sizing, region))?;
     Some(Imported {
         plan,
         page,

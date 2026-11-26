@@ -150,6 +150,9 @@ impl Quad {
 
     /// Every corner moved into the photo so the editor's handles stay where they can be seen.
     pub fn clamped_to_photo(&self, width: f64, height: f64) -> Quad {
+        if !(width >= 0.0 && height >= 0.0 && width.is_finite() && height.is_finite()) {
+            return *self;
+        }
         Quad(
             self.0
                 .map(|p| Point::new(p.x.clamp(0.0, width), p.y.clamp(0.0, height))),
