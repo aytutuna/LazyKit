@@ -6,6 +6,8 @@ on:
     paths:
       - rust/**
       - testdata/link/**
+      - testdata/scan/**
+      - tools/patch_einsum.py
       - .github/workflows/rust.yml
 
 permissions:
@@ -127,3 +129,50 @@ jobs:
           WASM_PKG: target/wasm-pkg
       - name: Size
         run: ls -l target/wasm-pkg/lazy_link_wasm_bg.wasm | awk '{print "wasm", $5}' | tee -a "$GITHUB_STEP_SUMMARY"
+
+  scan:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+    env:
+      LAZY_SCAN_REQUIRE_MODEL: 1
+    steps:
+      - uses: actions/checkout@v7
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: rust
+          key: scan
+      - uses: actions/cache@v4
+        with:
+          path: rust/lazy-scan-model/models
+          key: scan-models-${{ runner.os }}-${{ hashFiles('rust/lazy-scan-model/scripts/fetch.sh', 'tools/patch_einsum.py') }}
+      - name: Fetch the model and ONNX Runtime
+        shell: bash
+        run: bash lazy-scan-model/scripts/fetch.sh
+      - name: Test with tract and ONNX Runtime
+        run: cargo test --release -p lazy-scan --features tract,ort -- --nocapture
+
+  scan-wasm:
+    runs-on: ubuntu-latest
+    env:
+      LAZY_SCAN_REQUIRE_MODEL: 1
+      RUSTFLAGS: -C target-feature=+simd128
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: rust
+          key: scan-wasm
+      - run: rustup target add wasm32-unknown-unknown wasm32-wasip1
+      - run: bash lazy-scan-model/scripts/fetch.sh lazy-scan-model/models models
+      - name: Build for the browser
+        run: cargo build --release -p lazy-scan --features tract --target wasm32-unknown-unknown
+      - name: Test in WASI
+        env:
+          CARGO_TARGET_WASM32_WASIP1_RUNNER: node ${{ github.workspace }}/rust/scripts/run-wasi.mjs
+        run: cargo test --release -p lazy-scan --features tract --target wasm32-wasip1 -- --nocapture
