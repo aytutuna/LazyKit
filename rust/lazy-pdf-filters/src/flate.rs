@@ -166,7 +166,8 @@ fn predict_tiff(data: &mut [u8], row_length: usize, colors: usize, bits: usize, 
                 }
             }
             _ => {
-                let count = ((columns as u64 * colors as u64).min((row.len() * 8 / bits) as u64)) as usize;
+                let count =
+                    ((columns as u64 * colors as u64).min((row.len() * 8 / bits) as u64)) as usize;
                 let mask = (1usize << bits) - 1;
                 for j in colors..count {
                     let sum = component(row, j, bits) + component(row, j - colors, bits);

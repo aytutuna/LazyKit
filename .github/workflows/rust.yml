@@ -6,6 +6,7 @@ on:
     paths:
       - rust/**
       - testdata/link/**
+      - testdata/pdf-filters/**
       - .github/workflows/rust.yml
 
 permissions:
