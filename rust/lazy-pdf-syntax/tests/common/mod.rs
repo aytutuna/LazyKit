@@ -89,6 +89,7 @@ impl Filters for TestFilters {
     }
 }
 
+pub mod fixtures;
 pub mod pdf;
 
 pub fn open(file: Vec<u8>) -> lazy_pdf_syntax::Document {
