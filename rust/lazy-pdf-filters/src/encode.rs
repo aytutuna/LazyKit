@@ -100,7 +100,7 @@ pub fn lzw(data: &[u8], early_change: bool) -> Vec<u8> {
     let mut table: HashMap<u32, usize> = HashMap::new();
     let early = early_change as usize;
     let mut next = FIRST;
-    // The encoder's table runs one entry ahead of the decoder's, hence the minus one.
+    // The encoder's table runs one entry ahead of the decoder's, so it widens one entry later.
     let grow = |next: &mut usize, bits: &mut u32| {
         *next += 1;
         if *next + early > 1 << *bits && *bits < 12 {

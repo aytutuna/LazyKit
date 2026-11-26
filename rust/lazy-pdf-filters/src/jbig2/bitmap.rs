@@ -13,7 +13,8 @@
  * limitations under the License.
  */
 
-// Ported from pdf.js (src/core/jbig2.js) by way of Lazy PDF's C# decoder.
+// Ported from pdf.js (src/core/jbig2.js) by way of Lazy PDF's C# decoder, and changed: written in Rust, one byte
+// per pixel, with the sizes checked against the budget.
 
 use super::budget::Budget;
 use crate::error::Result;
