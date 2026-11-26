@@ -114,6 +114,7 @@ fn check(name: &str, model: &dyn CornerModel, photos: &[Photo]) -> Vec<Quad> {
         .collect()
 }
 
+#[cfg(feature = "ort")]
 fn same(a: &[Quad], b: &[Quad], within: f64) {
     for (x, y) in a.iter().zip(b) {
         assert!(
