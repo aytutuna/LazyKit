@@ -83,8 +83,7 @@ impl Quad {
     /// Whether the page can be cut out and straightened: a convex outline whose shape comes out as a finite sheet (the
     /// reference's `PerspectiveCorrector.plan` returns nothing otherwise).
     pub fn correctable(&self, width: f64, height: f64) -> bool {
-        let shape = aspect(self, width, height);
-        width > 0.0 && height > 0.0 && self.is_convex() && shape.is_finite() && shape > 0.0
+        crate::warp::plan(self, width as usize, height as usize, &Default::default()).is_some()
     }
 
     /// Every corner moved into the photo so the editor's handles stay where they can be seen.
@@ -147,7 +146,8 @@ fn dot(a: [f64; 3], b: [f64; 3]) -> f64 {
 
 /// The page's width over its height as the sheet is, not as the camera sees it. With the optical centre in the middle of
 /// the photo, the four corners fix the focal length and then the sheet's shape (Zhang and He, whiteboard scanning). Falls
-/// back to the mean of opposite edges when the page is square on or the solution is degenerate.
+/// back to the mean of opposite edges when the page is square on or the solution is degenerate. This is Lazy Collect's
+/// TypeScript estimator, kept for its parity tests; the checks and the cut-out use `warp::estimate_aspect`.
 pub fn aspect(q: &Quad, image_width: f64, image_height: f64) -> f64 {
     let plain = (q.edge(0) + q.edge(2)) / (q.edge(1) + q.edge(3));
     let (u0, v0) = (image_width / 2.0, image_height / 2.0);

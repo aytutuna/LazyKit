@@ -1,4 +1,5 @@
-use crate::geometry::{Point, Quad, aspect};
+use crate::geometry::{Point, Quad};
+use crate::warp::estimate_aspect;
 use lazy_image::Rgba;
 
 // DocAligner's FastViT-T8 page corner model (Apache-2.0), read as Lazy Scan reads it: the photo stretched to 256 x 256 and
@@ -135,8 +136,8 @@ pub fn acceptable(found: &Found, width: f64, height: f64) -> bool {
     if !(0.1..=1.0).contains(&share) {
         return false;
     }
-    let wide = aspect(&Quad::from_corners(q.0), width, height);
-    wide.max(1.0 / wide) <= MAX_LONG_OVER_SHORT
+    estimate_aspect(&Quad::from_corners(q.0), width, height).long_over_short()
+        <= MAX_LONG_OVER_SHORT
 }
 
 #[cfg(test)]
@@ -280,6 +281,17 @@ mod tests {
             confidence: 0.9,
         };
         assert!(!acceptable(&tiny, 800.0, 600.0));
+    }
+
+    #[test]
+    fn an_almost_square_page_with_little_perspective_is_kept() {
+        // the Zhang-He estimate of this outline reads 0.42 (a focal length of 39 diagonals); the reference keeps it
+        let corners = [(110.0, 30.0), (490.0, 10.0), (430.0, 420.0), (40.0, 440.0)];
+        let found = Found {
+            quad: Quad(corners.map(|(x, y)| Point::new(x / 640.0, y / 480.0))),
+            confidence: 0.95,
+        };
+        assert!(acceptable(&found, 640.0, 480.0));
     }
 
     #[test]
