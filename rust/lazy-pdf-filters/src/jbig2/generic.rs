@@ -183,8 +183,8 @@ pub(crate) fn refine(
     height: i64,
     template: i32,
     reference: &Bitmap,
-    offset_x: i32,
-    offset_y: i32,
+    offset_x: i64,
+    offset_y: i64,
     typical_prediction: bool,
     at: &[i32],
 ) -> Result<Bitmap> {
@@ -219,10 +219,14 @@ pub(crate) fn refine(
             let index = (i * width + j) as usize;
             // 6.3.5.6: where the 3 by 3 pixels of the reference around this one agree, so does the new pixel.
             if ltp != 0 {
-                let center = reference_pixel(reference, j - offset_x, i - offset_y);
-                let same = (-1..=1).all(|dy| {
-                    (-1..=1).all(|dx| {
-                        reference_pixel(reference, j - offset_x + dx, i - offset_y + dy) == center
+                let center = reference_pixel(reference, j as i64 - offset_x, i as i64 - offset_y);
+                let same = (-1i64..=1).all(|dy| {
+                    (-1i64..=1).all(|dx| {
+                        reference_pixel(
+                            reference,
+                            j as i64 - offset_x + dx,
+                            i as i64 - offset_y + dy,
+                        ) == center
                     })
                 });
                 if same {
@@ -240,8 +244,11 @@ pub(crate) fn refine(
             }
             for k in 0..rx.len() {
                 label = (label << 1)
-                    | reference_pixel(reference, j + rx[k] - offset_x, i + ry[k] - offset_y)
-                        as usize;
+                    | reference_pixel(
+                        reference,
+                        (j + rx[k]) as i64 - offset_x,
+                        (i + ry[k]) as i64 - offset_y,
+                    ) as usize;
             }
             bitmap.pixels[index] = arith.bit(&mut contexts, label) as u8;
         }
@@ -250,10 +257,50 @@ pub(crate) fn refine(
     Ok(bitmap)
 }
 
-fn reference_pixel(reference: &Bitmap, x: i32, y: i32) -> u8 {
-    if x < 0 || y < 0 || x as usize >= reference.width || y as usize >= reference.height {
+fn reference_pixel(reference: &Bitmap, x: i64, y: i64) -> u8 {
+    if x < 0 || y < 0 || x >= reference.width as i64 || y >= reference.height as i64 {
         0
     } else {
         reference.pixels[y as usize * reference.width + x as usize]
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // Offsets come straight from a stream; none of them may panic in a debug build.
+    #[test]
+    fn refinement_offsets_at_the_extremes_do_not_overflow() {
+        let reference = Bitmap::new(4, 4, &mut Budget::new()).unwrap();
+        let data = [0x55u8; 16];
+        for template in 0..2 {
+            for typical in [false, true] {
+                for offset in [
+                    i32::MIN as i64 * 2,
+                    i32::MAX as i64 * 2,
+                    i32::MIN as i64,
+                    i32::MAX as i64,
+                ] {
+                    let mut budget = Budget::new();
+                    let mut arith = Arith::new(&data, 0, data.len(), None, None).unwrap();
+                    let at = [-1, -1, -1, -1];
+                    let bitmap = refine(
+                        &mut budget,
+                        &mut arith,
+                        4,
+                        4,
+                        template,
+                        &reference,
+                        offset,
+                        -offset,
+                        typical,
+                        &at,
+                    )
+                    .unwrap();
+                    assert_eq!(bitmap.pixels.len(), 16);
+                }
+            }
+        }
     }
 }

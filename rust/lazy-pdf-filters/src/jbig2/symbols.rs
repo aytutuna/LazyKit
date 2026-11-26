@@ -372,5 +372,5 @@ fn aggregate<'a>(
         p: &text,
         refinement_contexts: Some(refine_contexts),
     };
-    decoder.refine_with(reference, width, height, rdx, rdy)
+    decoder.refine_with(reference, width, height, rdx as i64, rdy as i64)
 }

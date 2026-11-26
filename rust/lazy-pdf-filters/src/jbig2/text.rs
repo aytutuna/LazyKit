@@ -264,7 +264,13 @@ impl<'a> Text<'a, '_> {
             ));
         }
         self.budget.work(width * height)?;
-        self.refine_with(symbol, width, height, (rdw >> 1) + rdx, (rdh >> 1) + rdy)
+        self.refine_with(
+            symbol,
+            width,
+            height,
+            (rdw >> 1) as i64 + rdx as i64,
+            (rdh >> 1) as i64 + rdy as i64,
+        )
     }
 
     /// The refinement coded in the arithmetic data, or in a size and a block of its own when Huffman coded.
@@ -273,8 +279,8 @@ impl<'a> Text<'a, '_> {
         reference: &Bitmap,
         width: i64,
         height: i64,
-        dx: i32,
-        dy: i32,
+        dx: i64,
+        dy: i64,
     ) -> Result<Bitmap> {
         let p = self.p;
         if !p.huffman {
