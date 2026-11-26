@@ -4,6 +4,7 @@
 mod base64url;
 mod fingerprint;
 mod pairing_uri;
+mod session;
 mod short_code;
 
 pub use fingerprint::{
@@ -13,5 +14,9 @@ pub use fingerprint::{
 pub use pairing_uri::{
     PairingUri, PairingUriError, TOKEN_LENGTH, VERSION, is_valid_address, is_valid_id,
     parse_pairing_uri, percent_decode, percent_encode,
+};
+pub use session::{
+    LIFETIME_MS, MAX_FAILED_ATTEMPTS, MAX_TOTAL_FAILED_ATTEMPTS, PairingSession, RedeemResult,
+    SessionState,
 };
 pub use short_code::{ALPHABET, SHORT_CODE_LENGTH, normalize_short_code};
