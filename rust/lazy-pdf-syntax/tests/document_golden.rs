@@ -367,3 +367,37 @@ fn document_output_is_the_golden_file() {
     }
     assert_eq!(actual.lines().count(), expected.lines().count());
 }
+
+/// Writes the files the golden test builds, and the cases of the lexer golden, as the fuzzers' first inputs. Run with
+/// `cargo test --test document_golden -- --ignored`.
+#[test]
+#[ignore]
+fn write_fuzz_seeds() {
+    let seeds = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("fuzz/seeds");
+    std::fs::create_dir_all(seeds.join("document")).unwrap();
+    std::fs::create_dir_all(seeds.join("lexer")).unwrap();
+    let input = golden("document/document-input.txt");
+    let mut names: Vec<&str> = input
+        .lines()
+        .filter(|l| !l.is_empty() && !l.starts_with("# ") && !l.contains("aes"))
+        .filter_map(|l| l.split(' ').nth(1))
+        .collect();
+    names.sort();
+    names.dedup();
+    for name in names {
+        std::fs::write(seeds.join("document").join(name), make(name)).unwrap();
+    }
+    let lexer = golden("syntax/lexer-input.txt");
+    for (i, line) in lexer
+        .lines()
+        .filter(|l| !l.is_empty() && !l.starts_with("# "))
+        .enumerate()
+    {
+        let rest = line.split_once(' ').map_or("", |(_, rest)| rest);
+        std::fs::write(
+            seeds.join("lexer").join(format!("case-{i:03}")),
+            common::unescape(rest),
+        )
+        .unwrap();
+    }
+}

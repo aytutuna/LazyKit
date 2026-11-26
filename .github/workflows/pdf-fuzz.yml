@@ -1,0 +1,50 @@
+name: pdf-fuzz
+
+on:
+  push:
+    branches: [main, 'ci/**']
+    paths:
+      - rust/lazy-pdf-syntax/**
+      - .github/workflows/pdf-fuzz.yml
+  schedule:
+    - cron: '23 4 * * 1'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: always
+  # cargo-fuzz passes sanitizer flags that only nightly accepts; this lets the pinned stable toolchain take them.
+  RUSTC_BOOTSTRAP: 1
+  CARGO_FUZZ: 0.13.2
+
+defaults:
+  run:
+    working-directory: rust/lazy-pdf-syntax
+
+jobs:
+  fuzz:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    strategy:
+      fail-fast: false
+      matrix:
+        target: [lexer, document]
+    env:
+      # A short run on every push, a long one every week.
+      SECONDS_TO_FUZZ: ${{ github.event_name == 'schedule' && 1500 || 30 }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2
+        with:
+          workspaces: rust/lazy-pdf-syntax/fuzz
+      - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: rust/lazy-pdf-syntax/fuzz/corpus/${{ matrix.target }}
+          key: pdf-fuzz-corpus-${{ matrix.target }}-${{ github.run_id }}
+          restore-keys: pdf-fuzz-corpus-${{ matrix.target }}-
+      - run: cargo install cargo-fuzz --version "$CARGO_FUZZ" --locked
+      # cargo-fuzz has no --locked of its own, so the lock file is checked here.
+      - run: cargo metadata --locked --format-version 1 --manifest-path fuzz/Cargo.toml > /dev/null
+      - run: cargo fuzz run ${{ matrix.target }} fuzz/corpus/${{ matrix.target }} fuzz/seeds/${{ matrix.target }} -- -max_total_time=$SECONDS_TO_FUZZ -rss_limit_mb=2048

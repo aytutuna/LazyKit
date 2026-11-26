@@ -235,7 +235,7 @@ impl Document {
             return (Some(value), generation);
         }
         self.add_repair(format!("Object {number} could not be read."));
-        (None, entry.generation)
+        (None, 0)
     }
 
     /// The object at `offset` if its header is for `number` (any number when it is 0) and it parses.
