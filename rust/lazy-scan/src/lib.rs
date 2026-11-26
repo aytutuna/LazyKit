@@ -18,6 +18,7 @@ pub mod gray_image;
 mod live;
 pub mod mask_ops;
 pub mod multi_quad;
+pub mod page_flatten;
 mod page_quality;
 mod photo;
 mod pipeline;
