@@ -100,3 +100,11 @@
 < FF
 > jbig2 with-globals.bin globals.bin - - 70x44
 < length=396 fnv=187f3abc
+> jbig2 halftone-arith.bin - 30:80,93:5a - -
+< error damaged: A JBIG2 halftone region has no pattern dictionary.
+> jbig2 text-huffman.bin - 30:80,213:5a - -
+< error damaged: A JBIG2 Huffman code is not in its table.
+> jbig2 text-arith.bin - 61:80,162:5a - -
+< error damaged: A JBIG2 integer is out of range.
+> jbig2 generic-t0.bin - 45:5a - -
+< error unsupported: A stream expands past the size limit.

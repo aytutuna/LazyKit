@@ -13,7 +13,7 @@ fn too_big(result: lazy_pdf_filters::Result<Vec<u8>>) {
 #[test]
 fn flate_bomb_stops_at_the_cap() {
     let zeros = vec![0u8; 1 << 20];
-    let packed = miniz_oxide::deflate::compress_to_vec_zlib(&zeros, 6);
+    let packed = lazy_pdf_filters::encode::flate(&zeros, 6);
     assert_eq!(
         decode(&packed, &one("FlateDecode"), 1 << 20).unwrap(),
         zeros
@@ -145,6 +145,30 @@ fn jbig2_region_rows_below_the_page_are_not_decoded() {
     let start = std::time::Instant::now();
     jbig2(&data, 11585, 11585).unwrap();
     assert!(start.elapsed().as_secs() < 5);
+}
+
+#[test]
+fn jbig2_many_custom_tables_are_charged_to_the_budget() {
+    let mut body = vec![0u8];
+    body.extend(0i32.to_be_bytes());
+    body.extend(4096i32.to_be_bytes());
+    body.extend(vec![0u8; 1026]);
+    let mut data = page(61, 40);
+    for number in 1..=3000 {
+        data.extend(segment(number, 53, &body));
+    }
+    let e = jbig2(&data, 0, 0).unwrap_err();
+    assert_eq!(e.problem, Problem::Unsupported);
+}
+
+#[test]
+fn jbig2_cut_off_segment_header_is_damage_when_the_page_must_be_whole() {
+    let mut data = page(61, 40);
+    data.extend(&generic_region(1, 61, 40, 0, 0, AT)[..10]);
+    let decode = |whole| lazy_pdf_filters::jbig2::decode(&[], &data, 256 << 20, 0, 0, whole);
+    assert!(decode(false).is_ok());
+    let e = decode(true).unwrap_err();
+    assert_eq!(e.problem, Problem::Damaged);
 }
 
 #[test]

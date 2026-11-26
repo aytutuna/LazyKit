@@ -16,6 +16,9 @@
 // Ported from pdf.js (src/core/jbig2.js: segment headers, SimpleSegmentVisitor) by way of Lazy PDF's C#
 // decoder, and changed: the page is composed with every combination operator, a segment that fails does not
 // stop the others, and every size and count is checked against the budget before anything is allocated.
+// Two things differ from the C# and Swift decoders: an immediate region wholly off the page is not decoded,
+// and a generic region's rows below a page of known height are not coded. Where such a region is damaged the
+// reference fails the file and this decoder does not; the golden check lists those cases as known.
 
 //! JBIG2Decode (ISO 32000-1 7.4.7; ITU-T T.88): the segments of an embedded stream, the globals first,
 //! drawn into one page that comes out as packed rows with 0 for black, as an image stream expects.
@@ -198,6 +201,9 @@ impl Decoder {
         };
         while position <= last {
             if data.len() - position < MIN_HEADER {
+                if self.whole {
+                    self.fail(FilterError::damaged("A JBIG2 segment header is cut off."));
+                }
                 return Ok(());
             }
             self.limit = data.len();
@@ -347,6 +353,7 @@ impl Decoder {
             40 | 42 | 43 => self.refinement_region(segment, data, start, end),
             53 => {
                 let table = Huffman::custom(data, start, end)?;
+                self.budget.keep(table.lines() as i64 * 16)?;
                 self.tables.insert(segment.number, Arc::new(table));
                 Ok(())
             }
@@ -874,7 +881,9 @@ impl Decoder {
             return Err(FilterError::too_big());
         }
         // The page is about to be allocated: a page whose rows alone pass the limit is refused first.
-        if self.height_known && height as u64 * (width as u64).div_ceil(8) > self.max_size {
+        if self.height_known
+            && height as u64 * (width as u64).div_ceil(8) > self.max_size.min(usize::MAX as u64)
+        {
             return Err(FilterError::too_big());
         }
         self.default_pixel = (flags >> 2) & 1;
@@ -985,7 +994,7 @@ impl Decoder {
         let out_width = if fit { self.fit_width as usize } else { width };
         let out_rows = if fit { self.fit_height as usize } else { rows };
         let stride = out_width.div_ceil(8);
-        if out_rows as u64 * stride as u64 > self.max_size {
+        if out_rows as u64 * stride as u64 > self.max_size.min(usize::MAX as u64) {
             return Err(FilterError::too_big());
         }
         let mut output = vec![0xffu8; out_rows * stride];

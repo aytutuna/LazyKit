@@ -52,3 +52,8 @@ jbig2 text-arith.bin - - - 80x30
 jbig2 generic-t0.bin - - - 61x50
 jbig2 generic-t0.bin - - - 1x1
 jbig2 with-globals.bin globals.bin - - 70x44
+# A region the page does not show, or rows below the page, are not decoded here; the reference decodes them and fails the file, so these cases carry its result.
+jbig2 halftone-arith.bin - 30:80,93:5a - -
+jbig2 text-huffman.bin - 30:80,213:5a - -
+jbig2 text-arith.bin - 61:80,162:5a - -
+jbig2 generic-t0.bin - 45:5a - -
