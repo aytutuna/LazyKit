@@ -92,3 +92,73 @@ fn jpeg_header_and_adobe_marker() {
     assert!(!dct::has_adobe_marker(&jpeg[..2]));
     assert_eq!(dct::read_header(b"not a jpeg"), None);
 }
+
+fn segment(number: u32, kind: u8, body: &[u8]) -> Vec<u8> {
+    let mut out = number.to_be_bytes().to_vec();
+    out.extend([kind, 0, 1]);
+    out.extend((body.len() as u32).to_be_bytes());
+    out.extend(body);
+    out
+}
+
+fn page(width: u32, height: u32) -> Vec<u8> {
+    let mut body = Vec::new();
+    for v in [width, height, 0, 0] {
+        body.extend(v.to_be_bytes());
+    }
+    body.extend([0, 0, 0]);
+    segment(0, 48, &body)
+}
+
+fn generic_region(number: u32, width: u32, height: u32, x: u32, y: u32, at: [i8; 8]) -> Vec<u8> {
+    let mut body = Vec::new();
+    for v in [width, height, x, y] {
+        body.extend(v.to_be_bytes());
+    }
+    body.extend([0, 0]);
+    body.extend(at.map(|b| b as u8));
+    body.extend((0..100u8).map(|i| i.wrapping_mul(37).wrapping_add(11)));
+    segment(number, 38, &body)
+}
+
+const AT: [i8; 8] = [3, -1, -3, -1, 2, -2, -2, -2];
+
+fn jbig2(data: &[u8], width: i32, height: i32) -> lazy_pdf_filters::Result<Vec<u8>> {
+    lazy_pdf_filters::jbig2::decode(&[], data, 256 << 20, width, height, false)
+}
+
+#[test]
+fn jbig2_region_off_the_page_is_not_decoded() {
+    let mut data = page(61, 40);
+    data.extend(generic_region(1, 61, 2_200_000, 0x2800_0000, 0, AT));
+    data.extend(generic_region(2, 61, 2_200_000, 0, 1_000_000, AT));
+    let start = std::time::Instant::now();
+    let page = jbig2(&data, 11585, 11585).unwrap();
+    assert!(page.iter().all(|&b| b == 0xff));
+    assert!(start.elapsed().as_secs() < 5);
+}
+
+#[test]
+fn jbig2_region_rows_below_the_page_are_not_decoded() {
+    let mut data = page(61, 40);
+    data.extend(generic_region(1, 61, 2_200_000, 0, 0, AT));
+    let start = std::time::Instant::now();
+    jbig2(&data, 11585, 11585).unwrap();
+    assert!(start.elapsed().as_secs() < 5);
+}
+
+#[test]
+fn jbig2_adaptive_pixel_must_precede_the_pixel_it_codes() {
+    for bad in [
+        [3, 40, 0, 0, 0, 0, 0, 0],
+        [0, 0, 0, 0, 0, 0, 0, 0],
+        [3, -1, -3, -1, 2, -2, 1, 0],
+    ] {
+        let mut data = page(61, 40);
+        data.extend(generic_region(1, 61, 40, 0, 0, bad));
+        assert_eq!(jbig2(&data, 0, 0).unwrap_err().problem, Problem::Damaged);
+    }
+    let mut data = page(61, 40);
+    data.extend(generic_region(1, 61, 40, 0, 0, AT));
+    assert!(jbig2(&data, 0, 0).is_ok());
+}

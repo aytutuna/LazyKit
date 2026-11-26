@@ -515,6 +515,9 @@ impl Decoder {
         end: usize,
     ) -> Result<()> {
         let region = self.read_region(data, start, end, false)?;
+        if self.off_page(segment, &region) {
+            return self.skip(&region);
+        }
         let mut position = start + 17;
         let flags = self.u16(data, position)?;
         position += 2;
@@ -606,6 +609,9 @@ impl Decoder {
         end: usize,
     ) -> Result<()> {
         let region = self.read_region(data, start, end, false)?;
+        if self.off_page(segment, &region) {
+            return self.skip(&region);
+        }
         let mut position = start + 17;
         let flags = self.u8(data, position)?;
         position += 1;
@@ -693,6 +699,9 @@ impl Decoder {
         end: usize,
     ) -> Result<()> {
         let region = self.read_region(data, start, end, false)?;
+        if self.off_page(segment, &region) {
+            return self.skip(&region);
+        }
         let mut position = start + 17;
         let flags = self.u8(data, position)?;
         position += 1;
@@ -771,6 +780,18 @@ impl Decoder {
             // The row count the segment ends with is the height that was coded.
             region.height = region.height.min(self.u32(data, end - 4)? as i64);
             end -= 4;
+        }
+        if self.off_page(segment, &region) {
+            return self.skip(&region);
+        }
+        // Rows below a page of known height are never drawn; coding them is the cost of a hostile region.
+        if self.height_known
+            && matches!(segment.kind, 38 | 39)
+            && let Some(page) = &self.page
+        {
+            region.height = region
+                .height
+                .min((page.height as i64 - region.y as i64).max(0));
         }
         let mut position = start + 17;
         let flags = self.u8(data, position)?;
@@ -906,15 +927,38 @@ impl Decoder {
         Ok(())
     }
 
+    /// An immediate region that lies wholly off the page changes nothing and carries no state to a
+    /// later segment, so it is not decoded.
+    fn off_page(&self, segment: &Segment, region: &Region) -> bool {
+        let Some(page) = &self.page else {
+            return false;
+        };
+        matches!(segment.kind, 6 | 7 | 22 | 23 | 38 | 39 | 42 | 43)
+            && (region.width == 0
+                || region.x as usize >= page.width
+                || self.height_known && (region.height == 0 || region.y as usize >= page.height))
+    }
+
+    fn skip(&mut self, region: &Region) -> Result<()> {
+        self.grow_for(region)?;
+        self.drawn += 1;
+        Ok(())
+    }
+
+    fn grow_for(&mut self, region: &Region) -> Result<()> {
+        if !self.height_known && (region.y as i64) < i32::MAX as i64 - region.height {
+            self.reach(region.y as usize + region.height as usize)?;
+        }
+        Ok(())
+    }
+
     fn draw(&mut self, region: &Region, bitmap: &Bitmap) -> Result<()> {
         if self.page.is_none() {
             return Err(FilterError::damaged(
                 "A JBIG2 region comes before the page information.",
             ));
         }
-        if !self.height_known && (region.y as i64) < i32::MAX as i64 - region.height {
-            self.reach(region.y as usize + region.height as usize)?;
-        }
+        self.grow_for(region)?;
         if let Some(page) = &mut self.page {
             page.compose(bitmap, region.x, region.y, region.op);
         }
