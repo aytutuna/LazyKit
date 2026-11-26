@@ -3,6 +3,8 @@ import { DurableObject } from "cloudflare:workers";
 export const MAX_FRAME = 64 * 1024;
 export const MAX_BUFFERED = 8 * 1024 * 1024;
 export const MAX_STREAMS = 16;
+// Application close code for the weekly cap; 1008 stays for protocol faults.
+export const CLOSE_CAPPED = 4402;
 const FLUSH_MS = 1000;
 const SWEEP_MS = 30_000;
 const CONTROL_IDLE_MS = 90_000;
@@ -16,7 +18,6 @@ const JOIN_MS = 10_000;
 // connection of the phone link.
 export class Room extends DurableObject {
   private group?: string;
-  private hostDevice?: string;
   private pending = 0;
   private unsaved = false;
   private joining = new Map<string, (ok: boolean) => void>();
@@ -26,7 +27,6 @@ export class Room extends DurableObject {
     ctx.setWebSocketAutoResponse(new WebSocketRequestResponsePair("ping", "pong"));
     ctx.blockConcurrencyWhile(async () => {
       this.group = await ctx.storage.get<string>("group");
-      this.hostDevice = await ctx.storage.get<string>("hostDevice");
     });
   }
 
@@ -41,8 +41,8 @@ export class Room extends DurableObject {
       await this.ctx.storage.put("group", group);
     }
     if (this.group !== group) return new Response("wrong group", { status: 403 });
-    if (role === "host") return this.acceptHost(url.searchParams.get("device") ?? "");
-    return this.acceptGuest(url.pathname.split("/").pop() ?? "");
+    if (role === "host") return this.acceptHost();
+    return this.acceptGuest(url.pathname.split("/").pop() ?? "", url.searchParams.get("device") ?? "");
   }
 
   private groupStub() {
@@ -55,9 +55,7 @@ export class Room extends DurableObject {
 
   // A new host takes over from the old one, which may be a connection that
   // died without a close.
-  private async acceptHost(device: string): Promise<Response> {
-    this.hostDevice = device;
-    await this.ctx.storage.put("hostDevice", device);
+  private async acceptHost(): Promise<Response> {
     for (const old of this.ctx.getWebSockets("host")) old.close(1012, "replaced");
     const pair = new WebSocketPair();
     this.ctx.acceptWebSocket(pair[1], ["host"]);
@@ -66,13 +64,14 @@ export class Room extends DurableObject {
     return new Response(null, { status: 101, webSocket: pair[0] });
   }
 
-  private async acceptGuest(room: string): Promise<Response> {
+  private async acceptGuest(room: string, device: string): Promise<Response> {
     const group = this.groupStub();
     if ((await group.status()).capped) return new Response("weekly cap reached", { status: 402 });
     const control = this.control();
     if (!control) {
-      // A closed phone app is woken to connect; the guest tries again.
-      const woken = this.hostDevice ? await group.wake(this.hostDevice, room) : false;
+      // The group's other devices may be closed phone apps; they are woken
+      // to connect and the guest tries again.
+      const woken = await group.wake(room, device);
       return new Response("nobody waiting", { status: 404, headers: woken ? { "x-relay-woken": "1" } : {} });
     }
     const open = this.ctx.getWebSockets("guest").filter((s) => s.readyState === WebSocket.OPEN).length;
@@ -110,6 +109,11 @@ export class Room extends DurableObject {
 
   async webSocketMessage(ws: WebSocket, data: string | ArrayBuffer): Promise<void> {
     const [role] = this.ctx.getTags(ws);
+    // "eof" is a stream's half-close: the writer is done, the reader is not.
+    if (data === "eof" && role !== "host") {
+      this.peerOf(ws)?.send("eof");
+      return;
+    }
     if (typeof data === "string" || role === "host") return this.end(ws, 1003, "binary frames on streams only");
     if (data.byteLength > MAX_FRAME) return this.end(ws, 1009, "frame too large");
     const peer = this.peerOf(ws);
@@ -190,6 +194,6 @@ export class Room extends DurableObject {
       this.pending += bytes;
       throw e;
     }
-    for (const ws of this.ctx.getWebSockets("guest")) this.end(ws, 1008, "weekly cap reached");
+    for (const ws of this.ctx.getWebSockets("guest")) this.end(ws, CLOSE_CAPPED, "weekly cap reached");
   }
 }

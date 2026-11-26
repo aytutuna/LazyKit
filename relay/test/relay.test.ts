@@ -3,7 +3,7 @@ import { runDurableObjectAlarm, runInDurableObject } from "cloudflare:test";
 import { afterEach, describe, expect, it } from "vitest";
 import { useServices } from "../src/services";
 import { WEEKLY_CAP } from "../src/group";
-import { MAX_BUFFERED, MAX_FRAME, MAX_STREAMS } from "../src/room";
+import { CLOSE_CAPPED, MAX_BUFFERED, MAX_FRAME, MAX_STREAMS } from "../src/room";
 import { weekOf } from "../src/week";
 
 declare const __BIG__: boolean;
@@ -286,6 +286,23 @@ describe("relay", () => {
     await side.closed;
   });
 
+  it("passes a half-close to the other end and keeps the stream open", async () => {
+    const h = await host(newRoom());
+    const [guest, side] = await stream(h);
+    guest.ws.send(bytes(1));
+    guest.ws.send("eof");
+    expect(new Uint8Array(await side.next())).toEqual(bytes(1));
+    expect(await side.nextText()).toBe("eof");
+    side.ws.send(bytes(7, 7));
+    expect(new Uint8Array(await guest.next())).toEqual(bytes(7, 7));
+  });
+
+  it("refuses a guest without a device id", async () => {
+    const room = newRoom();
+    const url = `https://alazy.app/relay/v1/${room}?role=guest&group=${groupOf(room)}`;
+    expect((await exports.default.fetch(url, { headers: { Upgrade: "websocket" } })).status).toBe(400);
+  });
+
   it("closes a stream that sends a frame over the limit", async () => {
     const h = await host(newRoom());
     const [guest, side] = await stream(h);
@@ -373,7 +390,7 @@ describe("relay", () => {
     guest.ws.send(new Uint8Array(100));
     await side.until(100);
     await runDurableObjectAlarm(stub(h.room));
-    expect((await guest.closed).code).toBe(1008);
+    expect((await guest.closed).code).toBe(CLOSE_CAPPED);
     await side.closed;
     expect((await ask(h.room, "role=guest", group)).status).toBe(402);
   });
@@ -384,15 +401,15 @@ describe("relay", () => {
     await groupStub(group).record(WEEKLY_CAP);
     expect((await ask(h.room, "role=guest", group)).status).toBe(402);
     await runInDurableObject(groupStub(group), async (g) => {
-      useServices({ verifier: { verify: async () => ({ until: Date.now() + 86_400_000 }) } });
-      await g.buy("apple", "receipt");
+      useServices({ verifier: { verify: async () => ({ until: Date.now() + 86_400_000, purchase: "p" }) } });
+      await g.buy("apple", "receipt", group);
     });
     const [guest, side] = await stream(h);
     guest.ws.send(new Uint8Array(100));
     await side.until(100);
   });
 
-  it("wakes the host's device when nobody is waiting", async () => {
+  it("wakes the group's other devices when nobody is waiting", async () => {
     const sent: unknown[] = [];
     useServices({ push: { send: async (platform, token, message) => void sent.push([platform, token, message]) } });
     const room = newRoom();
@@ -403,7 +420,12 @@ describe("relay", () => {
     expect((await ask(room, "role=guest")).status).toBe(404);
     expect(sent).toEqual([]);
 
-    expect((await groupApi(group, "push", { device: DEVICE, platform: "fcm", token: "tok" })).status).toBe(204);
+    // The guest's own device is never woken, whoever hosted last.
+    expect((await groupApi(group, "push", { device: DEVICE, platform: "apns", token: "mine" })).status).toBe(204);
+    expect((await ask(room, "role=guest")).status).toBe(404);
+    expect(sent).toEqual([]);
+
+    expect((await groupApi(group, "push", { device: "e".repeat(32), platform: "fcm", token: "tok" })).status).toBe(204);
     const res = await ask(room, "role=guest");
     expect(res.status).toBe(404);
     expect(res.headers.get("x-relay-woken")).toBe("1");

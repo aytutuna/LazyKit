@@ -1,5 +1,6 @@
 import { DurableObject } from "cloudflare:workers";
 import { NotConfiguredError, ReceiptRejectedError, TokenGoneError, services, type Platform, type Store } from "./services";
+import { purchaseKey } from "./purchase";
 import { weekOf } from "./week";
 
 export const WEEKLY_CAP = 5 * 1024 ** 3;
@@ -62,9 +63,12 @@ export class Group extends DurableObject<Cloudflare.Env> {
 
   // Rejections come back as values: an error thrown inside a Durable Object
   // is reported as uncaught as well as reaching the caller.
-  async buy(store: Store, receipt: string): Promise<"ok" | "not-configured" | "rejected"> {
+  // A purchase pays for one group only; the first group to present it keeps it.
+  async buy(store: Store, receipt: string, group: string): Promise<"ok" | "not-configured" | "rejected" | "bound"> {
     try {
-      const { until } = await services().verifier.verify(store, receipt);
+      const { until, purchase } = await services().verifier.verify(store, receipt, group);
+      const owner = this.env.PURCHASES.get(this.env.PURCHASES.idFromName(await purchaseKey(store, purchase)));
+      if (!(await owner.bind(group))) return "bound";
       if (until > this.paidUntil) {
         this.paidUntil = until;
         await this.ctx.storage.put("paidUntil", until);
@@ -89,19 +93,26 @@ export class Group extends DurableObject<Cloudflare.Env> {
     await this.ctx.storage.put("devices", this.devices);
   }
 
-  // Wakes a closed phone app so it connects to the room. True when a push
-  // went out; a device is not woken twice within a few seconds.
-  async wake(device: string, room: string, now = Date.now()): Promise<boolean> {
-    const d = this.devices[device];
-    if (!d) return false;
-    if (now - (this.woken.get(device) ?? 0) < WAKE_GAP_MS) return true;
-    try {
-      await services().push.send(d.platform, d.token, { room });
-    } catch (e) {
-      if (e instanceof TokenGoneError) await this.dropPush(device);
-      return false;
+  // Wakes the closed apps of the group's other devices so one of them
+  // connects to the room. True when a push went out; a device is not woken
+  // twice within a few seconds.
+  async wake(room: string, except: string, now = Date.now()): Promise<boolean> {
+    let sent = false;
+    for (const [device, d] of Object.entries(this.devices)) {
+      if (device === except) continue;
+      if (now - (this.woken.get(device) ?? 0) < WAKE_GAP_MS) {
+        sent = true;
+        continue;
+      }
+      try {
+        await services().push.send(d.platform, d.token, { room });
+      } catch (e) {
+        if (e instanceof TokenGoneError) await this.dropPush(device);
+        continue;
+      }
+      this.woken.set(device, now);
+      sent = true;
     }
-    this.woken.set(device, now);
-    return true;
+    return sent;
   }
 }

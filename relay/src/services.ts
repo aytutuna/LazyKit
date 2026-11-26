@@ -14,8 +14,13 @@ export class TokenGoneError extends Error {
 }
 
 export interface PurchaseVerifier {
-  // Resolves to the time the purchase pays up to, in ms since the epoch.
-  verify(store: Store, receipt: string): Promise<{ until: number }>;
+  // Resolves to the time the purchase pays up to, in ms since the epoch, and
+  // the store's own id for the purchase (Apple's original transaction id,
+  // Google's purchase token, Microsoft's store id), which stays the same
+  // across renewals. A real check also confirms that the purchase was made
+  // for this group: Apple's appAccountToken or Google's obfuscatedAccountId
+  // is set to the group id at purchase time.
+  verify(store: Store, receipt: string, group: string): Promise<{ until: number; purchase: string }>;
 }
 
 export interface PushSender {

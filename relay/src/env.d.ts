@@ -5,5 +5,6 @@ declare namespace Cloudflare {
   interface Env {
     ROOMS: DurableObjectNamespace<import("./room").Room>;
     GROUPS: DurableObjectNamespace<import("./group").Group>;
+    PURCHASES: DurableObjectNamespace<import("./purchase").Purchase>;
   }
 }

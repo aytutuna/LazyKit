@@ -6,9 +6,10 @@
   "workers_dev": false,
   "preview_urls": false,
   "observability": { "enabled": false, "logs": { "enabled": false, "invocation_logs": false } },
-  "durable_objects": { "bindings": [{ "name": "ROOMS", "class_name": "Room" }, { "name": "GROUPS", "class_name": "Group" }] },
+  "durable_objects": { "bindings": [{ "name": "ROOMS", "class_name": "Room" }, { "name": "GROUPS", "class_name": "Group" }, { "name": "PURCHASES", "class_name": "Purchase" }] },
   "migrations": [
     { "tag": "v1", "new_sqlite_classes": ["Room"] },
-    { "tag": "v2", "new_sqlite_classes": ["Group"] }
+    { "tag": "v2", "new_sqlite_classes": ["Group"] },
+    { "tag": "v3", "new_sqlite_classes": ["Purchase"] }
   ]
 }
