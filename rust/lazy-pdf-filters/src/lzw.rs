@@ -49,7 +49,7 @@ impl Table {
 /// LZWDecode (ISO 32000-1 7.4.4): codes of 9 to 12 bits, most significant first, 256 clears the table,
 /// 257 ends the data. Corrupt data (a code beyond the table) ends the output where it is.
 pub fn decode(data: &[u8], early_change: bool, max_size: u64) -> Result<Vec<u8>> {
-    let mut output = Output::new(max_size, data.len() * 3);
+    let mut output = Output::new(max_size, data.len().saturating_mul(3));
     let mut table = Table::new();
     let early = early_change as usize;
     let (mut bits, mut next) = (9usize, FIRST);

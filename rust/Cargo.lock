@@ -411,6 +411,7 @@ version = "0.1.0"
 dependencies = [
  "miniz_oxide",
  "sha2",
+ "zlib-rs",
 ]
 
 [[package]]
@@ -1016,6 +1017,12 @@ checksum = "8c3b93199df0ab874cdf0c6a94f0a0dc3423fe41f1cafb62b8bd7b1deb277aef"
 dependencies = [
  "memchr",
 ]
+
+[[package]]
+name = "zlib-rs"
+version = "0.6.9"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "aa76918995d776d9dd34d371030be228d021137449771493d56e29f77e4148ac"
 
 [[package]]
 name = "zmij"

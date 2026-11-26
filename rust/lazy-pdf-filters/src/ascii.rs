@@ -84,7 +84,7 @@ fn emit(group: &[u8; 5], characters: usize, output: &mut Output) -> Result<()> {
 }
 
 pub fn decode_run_length(data: &[u8], max_size: u64) -> Result<Vec<u8>> {
-    let mut output = Output::new(max_size, data.len() * 2);
+    let mut output = Output::new(max_size, data.len().saturating_mul(2));
     let mut i = 0;
     while i < data.len() {
         let length = data[i] as usize;

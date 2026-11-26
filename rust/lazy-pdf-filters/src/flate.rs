@@ -1,5 +1,4 @@
-use miniz_oxide::inflate::TINFLStatus;
-use miniz_oxide::inflate::core::{DecompressorOxide, decompress_with_limit, inflate_flags};
+use zlib_rs::{Inflate, InflateFlush, Status};
 
 use crate::error::{FilterError, Result};
 use crate::params::{self, Params};
@@ -64,15 +63,13 @@ fn inflate_from(data: &[u8], max_size: u64, strict: bool) -> Result<(Vec<u8>, En
     // The buffer never holds more than one byte past the cap, which is how a stream over it is seen.
     let cap = usize::try_from(max_size.saturating_add(1)).unwrap_or(usize::MAX);
     let mut buffer = vec![0u8; data.len().saturating_mul(4).clamp(256, 1 << 22).min(cap)];
-    let mut state = Box::<DecompressorOxide>::default();
+    // zlib's own inflater, so incomplete and over-subscribed codes are refused where the reference
+    // refuses them.
+    let mut state = Inflate::new(false, 15);
     let (mut offset, mut at, mut call_start) = (0, 0, 0);
     let end = loop {
         let chunk_end = (offset / INPUT_CHUNK + 1) * INPUT_CHUNK;
         let input = &data[offset..data.len().min(chunk_end)];
-        let mut flags = inflate_flags::TINFL_FLAG_USING_NON_WRAPPING_OUTPUT_BUF;
-        if chunk_end < data.len() {
-            flags |= inflate_flags::TINFL_FLAG_HAS_MORE_INPUT;
-        }
         // A call that ended exactly full is still the one in progress until another byte is written.
         let room = OUTPUT_CALL - (at - call_start);
         let limit = room.max(1).min(cap - at);
@@ -82,8 +79,10 @@ fn inflate_from(data: &[u8], max_size: u64, strict: bool) -> Result<(Vec<u8>, En
         if buffer.len() < at + limit {
             buffer.resize((at + limit).max(buffer.len().saturating_mul(2)).min(cap), 0);
         }
-        let (status, used, written) =
-            decompress_with_limit(&mut state, input, &mut buffer, at, limit, flags);
+        let (in_before, out_before) = (state.total_in(), state.total_out());
+        let status = state.decompress(input, &mut buffer[at..at + limit], InflateFlush::NoFlush);
+        let used = (state.total_in() - in_before) as usize;
+        let written = (state.total_out() - out_before) as usize;
         if room == 0 && written > 0 {
             call_start = at;
         }
@@ -93,11 +92,11 @@ fn inflate_from(data: &[u8], max_size: u64, strict: bool) -> Result<(Vec<u8>, En
             return Err(FilterError::too_big());
         }
         match status {
-            TINFLStatus::Done => break End::Clean,
-            TINFLStatus::HasMoreOutput => {}
-            TINFLStatus::NeedsMoreInput => call_start = at,
-            TINFLStatus::FailedCannotMakeProgress => break End::RanDry,
-            _ => break End::Bad,
+            Ok(Status::StreamEnd) => break End::Clean,
+            Ok(Status::Ok) if written == limit => {}
+            Ok(Status::Ok) => call_start = at,
+            Ok(Status::BufError) => break End::RanDry,
+            Err(_) => break End::Bad,
         }
     };
     if end == End::Bad {
@@ -167,7 +166,7 @@ fn predict_tiff(data: &mut [u8], row_length: usize, colors: usize, bits: usize, 
                 }
             }
             _ => {
-                let count = (columns * colors).min(row.len() * 8 / bits);
+                let count = ((columns as u64 * colors as u64).min((row.len() * 8 / bits) as u64)) as usize;
                 let mask = (1usize << bits) - 1;
                 for j in colors..count {
                     let sum = component(row, j, bits) + component(row, j - colors, bits);

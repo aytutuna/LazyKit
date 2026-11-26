@@ -28,7 +28,7 @@ pub fn decode(data: &[u8], o: &Options, max_size: u64) -> Result<Vec<u8>> {
         if rows > 0 {
             rows * stride
         } else {
-            data.len() * 4
+            data.len().saturating_mul(4)
         },
     );
     let white = if o.black_is_1 { 0 } else { 0xff };

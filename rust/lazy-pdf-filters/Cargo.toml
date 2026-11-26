@@ -7,7 +7,8 @@ license-file.workspace = true
 publish.workspace = true
 
 [dependencies]
-miniz_oxide = "0.9"
+zlib-rs = "0.6.9"
 
 [dev-dependencies]
+miniz_oxide = "0.9"
 sha2 = "0.10"

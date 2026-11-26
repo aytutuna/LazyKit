@@ -165,19 +165,12 @@ fn blocks(literals: usize, matches: usize, tail: &str) -> Vec<u8> {
     out
 }
 
-// miniz_oxide takes a dynamic block whose distance code is one symbol longer than a bit, where zlib
-// (and so the reference) calls the incomplete code invalid.
-const KNOWN: [(&str, &str); 1] = [(
-    r"inflate \x05\xc0\x01\x04\x00\x00\x00\x00\x10\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x03\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x01\x00",
-    "616161616161616161616161616161",
-)];
-
 #[test]
 fn filters_output_is_the_golden_file() {
     check(
         &read_text("filters-input.txt"),
         &read_text("filters-output.txt"),
         op,
-        &KNOWN,
+        &[],
     );
 }
