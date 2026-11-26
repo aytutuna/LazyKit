@@ -4,6 +4,8 @@
 use std::net::IpAddr;
 use std::sync::Arc;
 
+mod proof;
+
 uniffi::setup_scaffolding!();
 
 /// Every call can fail, even the ones that only compute: Swift turns a panic into an error only
