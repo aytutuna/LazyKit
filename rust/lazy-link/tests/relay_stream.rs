@@ -3,7 +3,7 @@
 //! The relay client against small stand-in servers, so no relay has to run.
 
 use futures_util::{SinkExt, StreamExt};
-use lazy_link::relay::{MAX_FRAME, Relay, RelayError, random_id, room_id};
+use lazy_link::relay::{MAX_FRAME, Relay, RelayError, Store, WINDOW_FRAMES, random_id, room_id};
 use std::time::Duration;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::{TcpListener, TcpStream};
@@ -268,7 +268,12 @@ async fn shutdown_is_a_half_close_and_the_reply_still_arrives() {
         ws.send(Message::binary(b"answer".to_vec())).await.unwrap();
         ws.send(Message::text("eof")).await.unwrap();
         // The client closed nothing, so the next frame is its goodbye when it is dropped.
-        matches!(ws.next().await, Some(Ok(Message::Close(_))) | None)
+        loop {
+            match ws.next().await {
+                Some(Ok(Message::Text(t))) if t.as_str() == "ack" => {}
+                other => return matches!(other, Some(Ok(Message::Close(_))) | None),
+            }
+        }
     });
     let mut s = relay.connect(&room_id(b"r")).await.unwrap();
     s.write_all(b"ask").await.unwrap();
@@ -442,4 +447,176 @@ async fn a_stream_whose_connection_goes_quiet_ends_with_1006() {
     s.read_to_end(&mut got).await.unwrap();
     assert!(got.is_empty());
     assert_eq!(s.close_code(), Some(1006));
+}
+
+#[tokio::test]
+async fn a_writer_stops_when_the_other_end_has_not_taken_its_frames() {
+    let (l, relay) = listener().await;
+    let (seen_tx, mut seen) = tokio::sync::mpsc::unbounded_channel();
+    let (ack_tx, mut ack_rx) = tokio::sync::mpsc::unbounded_channel::<usize>();
+    tokio::spawn(async move {
+        let mut ws = tokio_tungstenite::accept_async(l.accept().await.unwrap().0)
+            .await
+            .unwrap();
+        loop {
+            tokio::select! {
+                msg = ws.next() => match msg {
+                    Some(Ok(Message::Binary(_))) => seen_tx.send(()).unwrap(),
+                    Some(Ok(_)) => {}
+                    _ => return,
+                },
+                Some(n) = ack_rx.recv() => {
+                    for _ in 0..n {
+                        ws.send(Message::text("ack")).await.unwrap();
+                    }
+                }
+            }
+        }
+    });
+    let mut s = relay.connect(&room_id(b"r")).await.unwrap();
+    let chunk = vec![1u8; MAX_FRAME];
+    // The server reads everything at once, so only the missing acks can stop the writer.
+    let writer = tokio::spawn(async move {
+        for _ in 0..4 * WINDOW_FRAMES {
+            s.write_all(&chunk).await.unwrap();
+        }
+        s
+    });
+    tokio::time::sleep(Duration::from_secs(1)).await;
+    let mut got = 0;
+    while seen.try_recv().is_ok() {
+        got += 1;
+    }
+    assert_eq!(got, WINDOW_FRAMES);
+    assert!(!writer.is_finished());
+    ack_tx.send(3 * WINDOW_FRAMES).unwrap();
+    let _s = timeout(Duration::from_secs(10), writer)
+        .await
+        .expect("the writer did not go on after the acks")
+        .unwrap();
+}
+
+#[tokio::test]
+async fn a_frame_given_to_the_reader_is_acknowledged() {
+    let (l, relay) = listener().await;
+    let server = tokio::spawn(async move {
+        let mut ws = tokio_tungstenite::accept_async(l.accept().await.unwrap().0)
+            .await
+            .unwrap();
+        for i in 0..3u8 {
+            ws.send(Message::binary(vec![i; 10])).await.unwrap();
+        }
+        let mut acks = 0;
+        while acks < 3 {
+            match ws.next().await {
+                Some(Ok(Message::Text(t))) if t.as_str() == "ack" => acks += 1,
+                Some(Ok(_)) => {}
+                _ => break,
+            }
+        }
+        acks
+    });
+    let mut s = relay.connect(&room_id(b"r")).await.unwrap();
+    let mut got = [0u8; 30];
+    s.read_exact(&mut got).await.unwrap();
+    assert_eq!(
+        timeout(Duration::from_secs(5), server)
+            .await
+            .unwrap()
+            .unwrap(),
+        3
+    );
+}
+
+#[tokio::test]
+async fn a_purchase_for_another_group_has_its_own_error() {
+    let (l, relay) = listener().await;
+    tokio::spawn(async move {
+        let (mut tcp, _) = l.accept().await.unwrap();
+        // Read the body too, or closing with it unread resets the connection.
+        let mut got = Vec::new();
+        let mut buf = [0u8; 2048];
+        while !got.ends_with(b"}") {
+            let n = tcp.read(&mut buf).await.unwrap();
+            got.extend_from_slice(&buf[..n]);
+        }
+        let reply = b"HTTP/1.1 409 Conflict
+Content-Length: 0
+Connection: close
+
+";
+        tcp.write_all(reply).await.unwrap();
+        tcp.shutdown().await.unwrap();
+    });
+    assert!(matches!(
+        relay.pay(Store::Apple, "r").await,
+        Err(RelayError::PurchaseUsed)
+    ));
+}
+
+#[tokio::test]
+async fn a_rate_limited_wait_is_kept_up_until_the_deadline() {
+    let (l, relay) = listener().await;
+    tokio::spawn(async move {
+        let (mut tcp, _) = l.accept().await.unwrap();
+        let mut buf = [0u8; 2048];
+        let _ = tcp.read(&mut buf).await.unwrap();
+        tcp.write_all(
+            b"HTTP/1.1 503 Service Unavailable\r\nRetry-After: 1\r\nContent-Length: 0\r\nConnection: close\r\n\r\n",
+        )
+        .await
+        .unwrap();
+        tcp.shutdown().await.unwrap();
+        let mut ws = tokio_tungstenite::accept_async(l.accept().await.unwrap().0)
+            .await
+            .unwrap();
+        ws.send(Message::binary(vec![4])).await.unwrap();
+        let _ = ws.next().await;
+    });
+    let mut s = relay
+        .connect_waiting(&room_id(b"r"), Duration::from_secs(10))
+        .await
+        .unwrap();
+    let mut b = [0u8; 1];
+    s.read_exact(&mut b).await.unwrap();
+    assert_eq!(b, [4]);
+}
+
+#[tokio::test]
+async fn a_slow_handshake_does_not_hold_up_the_next_guest() {
+    let (l, relay) = listener().await;
+    tokio::spawn(async move {
+        let mut control = tokio_tungstenite::accept_async(l.accept().await.unwrap().0)
+            .await
+            .unwrap();
+        control.send(Message::text("open slow")).await.unwrap();
+        control.send(Message::text("open quick")).await.unwrap();
+        for _ in 0..2 {
+            let tcp = l.accept().await.unwrap().0;
+            tokio::spawn(async move {
+                // The request line names the guest, and peeking leaves it for the handshake.
+                let mut buf = [0u8; 512];
+                let n = tcp.peek(&mut buf).await.unwrap();
+                let slow = String::from_utf8_lossy(&buf[..n]).contains("id=slow");
+                if slow {
+                    tokio::time::sleep(Duration::from_secs(3)).await;
+                }
+                if let Ok(mut ws) = tokio_tungstenite::accept_async(tcp).await {
+                    let _ = ws
+                        .send(Message::binary(vec![if slow { 1 } else { 2 }]))
+                        .await;
+                    let _ = ws.next().await;
+                }
+            });
+        }
+        let _ = control.next().await;
+    });
+    let mut host = relay.host(&room_id(b"r")).await.unwrap();
+    let mut s = timeout(Duration::from_secs(2), host.accept())
+        .await
+        .expect("the quick guest waited for the slow one")
+        .unwrap();
+    let mut b = [0u8; 1];
+    s.read_exact(&mut b).await.unwrap();
+    assert_eq!(b, [2]);
 }

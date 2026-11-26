@@ -35,12 +35,25 @@ const WAKE_POLL: Duration = Duration::from_secs(1);
 const DEAD: Duration = Duration::from_secs(60);
 /// How long a connect or a plain request may take before it counts as failed.
 const REQUEST_TIMEOUT: Duration = Duration::from_secs(15);
-/// How much a stream holds before a write waits. It stays far below the relay's own limit, so a
-/// slow reader makes the writer wait here and only a reader that stops entirely is cut off.
+/// How much a stream holds before a write waits.
 const WINDOW: usize = 256 * 1024;
+/// Frames a stream may have sent that the other end has not yet handed to its reader. The other
+/// end answers each frame it has delivered with an `ack`; without this the relay would take
+/// frames from a fast writer until a slow reader's backlog passed [`MAX_BUFFERED`] and cut the
+/// stream. The window times [`MAX_FRAME`] stays under that limit.
+pub const WINDOW_FRAMES: usize = 64;
+const _: () = assert!(WINDOW_FRAMES * MAX_FRAME < MAX_BUFFERED);
 
 fn keepalive() -> tokio::time::Interval {
     tokio::time::interval_at(tokio::time::Instant::now() + KEEPALIVE, KEEPALIVE)
+}
+
+// What the reading half of a stream tells the writing half.
+enum Ctl {
+    /// The other end delivered a frame, so one more may be sent.
+    Credit,
+    /// A frame arrived and went to the reader; the other end is told so.
+    Ack,
 }
 
 type Socket = WebSocketStream<MaybeTlsStream<TcpStream>>;
@@ -60,6 +73,8 @@ pub enum RelayError {
     },
     /// The room belongs to another group.
     WrongGroup,
+    /// The purchase already pays for another group.
+    PurchaseUsed,
     /// The relay cannot check this store's receipts yet.
     NotConfigured,
     ReceiptRejected,
@@ -79,6 +94,7 @@ impl fmt::Display for RelayError {
                 write!(f, "too many requests, retry in {} s", retry_after.as_secs())
             }
             Self::WrongGroup => f.write_str("the room belongs to another group"),
+            Self::PurchaseUsed => f.write_str("the purchase pays for another group"),
             Self::NotConfigured => f.write_str("the relay cannot check receipts of this store yet"),
             Self::ReceiptRejected => f.write_str("the store rejected the receipt"),
             Self::Refused(status) => write!(f, "the relay answered {status}"),
@@ -230,6 +246,7 @@ impl Relay {
         match status {
             501 => Err(RelayError::NotConfigured),
             422 => Err(RelayError::ReceiptRejected),
+            409 => Err(RelayError::PurchaseUsed),
             _ => status_of(status, &body),
         }
     }
@@ -244,13 +261,8 @@ impl Relay {
             )
             .await?;
         let (tx, opens) = mpsc::channel(MAX_STREAMS);
-        let task = tokio::spawn(control(ws, tx));
-        Ok(RelayHost {
-            relay: self.clone(),
-            room: room.into(),
-            opens,
-            task,
-        })
+        let task = tokio::spawn(control(ws, tx, self.clone(), room.into()));
+        Ok(RelayHost { opens, task })
     }
 
     /// Opens one stream to the host of the room.
@@ -284,6 +296,11 @@ impl Relay {
                     if tokio::time::Instant::now() + WAKE_POLL < deadline =>
                 {
                     tokio::time::sleep(WAKE_POLL).await;
+                }
+                Err(RelayError::RateLimited { retry_after })
+                    if tokio::time::Instant::now() + retry_after < deadline =>
+                {
+                    tokio::time::sleep(retry_after.max(WAKE_POLL)).await;
                 }
                 other => return other,
             }
@@ -388,9 +405,7 @@ fn status_of(status: u16, body: &str) -> Result<GroupStatus, RelayError> {
 
 /// The host's end of a room. Dropping it leaves the room.
 pub struct RelayHost {
-    relay: Relay,
-    room: String,
-    opens: mpsc::Receiver<Result<String, RelayError>>,
+    opens: mpsc::Receiver<Result<RelayStream, RelayError>>,
     task: JoinHandle<()>,
 }
 
@@ -399,20 +414,10 @@ impl RelayHost {
     /// control connection is gone or the relay cannot be reached; a guest that has already given
     /// up is skipped.
     pub async fn accept(&mut self) -> Result<RelayStream, RelayError> {
-        loop {
-            let id = self
-                .opens
-                .recv()
-                .await
-                .unwrap_or(Err(RelayError::Closed(1006)))?;
-            let query = format!("role=stream&id={id}");
-            match self.relay.socket(&self.room, &query, REQUEST_TIMEOUT).await {
-                Ok(ws) => return Ok(RelayStream::new(ws)),
-                // The relay forgets a join after ten seconds, so this guest is gone.
-                Err(RelayError::NoHost { .. }) => {}
-                Err(e) => return Err(e),
-            }
-        }
+        self.opens
+            .recv()
+            .await
+            .unwrap_or(Err(RelayError::Closed(1006)))
     }
 }
 
@@ -424,7 +429,12 @@ impl Drop for RelayHost {
 
 // Reads the control socket for guests that arrived and keeps it alive. The relay answers every
 // ping, so a socket that has gone quiet for too long is dead even if no error has come yet.
-async fn control(mut ws: Socket, tx: mpsc::Sender<Result<String, RelayError>>) {
+async fn control(
+    mut ws: Socket,
+    tx: mpsc::Sender<Result<RelayStream, RelayError>>,
+    relay: Relay,
+    room: String,
+) {
     let mut ping = keepalive();
     let mut heard = tokio::time::Instant::now();
     loop {
@@ -433,8 +443,9 @@ async fn control(mut ws: Socket, tx: mpsc::Sender<Result<String, RelayError>>) {
                 heard = tokio::time::Instant::now();
                 match msg {
                     Some(Ok(Message::Text(t))) => {
-                        if let Some(id) = t.strip_prefix("open ") && tx.send(Ok(id.to_string())).await.is_err() {
-                            return;
+                        if let Some(id) = t.strip_prefix("open ") {
+                            // Each guest gets its own task, so a slow handshake does not hold up the next.
+                            tokio::spawn(join(relay.clone(), room.clone(), id.to_string(), tx.clone()));
                         }
                     }
                     Some(Ok(Message::Close(frame))) => {
@@ -459,6 +470,22 @@ async fn control(mut ws: Socket, tx: mpsc::Sender<Result<String, RelayError>>) {
     }
 }
 
+async fn join(
+    relay: Relay,
+    room: String,
+    id: String,
+    tx: mpsc::Sender<Result<RelayStream, RelayError>>,
+) {
+    let query = format!("role=stream&id={id}");
+    let found = match relay.socket(&room, &query, REQUEST_TIMEOUT).await {
+        Ok(ws) => Ok(RelayStream::new(ws)),
+        // The relay forgets a join after ten seconds, so this guest is gone.
+        Err(RelayError::NoHost { .. }) => return,
+        Err(e) => Err(e),
+    };
+    let _ = tx.send(found).await;
+}
+
 /// One connection of the phone link through the relay, as a byte stream. A clean close from
 /// the other end reads as end of input; any other close is available from
 /// [`close_code`](Self::close_code), and reads then end and writes fail.
@@ -477,6 +504,7 @@ impl RelayStream {
         let (local, remote) = tokio::io::duplex(WINDOW);
         let (mut rd, mut wr) = tokio::io::split(remote);
         let (mut sink, mut source) = ws.split();
+        let (ctl, mut ctl_rx) = mpsc::unbounded_channel();
         let close = Arc::new(OnceLock::new());
         let dropped = Arc::new((AtomicBool::new(false), Notify::new()));
 
@@ -485,9 +513,16 @@ impl RelayStream {
             let mut ping = keepalive();
             let mut buf = vec![0u8; MAX_FRAME];
             let mut writing = true;
+            let mut credit = WINDOW_FRAMES;
+            let mut acks = true;
             loop {
+                // Nothing more can be sent once the credit is spent and no answer can come.
+                if credit == 0 && !acks {
+                    let _ = sink.send(Message::Close(None)).await;
+                    return;
+                }
                 tokio::select! {
-                    n = rd.read(&mut buf), if writing => match n {
+                    n = rd.read(&mut buf), if writing && credit > 0 => match n {
                         Ok(0) | Err(_) if gone.0.load(Ordering::Acquire) => {
                             let _ = sink.send(Message::Close(None)).await;
                             return;
@@ -500,10 +535,20 @@ impl RelayStream {
                             }
                         }
                         Ok(n) => {
+                            credit -= 1;
                             if sink.send(Message::binary(buf[..n].to_vec())).await.is_err() {
                                 return;
                             }
                         }
+                    },
+                    c = ctl_rx.recv(), if acks => match c {
+                        Some(Ctl::Credit) => credit += 1,
+                        Some(Ctl::Ack) => {
+                            if sink.send(Message::text("ack")).await.is_err() {
+                                return;
+                            }
+                        }
+                        None => acks = false,
                     },
                     // Dropped after a shutdown: nothing is left to read, so say goodbye.
                     _ = gone.1.notified(), if !writing => {
@@ -534,6 +579,10 @@ impl RelayStream {
                         if wr.write_all(&b).await.is_err() {
                             break;
                         }
+                        let _ = ctl.send(Ctl::Ack);
+                    }
+                    Some(Ok(Message::Text(t))) if t.as_str() == "ack" => {
+                        let _ = ctl.send(Ctl::Credit);
                     }
                     Some(Ok(Message::Text(t))) if t.as_str() == "eof" => {
                         let _ = wr.shutdown().await;
