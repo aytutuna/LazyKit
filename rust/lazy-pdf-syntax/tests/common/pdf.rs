@@ -36,6 +36,15 @@ impl TestPdf {
         self.write(&format!("{number} 0 obj\n{body}\nendobj\n"))
     }
 
+    /// An object that is not closed: no "endobj" follows `body`.
+    pub fn open_obj(&mut self, number: u32, body: &str) -> &mut TestPdf {
+        self.offsets.insert(number, self.position());
+        self.write(&format!(
+            "{number} 0 obj
+{body}"
+        ))
+    }
+
     /// A stream object; `length` is what /Length says (the data's length when none, omitted when negative).
     pub fn stream_with(
         &mut self,

@@ -134,6 +134,7 @@ pub struct Document {
     pub(crate) last_endstream: Cell<i64>,
     pub(crate) endstream_spans: std::cell::RefCell<std::collections::BTreeMap<usize, usize>>,
     pub(crate) last_endobj: Cell<i64>,
+    pub(crate) endobj_spans: std::cell::RefCell<std::collections::BTreeMap<usize, usize>>,
     pub(crate) length_repaired: HashSet<usize>,
 
     pub(crate) pages: Option<Arc<Vec<Page>>>,
@@ -180,6 +181,7 @@ impl Document {
             last_endstream: Cell::new(-2),
             endstream_spans: Default::default(),
             last_endobj: Cell::new(-2),
+            endobj_spans: Default::default(),
             length_repaired: HashSet::new(),
             pages: None,
             pages_walked: false,

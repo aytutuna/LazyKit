@@ -11,6 +11,9 @@ use crate::object::{Dict, Object};
 /// Longest /Prev chain followed (a loop is caught before that).
 pub(crate) const MAX_SECTIONS: usize = 4096;
 
+/// Bytes a cross-reference stream may hold beyond its entries.
+const XREF_SLACK: usize = 64 << 10;
+
 const TRAILER_KEYS: [&str; 4] = ["Root", "Info", "ID", "Encrypt"];
 const XREF_STREAM_KEYS: [&str; 8] = [
     "Type",
@@ -335,11 +338,8 @@ impl Document {
                 "The cross-reference streams list too many entries.",
             ));
         }
-        let data = self.stream_data_limited(
-            &stream,
-            (MAX_OBJECT_NUMBER as usize + 1) * entry_length,
-            false,
-        )?;
+        let data =
+            self.stream_data_limited(&stream, listed as usize * entry_length + XREF_SLACK, false)?;
         let mut highest = 0;
         let mut at = 0;
         for pair in index.chunks(2) {
@@ -369,12 +369,12 @@ impl Document {
                     continue;
                 }
                 let entry = match kind {
-                    0 => Entry::free(third.min(65535) as u16),
+                    0 => Entry::free(third.clamp(0, 65535) as u16),
                     1 if second > 0 => {
                         highest = highest.max(number);
-                        Entry::in_use(second, third.min(65535) as u16)
+                        Entry::in_use(second as u64, third.clamp(0, 65535) as u16)
                     }
-                    2 if second > 0 && second <= i32::MAX as u64 => {
+                    2 if second > 0 && second <= i32::MAX as i64 => {
                         highest = highest.max(number);
                         Entry::compressed(second as u32)
                     }
@@ -401,8 +401,9 @@ fn not_a_section() -> ReadError {
     )
 }
 
-fn field(data: &[u8], at: usize, width: usize) -> u64 {
+// Read as a signed 64-bit value, so an 8-byte field with the high bit set is negative, as in the reference engines.
+fn field(data: &[u8], at: usize, width: usize) -> i64 {
     data[at..at + width]
         .iter()
-        .fold(0, |value, b| (value << 8) | *b as u64)
+        .fold(0i64, |value, b| (value << 8) | *b as i64)
 }

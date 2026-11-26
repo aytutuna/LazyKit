@@ -334,3 +334,158 @@ fn an_unfiltered_stream_longer_than_the_limit_is_refused_before_it_is_copied() {
         1 << 20
     );
 }
+
+/// A cross-reference stream (object 20) for `with_pages(1)`, with an entry row `extra` after the real ones and
+/// `padding` bytes beyond the entries.
+fn xref_stream_file(extra: Option<[u8; 10]>, padding: usize) -> Vec<u8> {
+    let pdf = TestPdf::with_pages(1);
+    let xref = pdf.position();
+    let mut rows = vec![0u8, 0, 0, 0, 0, 0, 0, 0, 0, 0xff];
+    for n in 1..=4u32 {
+        let at = pdf.offset_of(n);
+        rows.extend([
+            1,
+            0,
+            0,
+            0,
+            0,
+            0,
+            (at >> 16) as u8,
+            (at >> 8) as u8,
+            at as u8,
+            0,
+        ]);
+    }
+    let mut index = String::from("0 5 20 1");
+    rows.extend([
+        1,
+        0,
+        0,
+        0,
+        0,
+        0,
+        (xref >> 16) as u8,
+        (xref >> 8) as u8,
+        xref as u8,
+        0,
+    ]);
+    if let Some(row) = extra {
+        rows.extend(row);
+        index.push_str(" 30 1");
+    }
+    rows.resize(rows.len() + padding, 0);
+    let mut file = TestPdf::with_pages(1);
+    file.stream_with(
+        20,
+        &format!(
+            "/Type /XRef /Size 21 /W [1 8 1] /Index [{index}] /Root 1 0 R /Filter /FlateDecode"
+        ),
+        &deflate(&rows),
+        None,
+        true,
+    );
+    [
+        file.finish_without_xref(),
+        latin(&format!("startxref\n{xref}\n%%EOF\n")),
+    ]
+    .concat()
+}
+
+#[test]
+fn a_cross_reference_stream_is_read_whole() {
+    let document = open(xref_stream_file(None, 0));
+    assert!(!document.xref_rebuilt());
+}
+
+#[test]
+fn a_cross_reference_stream_longer_than_its_entries_is_refused() {
+    let document = open(xref_stream_file(None, 1 << 20));
+    assert!(document.xref_rebuilt());
+}
+
+#[test]
+fn an_offset_with_the_high_bit_set_is_negative_as_in_the_reference() {
+    let mut huge = [1u8, 0x80, 0, 0, 0, 0, 0, 0, 1, 0];
+    let high_set = open(xref_stream_file(Some(huge), 0));
+    huge[1] = 0x40;
+    let high_clear = open(xref_stream_file(Some(huge), 0));
+    assert!(!high_clear.xref_rebuilt() && !high_set.xref_rebuilt());
+    assert_eq!(high_clear.next_object_number(), 31);
+    assert_eq!(high_set.next_object_number(), 21);
+}
+
+fn read_raw(document: &mut lazy_pdf_syntax::Document, numbers: impl Iterator<Item = u32>) {
+    for n in numbers {
+        if let Some(object) = document.get(n)
+            && let Object::Stream(stream) = &*object
+        {
+            // Over the limit, so the span is measured and not copied.
+            assert!(document.stream_data_limited(stream, 16, false).is_err());
+        }
+    }
+}
+
+#[test]
+fn streams_with_a_wrong_length_asked_for_from_the_end_do_not_each_scan_to_it() {
+    let mut pdf = TestPdf::with_pages(1);
+    for n in 30..5_030 {
+        pdf.stream_with(n, "", b"X", Some(999_999), false);
+    }
+    pdf.write(&"x".repeat(8 << 20));
+    pdf.write(
+        "
+endstream
+",
+    );
+    let mut document = open(pdf.finish());
+    assert!(!document.xref_rebuilt());
+    let started = Instant::now();
+    read_raw(&mut document, (30..5_030).rev());
+    must_finish_within(Duration::from_secs(5), started);
+}
+
+#[test]
+fn streams_that_end_at_a_far_endobj_do_not_each_scan_to_it() {
+    let mut pdf = TestPdf::with_pages(1);
+    for n in 30..5_030 {
+        pdf.open_obj(
+            n,
+            "<</Length 999999>>
+stream
+X
+",
+        );
+    }
+    pdf.write(&"x".repeat(8 << 20));
+    pdf.write(
+        "
+endobj
+",
+    );
+    let mut document = open(pdf.finish());
+    assert!(!document.xref_rebuilt());
+    let started = Instant::now();
+    read_raw(&mut document, 30..5_030);
+    must_finish_within(Duration::from_secs(5), started);
+}
+
+#[test]
+fn an_object_stream_that_failed_before_a_rebuild_is_read_again_from_its_new_definition() {
+    let (pdf, xref) = object_stream_file_padded(0);
+    let whole = [
+        pdf.finish_without_xref(),
+        latin(&format!("startxref\n{xref}\n%%EOF\n")),
+    ]
+    .concat();
+    let start = pdf.offset_of(5) as usize;
+    let end = xref as usize;
+    let good = whole[start..end].to_vec();
+    let mut broken = good.clone();
+    let name = b"/FlateDecode";
+    let at = broken.windows(name.len()).position(|w| w == name).unwrap();
+    broken[at..at + name.len()].copy_from_slice(b"/FlateDecodx");
+    let file = [whole[..start].to_vec(), broken, whole[end..].to_vec(), good].concat();
+    let mut document = open(file);
+    assert!(document.xref_rebuilt());
+    assert_eq!(document.pages().len(), 1);
+}
