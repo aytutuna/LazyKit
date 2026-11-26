@@ -1,6 +1,9 @@
+use crate::corners::SURE_CONFIDENCE;
+use crate::detector::{Detection, Options as DetectorOptions, Rejection, detect};
 use crate::enhancer::{DEFAULT_THRESHOLD, EnhanceMode, enhance};
-use crate::geometry::Quad;
+use crate::geometry::{Point, Quad};
 use crate::pipeline::locate;
+use crate::refiner::refine;
 use crate::warp::{self, DOCUMENTS, PAPER_ASPECT_TOLERANCE};
 use lazy_image::Rgba;
 use lazy_scan_model::CornerModel;
@@ -257,15 +260,72 @@ pub struct Imported {
     pub model_failed: bool,
 }
 
-/// The page search for a photo the model did not place. TODO: the edge-based search is not here yet; nothing is found.
-fn search_plan(photo: &Rgba) -> ImportPlan {
+/// `quad` with every corner moved into the photo; the start rectangle when that leaves no usable outline.
+pub fn clamped_to_photo(quad: &Quad, width: f64, height: f64) -> Quad {
+    let clamped = quad.clamped_to_photo(width, height);
+    if clamped.usable() {
+        clamped
+    } else {
+        Quad::start(width, height)
+    }
+}
+
+/// `quad` with corner `index` (0 top left, then clockwise, wrapping) moved to `to`, kept within the photo; the quad as it was
+/// when the move would leave corners the page cannot be cut out along.
+pub fn moved_corner(quad: &Quad, index: usize, to: Point, width: f64, height: f64) -> Quad {
+    let mut corners = quad.0;
+    corners[index & 3] = Point::new(to.x.clamp(0.0, width), to.y.clamp(0.0, height));
+    let moved = Quad(corners);
+    if moved.usable() { moved } else { *quad }
+}
+
+/// What to do with a photo of `width` x `height` where the page search found `detection`: a page found with at least
+/// SURE_CONFIDENCE (and that can be corrected) is cut out; anything else is shown in the corner editor, starting from the page
+/// found, else the best outline seen (kept within the photo), else a rectangle inset from the photo's edges.
+pub fn plan_detection(detection: &Detection, width: usize, height: usize) -> ImportPlan {
+    let (w, h) = (width as f64, height as f64);
+    if let Some(quad) = detection.quad {
+        let sure = detection.confidence >= SURE_CONFIDENCE && quad.correctable(w, h);
+        return ImportPlan {
+            action: if sure {
+                Action::Correct
+            } else {
+                Action::Review
+            },
+            corners: if sure {
+                quad
+            } else {
+                clamped_to_photo(&quad, w, h)
+            },
+            reason: if sure { Reason::None } else { Reason::Unsure },
+            confidence: detection.confidence,
+            by_model: false,
+        };
+    }
+    let reason = match detection.rejection {
+        Rejection::CutOff => Reason::CutOff,
+        Rejection::Ambiguous => Reason::TwoPages,
+        Rejection::LowConfidence => Reason::Unsure,
+        Rejection::None | Rejection::NothingFound => Reason::NothingFound,
+    };
     ImportPlan {
         action: Action::Review,
-        corners: Quad::start(photo.width as f64, photo.height as f64),
-        reason: Reason::NothingFound,
-        confidence: 0.0,
+        corners: detection
+            .candidate
+            .map_or_else(|| Quad::start(w, h), |c| clamped_to_photo(&c, w, h)),
+        reason,
+        confidence: detection.confidence,
         by_model: false,
     }
+}
+
+/// The page search for a photo the model did not place: the edge-based search, its corners moved onto the photo's edges.
+fn search_plan(photo: &Rgba) -> ImportPlan {
+    let mut detection = detect(photo, None, &DetectorOptions::default());
+    if let Some(quad) = detection.quad {
+        detection.quad = Some(refine(photo, &quad).quad);
+    }
+    plan_detection(&detection, photo.width, photo.height)
 }
 
 /// What to do with `photo` (upright), the corner model first when there is one.

@@ -35,8 +35,8 @@ pub use live::{
 };
 pub use photo::{
     Action, Filter, ImportPlan, Imported, MAX_DPI, MIN_DPI, NOMINAL_DPI, Orientation, Page, Reason,
-    corrected_page, import_photo, model_plan, oriented, page_dpi, plan, whole_photo_dpi,
-    whole_photo_page,
+    clamped_to_photo, corrected_page, import_photo, model_plan, moved_corner, oriented, page_dpi,
+    plan, plan_detection, whole_photo_dpi, whole_photo_page,
 };
 pub use pipeline::{Located, locate};
 pub use refiner::{Refinement, build_field, placement, refine};
