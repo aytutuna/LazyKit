@@ -27,4 +27,5 @@ pub fn sum(bytes: &[u8]) -> String {
     format!("{:08x}", fnv(bytes))
 }
 
+pub mod photo_scenes;
 pub mod scenes;
