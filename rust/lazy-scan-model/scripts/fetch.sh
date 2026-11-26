@@ -58,6 +58,12 @@ sha256() {
 
 has() { [ -f "$1" ] && [ "$(sha256 "$1")" = "$2" ]; }
 
+# one digest over the paths and contents of everything under $1 except the stamp, so an edited, added or missing file shows
+tree_sha() {
+  (cd "$1" && find . -type f ! -name stamp | LC_ALL=C sort | while read -r f; do echo "$f $(sha256 "$f")"; done) |
+    if command -v sha256sum >/dev/null 2>&1; then sha256sum | cut -d ' ' -f 1; else shasum -a 256 | cut -d ' ' -f 1; fi
+}
+
 download() {
   local url="$1" file="$2" expected="$3"
   curl -fsSL --retry 3 --retry-all-errors --retry-delay 10 -o "$file.part" "$url" || { rm -f "$file.part"; return 1; }
@@ -68,6 +74,16 @@ download() {
   fi
   mv "$file.part" "$file"
 }
+
+# the iOS stamp holds the archive's digest and the digest of the files unzipped from it; a cache that no longer matches is redone
+ios_cached=stale
+if [ "$what" = ios ] && [ -d "$out/ios" ] && [ "$(cat "$out/ios/stamp" 2>/dev/null)" = "$xcframework_sha $(tree_sha "$out/ios")" ]; then
+  ios_cached=cached
+fi
+if [ "$what" = ios ] && [ -n "${LAZY_FETCH_DRY:-}" ]; then
+  echo "$ios_cached"
+  exit 0
+fi
 
 if ! has "$out/$model" "$model_sha"; then
   download "$copy/$model" "$out/$model" "$model_sha" ||
@@ -111,7 +127,7 @@ if [ "$what" = android ]; then
 fi
 
 if [ "$what" = ios ]; then
-  if [ "$(cat "$out/ios/stamp" 2>/dev/null)" != "$xcframework_sha" ]; then
+  if [ "$ios_cached" = stale ]; then
     rm -rf "$out/ios"
     download "$nupkg_url" "$out/ort.nupkg" "$nupkg_sha" || { echo "ONNX Runtime package not fetched" >&2; exit 1; }
     unzip -j -o -q "$out/ort.nupkg" runtimes/ios/native/onnxruntime.xcframework.zip -d "$out"
@@ -119,7 +135,7 @@ if [ "$what" = ios ]; then
     has "$out/onnxruntime.xcframework.zip" "$xcframework_sha" || { echo "onnxruntime.xcframework.zip is not the pinned archive" >&2; exit 1; }
     mkdir -p "$out/ios"
     unzip -q -o "$out/onnxruntime.xcframework.zip" -d "$out/ios"
-    echo "$xcframework_sha" > "$out/ios/stamp"
+    echo "$xcframework_sha $(tree_sha "$out/ios")" > "$out/ios/stamp"
   fi
   echo "ONNX Runtime for iOS is in $out/ios"
   exit 0
