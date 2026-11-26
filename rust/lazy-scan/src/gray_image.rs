@@ -17,7 +17,9 @@ pub struct GrayImage {
 pub fn chroma_pixels(image: &Rgba) -> Gray {
     let data = image
         .data
-        .chunks_exact(4)
+        .as_chunks::<4>()
+        .0
+        .iter()
         .map(|p| p[0].max(p[1]).max(p[2]) - p[0].min(p[1]).min(p[2]))
         .collect();
     Gray {

@@ -327,7 +327,7 @@ mod tests {
     }
 
     fn map(columns: usize, rows: usize, tiles: &[u8]) -> BackgroundMap {
-        BackgroundMap::with_tiles(columns * 4, rows * 4, columns, rows, tiles.to_vec())
+        BackgroundMap::with_tiles(0, 0, columns * 4, rows * 4, columns, rows, tiles.to_vec())
     }
 
     #[test]
