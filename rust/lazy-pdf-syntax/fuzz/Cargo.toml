@@ -1,0 +1,32 @@
+[package]
+name = "lazy-pdf-syntax-fuzz"
+version = "0.0.0"
+edition = "2024"
+license-file = "../../../LICENSE"
+publish = false
+
+[package.metadata]
+cargo-fuzz = true
+
+[dependencies]
+libfuzzer-sys = "0.4.13"
+miniz_oxide = "0.9"
+
+[dependencies.lazy-pdf-syntax]
+path = ".."
+
+[[bin]]
+name = "lexer"
+path = "fuzz_targets/lexer.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "document"
+path = "fuzz_targets/document.rs"
+test = false
+doc = false
+bench = false
+
+[workspace]

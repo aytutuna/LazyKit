@@ -226,3 +226,30 @@ fn a_repaired_catalog_is_one_the_file_can_use() {
             .any(|r| r.contains("Found the catalog"))
     );
 }
+
+#[test]
+fn a_page_takes_what_it_lacks_from_the_nodes_above() {
+    let mut pdf = TestPdf::new();
+    pdf.obj(1, "<</Type /Catalog /Pages 2 0 R>>")
+        .obj(2, "<</Type /Pages /Kids [3 0 R] /Count 2 /MediaBox [0 0 100 200] /Rotate 90 /Resources <</Font <<>>>>>>")
+        .obj(3, "<</Type /Pages /Parent 2 0 R /Kids [4 0 R 5 0 R] /Count 2>>")
+        .obj(4, "<</Type /Page /Parent 3 0 R>>")
+        .obj(5, "<</Type /Page /Parent 3 0 R /Rotate 270 /Resources <</XObject <<>>>>>>");
+    let mut document = open(pdf.finish());
+    let pages = document.pages();
+    assert_eq!(pages[0].rotate(&mut document), 90);
+    assert_eq!(pages[1].rotate(&mut document), 270);
+    assert_eq!(pages[1].media_box(&mut document).height(), 200.0);
+    assert!(
+        pages[0]
+            .resources(&mut document)
+            .unwrap()
+            .contains_key("Font")
+    );
+    assert!(
+        pages[1]
+            .resources(&mut document)
+            .unwrap()
+            .contains_key("XObject")
+    );
+}

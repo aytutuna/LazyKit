@@ -70,10 +70,10 @@ const DEFAULT_BOX: Rect = Rect {
 /// What a page takes from the nodes above it when it has no value of its own.
 #[derive(Debug, Clone, Default)]
 pub(crate) struct Inherited {
-    resources: Option<Object>,
-    media_box: Option<Object>,
-    crop_box: Option<Object>,
-    rotate: Option<Object>,
+    resources: Option<Arc<Object>>,
+    media_box: Option<Arc<Object>>,
+    crop_box: Option<Arc<Object>>,
+    rotate: Option<Arc<Object>>,
 }
 
 /// One page of the tree.
@@ -97,16 +97,28 @@ impl Page {
         self.dict.as_dict().expect("a page is a dictionary")
     }
 
+    /// The page's /Resources, or those of the nearest node above that has any.
+    pub fn resources(&self, document: &mut Document) -> Option<Dict> {
+        if let Some(own) = document.dict_of(self.dict(), "Resources") {
+            return Some(own);
+        }
+        let inherited = document.resolve(self.inherited.resources.as_deref()?)?;
+        match &*inherited {
+            Object::Dict(d) => Some(d.clone()),
+            _ => None,
+        }
+    }
+
     /// The paper: /MediaBox, or US Letter when it is missing or has no area.
     pub fn media_box(&self, document: &mut Document) -> Rect {
-        self.boxed(document, "MediaBox", self.inherited.media_box.as_ref())
+        self.boxed(document, "MediaBox", self.inherited.media_box.as_deref())
             .unwrap_or(DEFAULT_BOX)
     }
 
     /// What is shown: /CropBox clipped to the media box; the media box without one.
     pub fn crop_box(&self, document: &mut Document) -> Rect {
         let media = self.media_box(document);
-        let Some(crop) = self.boxed(document, "CropBox", self.inherited.crop_box.as_ref()) else {
+        let Some(crop) = self.boxed(document, "CropBox", self.inherited.crop_box.as_deref()) else {
             return media;
         };
         let clipped = crop.intersect(&media);
@@ -121,7 +133,7 @@ impl Page {
             None => self
                 .inherited
                 .rotate
-                .as_ref()
+                .as_deref()
                 .and_then(|v| document.resolve(v))
                 .map(|v| v.into_shared()),
         };
@@ -296,7 +308,7 @@ impl Document {
         let own = |key: &str| {
             dict.get(key)
                 .filter(|v| !matches!(v, Object::Null))
-                .cloned()
+                .map(|v| Arc::new(v.clone()))
         };
         let inherited = Inherited {
             resources: own("Resources").or_else(|| inherited.resources.clone()),
