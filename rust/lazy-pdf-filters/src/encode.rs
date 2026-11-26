@@ -103,7 +103,7 @@ pub fn lzw(data: &[u8], early_change: bool) -> Vec<u8> {
     // The encoder's table runs one entry ahead of the decoder's, hence the minus one.
     let grow = |next: &mut usize, bits: &mut u32| {
         *next += 1;
-        if *next + early - 1 >= 1 << *bits && *bits < 12 {
+        if *next + early > 1 << *bits && *bits < 12 {
             *bits += 1;
         }
     };
