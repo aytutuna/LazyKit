@@ -123,6 +123,7 @@ pub struct Document {
     pub(crate) objects: HashMap<u32, Slot>,
     pub(crate) object_streams: HashMap<u32, ObjectStream>,
     pub(crate) object_stream_bytes: usize,
+    pub(crate) bad_object_streams: HashSet<u32>,
     pub(crate) loading: HashSet<u32>,
     pub(crate) changed: BTreeSet<u32>,
     pub(crate) originals: HashMap<u32, Vec<u8>>,
@@ -131,6 +132,7 @@ pub struct Document {
 
     pub(crate) scan: Option<Arc<Scan>>,
     pub(crate) last_endstream: Cell<i64>,
+    pub(crate) endstream_spans: std::cell::RefCell<std::collections::BTreeMap<usize, usize>>,
     pub(crate) last_endobj: Cell<i64>,
     pub(crate) length_repaired: HashSet<usize>,
 
@@ -167,6 +169,7 @@ impl Document {
             xref_entries: 0,
             objects: HashMap::new(),
             object_streams: HashMap::new(),
+            bad_object_streams: HashSet::new(),
             object_stream_bytes: 0,
             loading: HashSet::new(),
             changed: BTreeSet::new(),
@@ -175,6 +178,7 @@ impl Document {
             first_new: u32::MAX,
             scan: None,
             last_endstream: Cell::new(-2),
+            endstream_spans: Default::default(),
             last_endobj: Cell::new(-2),
             length_repaired: HashSet::new(),
             pages: None,

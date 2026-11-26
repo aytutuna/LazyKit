@@ -10,7 +10,7 @@ use crate::object::{Dict, Object, Ref};
 const MAX_REFERENCE_HOPS: usize = 32;
 const MAX_CACHED_OBJECT_STREAMS: usize = 256;
 const MAX_CACHED_OBJECT_STREAM_BYTES: usize = 128 << 20;
-const MAX_OBJECT_STREAM_SIZE: usize = 32 << 20;
+const MAX_OBJECT_STREAM_SIZE: usize = 64 << 20;
 /// All the object streams a document may decode in its life, however often the cache drops them.
 const MAX_DECODED_OBJECT_STREAM_BYTES: usize = 1 << 30;
 /// Reading an object can need another (a stream's /Length, an object stream); a longer chain is a trap.
@@ -336,6 +336,9 @@ impl Document {
     }
 
     fn read_object_stream(&mut self, number: u32) -> Option<ObjectStream> {
+        if self.bad_object_streams.contains(&number) {
+            return None;
+        }
         let object = self.get(number)?;
         let Object::Stream(stream) = &*object else {
             return None;
@@ -357,6 +360,7 @@ impl Document {
         let data = match self.stream_data_limited(stream, MAX_OBJECT_STREAM_SIZE, false) {
             Ok(data) => data,
             Err(e) => {
+                self.bad_object_streams.insert(number);
                 self.add_repair(format!(
                     "Object stream {number} could not be read ({}).",
                     e.detail

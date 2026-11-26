@@ -156,6 +156,11 @@ fn rows(rows: &[[u8; 5]]) -> Vec<u8> {
 
 /// Objects 1 to 3 in object stream 5, content stream 4, cross-reference stream 6.
 pub fn object_stream_file() -> (TestPdf, u64) {
+    object_stream_file_padded(0)
+}
+
+/// The same file with `pad` blanks after the last object in the object stream.
+pub fn object_stream_file_padded(pad: usize) -> (TestPdf, u64) {
     const BODIES: [&str; 3] = [
         "<</Type /Catalog /Pages 2 0 R>>",
         "<</Type /Pages /Kids [3 0 R] /Count 1>>",
@@ -178,7 +183,7 @@ pub fn object_stream_file() -> (TestPdf, u64) {
             "/Type /ObjStm /N 3 /First {} /Filter /FlateDecode",
             header.len()
         ),
-        &deflate(&latin(&format!("{header}{body}"))),
+        &deflate(&latin(&format!("{header}{body}{}", " ".repeat(pad)))),
         None,
         true,
     );

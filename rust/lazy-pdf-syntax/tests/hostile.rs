@@ -4,7 +4,7 @@ use std::time::{Duration, Instant};
 
 use common::latin;
 use common::open;
-use common::pdf::{TestPdf, deflate};
+use common::pdf::{TestPdf, deflate, object_stream_file_padded};
 use lazy_pdf_syntax::Object;
 
 // More of what a hostile file may cost; the limits are loosened for a build with no optimizing.
@@ -137,4 +137,200 @@ fn object_streams_that_do_not_fit_the_cache_together_are_not_decoded_without_end
     }
     assert!(read > 0);
     must_finish_within(Duration::from_secs(60), started);
+}
+
+#[test]
+fn a_page_behind_a_reference_chain_keeps_its_own_entries() {
+    let mut pdf = TestPdf::new();
+    pdf.obj(1, "<</Type /Catalog /Pages 2 0 R>>")
+        .obj(2, "<</Type /Pages /Kids [3 0 R] /Count 1>>")
+        .obj(3, "4 0 R")
+        .obj(
+            4,
+            "<</Type /Page /MediaBox [0 0 100 200] /UserUnit 2 /TrimBox [1 1 50 50] /Contents 5 0 R>>",
+        )
+        .stream(5, "", "BT ET");
+    let mut document = open(pdf.finish());
+    let pages = document.pages();
+    assert_eq!(pages.len(), 1);
+    assert_eq!(pages[0].contents(&mut document), b"BT ET");
+    assert_eq!(pages[0].user_unit(&mut document), 2.0);
+    assert_eq!(pages[0].trim_box(&mut document).right, 50.0);
+}
+
+#[test]
+fn an_object_stream_between_32_and_64_mb_is_read() {
+    let (pdf, xref) = object_stream_file_padded(40 << 20);
+    let file = [
+        pdf.finish_without_xref(),
+        latin(&format!(
+            "startxref
+{xref}
+%%EOF
+"
+        )),
+    ]
+    .concat();
+    let mut document = open(file);
+    assert_eq!(document.pages().len(), 1);
+}
+
+#[test]
+fn a_kids_array_that_holds_itself_is_walked_in_bounded_time() {
+    let mut pdf = TestPdf::new();
+    pdf.obj(1, "<</Type /Catalog /Pages 2 0 R>>")
+        .obj(2, "<</Type /Pages /Kids 5 0 R>>")
+        .obj(5, "[<</Kids 5 0 R>> <</Kids 5 0 R>>]");
+    let started = Instant::now();
+    let mut document = open(pdf.finish());
+    assert!(document.pages().is_empty());
+    must_finish_within(Duration::from_secs(20), started);
+}
+
+#[test]
+fn an_object_stream_that_fails_is_not_inflated_again_for_each_member() {
+    let mut pdf = TestPdf::with_header(
+        "%PDF-1.5
+",
+    );
+    pdf.obj(1, "<</Type /Catalog /Pages 2 0 R>>")
+        .obj(2, "<</Type /Pages /Kids [] /Count 0>>");
+    pdf.stream_with(
+        5,
+        "/Type /ObjStm /N 1 /First 5 /Filter /FlateDecode",
+        &deflate(&vec![b' '; 70 << 20]),
+        None,
+        true,
+    );
+    let xref = pdf.position();
+    let row = |kind: u8, field: u64, third: u8| {
+        [
+            kind,
+            (field >> 16) as u8,
+            (field >> 8) as u8,
+            field as u8,
+            third,
+        ]
+    };
+    let mut rows = vec![row(0, 0, 255)];
+    rows.push(row(1, pdf.offset_of(1), 0));
+    rows.push(row(1, pdf.offset_of(2), 0));
+    rows.extend([row(0, 0, 0), row(0, 0, 0)]);
+    rows.push(row(1, pdf.offset_of(5), 0));
+    rows.push(row(1, xref, 0));
+    rows.extend((0..4).map(|i| row(2, 5, i)));
+    let data: Vec<u8> = rows.concat();
+    pdf.stream_with(
+        6,
+        "/Type /XRef /Size 11 /W [1 3 1] /Root 1 0 R /Filter /FlateDecode",
+        &deflate(&data),
+        None,
+        true,
+    );
+    let file = [
+        pdf.finish_without_xref(),
+        latin(&format!(
+            "startxref
+{xref}
+%%EOF
+"
+        )),
+    ]
+    .concat();
+    let mut document = open(file);
+    for number in 7..=10 {
+        document.get(number);
+    }
+    let failed = document
+        .repairs()
+        .iter()
+        .filter(|r| r.contains("Object stream 5 could not be read"))
+        .count();
+    assert_eq!(failed, 1);
+}
+
+#[test]
+fn a_content_stream_that_keeps_failing_is_not_tried_a_million_times() {
+    let mut pdf = TestPdf::with_pages(1);
+    pdf.stream_with(20, "/Filter /FlateDecode", b"not flate data", None, true);
+    pdf.obj(21, &format!("[{}]", "20 0 R ".repeat(5000)));
+    let file = TestPdf::replace(&pdf.finish(), "/Contents 4 0 R", "/Contents 21 0 R");
+    let mut document = open(file);
+    let pages = document.pages();
+    let started = Instant::now();
+    pages[0].contents(&mut document);
+    let failed = document
+        .repairs()
+        .iter()
+        .filter(|r| r.contains("content stream could not be read"))
+        .count();
+    assert!(failed < 100, "{failed}");
+    must_finish_within(Duration::from_secs(10), started);
+}
+
+#[test]
+fn many_streams_with_a_wrong_length_do_not_each_scan_to_the_end() {
+    let mut pdf = TestPdf::with_pages(1);
+    for n in 30..20_030 {
+        pdf.write(&format!(
+            "{n} 0 obj
+<</Length 999999>>
+stream
+X
+endobj
+"
+        ));
+    }
+    pdf.write(&"x".repeat(8 << 20));
+    pdf.write(
+        "
+endstream
+",
+    );
+    let file = pdf.finish_without_xref();
+    let started = Instant::now();
+    let mut document = open(
+        [
+            file,
+            latin(
+                "startxref
+0
+%%EOF
+",
+            ),
+        ]
+        .concat(),
+    );
+    assert!(document.xref_rebuilt());
+    for n in 30..20_030 {
+        if let Some(object) = document.get(n)
+            && let Object::Stream(stream) = &*object
+        {
+            document.raw_data(stream);
+        }
+    }
+    must_finish_within(Duration::from_secs(20), started);
+}
+
+#[test]
+fn an_unfiltered_stream_longer_than_the_limit_is_refused_before_it_is_copied() {
+    let mut pdf = TestPdf::with_pages(1);
+    pdf.stream_with(20, "", &vec![b'a'; 1 << 20], None, true);
+    let mut document = open(pdf.finish());
+    let object = document.get(20).unwrap();
+    let Object::Stream(stream) = &*object else {
+        panic!("not a stream");
+    };
+    assert!(
+        document
+            .stream_data_limited(stream, 1 << 10, false)
+            .is_err()
+    );
+    assert_eq!(
+        document
+            .stream_data_limited(stream, 2 << 20, false)
+            .unwrap()
+            .len(),
+        1 << 20
+    );
 }

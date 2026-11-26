@@ -29,11 +29,15 @@ impl Document {
         if let Some(memory) = &stream.data {
             return memory.clone();
         }
-        let Some(start) = stream.data_offset.filter(|s| *s <= self.data.len()) else {
-            return Vec::new();
-        };
-        let length = self.stream_length(stream, start);
-        self.data[start..start + length].to_vec()
+        match self.raw_span(stream) {
+            Some((start, length)) => self.data[start..start + length].to_vec(),
+            None => Vec::new(),
+        }
+    }
+
+    fn raw_span(&mut self, stream: &Stream) -> Option<(usize, usize)> {
+        let start = stream.data_offset.filter(|s| *s <= self.data.len())?;
+        Some((start, self.stream_length(stream, start)))
     }
 
     /// The data of `stream` decoded, with /Length, /Filter and /DecodeParms resolved first. A filter that is not
@@ -51,6 +55,14 @@ impl Document {
         strict: bool,
     ) -> Result<Vec<u8>, ReadError> {
         let stages = self.decode_spec(stream, true, max_size)?;
+        // With no filter to hold it to the limit, a span that is too long is refused before it is copied.
+        if stream.data.is_none()
+            && stages.iter().all(|s| s.filter == b"Crypt")
+            && let Some((_, length)) = self.raw_span(stream)
+            && length > max_size
+        {
+            return Err(ReadError::damaged("The stream is longer than the limit."));
+        }
         let mut data = self.raw_data(stream);
         for stage in stages {
             if stage.filter == b"Crypt" {
@@ -212,7 +224,7 @@ impl Document {
     }
 
     pub(crate) fn find_stream_end(&self, start: usize) -> usize {
-        let mut end = self.index_from(b"endstream", &self.last_endstream, start);
+        let mut end = self.next_endstream(start);
         if end.is_none() {
             end = self.index_from(b"endobj", &self.last_endobj, start);
         }
@@ -225,6 +237,21 @@ impl Document {
             end -= 1;
         }
         end
+    }
+
+    /// The first "endstream" at or after `start`. A search that found one at `at` from `lo` also answers every start
+    /// in between, so streams with a wrong /Length do not each scan on to the end of the file.
+    fn next_endstream(&self, start: usize) -> Option<usize> {
+        let mut known = self.endstream_spans.borrow_mut();
+        if let Some((&at, &lo)) = known.range(start..).next()
+            && lo <= start
+        {
+            return Some(at);
+        }
+        let at = self.index_from(b"endstream", &self.last_endstream, start)?;
+        let lo = known.get(&at).map_or(start, |&lo| lo.min(start));
+        known.insert(at, lo);
+        Some(at)
     }
 
     /// The first `pattern` at or after `start`. Knowing the last one in the file spares a scan to the end for each

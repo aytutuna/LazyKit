@@ -9,6 +9,12 @@ use crate::object::{Dict, Object, Ref};
 
 const MAX_TREE_DEPTH: usize = 256;
 
+/// Nodes one walk looks at, direct dictionaries included: a /Kids array shared by its own children has no end.
+const MAX_TREE_NODES: usize = 1 << 20;
+
+/// Content streams of one page that may fail to read; each failure can have cost a full decode.
+const MAX_CONTENT_FAILURES: usize = 16;
+
 /// No page has more content than this; the limit is shared by all of its streams.
 const MAX_CONTENT_SIZE: usize = 256 << 20;
 
@@ -89,6 +95,7 @@ struct Walk {
     pages: Vec<Page>,
     visited: HashSet<u32>,
     skipped: usize,
+    nodes: usize,
 }
 
 impl Page {
@@ -102,8 +109,8 @@ impl Page {
     }
 
     fn object(&self, document: &mut Document) -> Arc<Object> {
-        match document.get(self.reference.number) {
-            Some(object) if matches!(*object, Object::Dict(_)) => object,
+        match document.resolve(&Object::Ref(self.reference)) {
+            Some(object) if matches!(*object, Object::Dict(_)) => object.into_shared(),
             _ => Arc::new(Object::Dict(Dict::new())),
         }
     }
@@ -199,6 +206,7 @@ impl Page {
     pub fn contents(&self, document: &mut Document) -> Vec<u8> {
         let mut parts: Vec<Vec<u8>> = Vec::new();
         let mut room = MAX_CONTENT_SIZE;
+        let mut failures = 0;
         let object = self.object(document);
         let contents = object
             .as_dict()
@@ -222,11 +230,17 @@ impl Page {
                     room = room.saturating_sub(part.len() + 1);
                     parts.push(part);
                 }
-                Err(e) => document.add_repair(format!(
-                    "Page {}: a content stream could not be read ({})",
-                    self.index + 1,
-                    e.detail
-                )),
+                Err(e) => {
+                    document.add_repair(format!(
+                        "Page {}: a content stream could not be read ({})",
+                        self.index + 1,
+                        e.detail
+                    ));
+                    failures += 1;
+                    if failures >= MAX_CONTENT_FAILURES {
+                        break;
+                    }
+                }
             }
         }
         parts.join(&b'\n')
@@ -304,6 +318,7 @@ impl Document {
             pages: Vec::new(),
             visited: HashSet::new(),
             skipped: 0,
+            nodes: 0,
         };
         if let Some(root) = catalog.get("Pages") {
             self.walk_node(root, &Inherited::default(), 0, &mut walk);
@@ -337,7 +352,9 @@ impl Document {
             Object::Ref(r) => Some(*r),
             _ => None,
         };
+        walk.nodes += 1;
         let resolved = if depth > MAX_TREE_DEPTH
+            || walk.nodes > MAX_TREE_NODES
             || reference.is_some_and(|r| !walk.visited.insert(r.number))
         {
             None
