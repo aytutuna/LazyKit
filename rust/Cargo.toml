@@ -18,4 +18,5 @@ uniffi = "=0.32.0"
 panic = "unwind"
 lto = true
 codegen-units = 1
-strip = true
+# UniFFI reads its metadata from the symbols of the built library, so they stay.
+strip = "debuginfo"
