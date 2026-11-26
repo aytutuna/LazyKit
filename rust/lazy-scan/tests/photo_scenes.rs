@@ -36,7 +36,10 @@ fn a_warped_sheet_comes_back_as_it_was() {
             let i = (by * 210 + bx) * 4;
             for c in 0..3 {
                 let delta = page.data[i + c] as i32 - sheet.data[i + c] as i32;
-                assert!((-6..=6).contains(&delta), "block ({bx}, {by}) channel {c}: {delta}");
+                assert!(
+                    (-6..=6).contains(&delta),
+                    "block ({bx}, {by}) channel {c}: {delta}"
+                );
             }
         }
     }
@@ -50,7 +53,8 @@ fn the_corrected_bytes_are_the_apps() {
     assert_eq!(checksum(&on), 0xF8DE_2BA5);
     let (off, _) = warp::correct(&photo, &quad, &forced(Supersampling::Off)).unwrap();
     assert_eq!(checksum(&off), 0x9950_9981);
-    let (wood, plan) = warp::correct(&wood_scene(), &WOOD_MAP.corners(), &Options::default()).unwrap();
+    let (wood, plan) =
+        warp::correct(&wood_scene(), &WOOD_MAP.corners(), &Options::default()).unwrap();
     assert_eq!((wood.width, wood.height), (235, 333));
     assert_eq!(plan.paper.map(|p| p.paper), Some(Paper::A4));
     assert_eq!(checksum(&wood), 0x32B3_6A66);

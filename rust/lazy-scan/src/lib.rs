@@ -8,6 +8,7 @@ mod enhancer;
 pub mod frame_quality;
 mod geometry;
 mod live;
+mod photo;
 mod pipeline;
 mod refiner;
 mod stability;
@@ -27,6 +28,11 @@ pub use lazy_scan_model::{CornerModel, Heatmaps, ModelError};
 pub use live::{
     Detection, HOLD_MS, LiveFrame, LiveQuadFilter, LiveQuadTracker, LiveUpdate, MIN_FRAME_GAP_MS,
     PageThumbnail, Steadied,
+};
+pub use photo::{
+    Action, Filter, ImportPlan, Imported, MAX_DPI, MIN_DPI, NOMINAL_DPI, Orientation, Page, Reason,
+    corrected_page, import_photo, model_plan, oriented, page_dpi, plan, whole_photo_dpi,
+    whole_photo_page,
 };
 pub use pipeline::{Located, locate};
 pub use refiner::{Refinement, build_field, placement, refine};

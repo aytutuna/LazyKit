@@ -57,8 +57,28 @@ pub struct IntHomography {
     i: i64,
 }
 
-const fn hom(a: i64, b: i64, c: i64, d: i64, e: i64, f: i64, g: i64, h: i64, i: i64) -> IntHomography {
-    IntHomography { a, b, c, d, e, f, g, h, i }
+const fn hom(
+    a: i64,
+    b: i64,
+    c: i64,
+    d: i64,
+    e: i64,
+    f: i64,
+    g: i64,
+    h: i64,
+    i: i64,
+) -> IntHomography {
+    IntHomography {
+        a,
+        b,
+        c,
+        d,
+        e,
+        f,
+        g,
+        h,
+        i,
+    }
 }
 
 impl IntHomography {
@@ -73,30 +93,74 @@ impl IntHomography {
     /// The page's outline in the photo, named from the top left.
     pub fn corners(&self) -> Quad {
         let (w, h) = (PAGE_WIDTH as f64, PAGE_HEIGHT as f64);
-        Quad::from_corners([self.map(0.0, 0.0), self.map(w, 0.0), self.map(w, h), self.map(0.0, h)])
+        Quad::from_corners([
+            self.map(0.0, 0.0),
+            self.map(w, 0.0),
+            self.map(w, h),
+            self.map(0.0, h),
+        ])
     }
 }
 
 const M: i64 = 1048576;
-pub const WOOD_MAP: IntHomography = hom(1155332, -122914, 81788928, 177335, 930372, 75497472, 485, -598, M);
-pub const DARK_MAP: IntHomography = hom(739319, -271102, 110100480, -28187, 541359, 94371840, -96, -1455, M);
-pub const LIGHT_MAP: IntHomography = hom(1121991, 12060, 62914560, -46867, 1041969, 62914560, 272, -332, M);
-pub const SIMILAR_MAP: IntHomography = hom(1095194, -44778, 73400320, -50732, 1055747, 83886080, -11, -267, M);
-pub const CUT_OFF_MAP: IntHomography = hom(1228481, -108457, 157286400, 195764, 1313578, 41943040, -50, 298, M);
-pub const UNDER_MAP: IntHomography = hom(806253, 18023, 31457280, -48774, 760787, 41943040, 39, -88, M);
-pub const TOP_MAP: IntHomography = hom(1053725, -86609, 125829120, 102517, 953472, 157286400, 16, -160, M);
-pub const LEFT_MAP: IntHomography = hom(741204, 21217, 20971520, -45071, 763036, 125829120, -46, 1, M);
-pub const RIGHT_MAP: IntHomography = hom(748983, -21183, 199229440, 29959, 766131, 120586240, 0, 0, M);
-pub const ROUND_TRIP_MAP: IntHomography = hom(1454408, -35269, 41943040, 82485, 1426885, 37748736, 50, 1, M);
+pub const WOOD_MAP: IntHomography = hom(
+    1155332, -122914, 81788928, 177335, 930372, 75497472, 485, -598, M,
+);
+pub const DARK_MAP: IntHomography = hom(
+    739319, -271102, 110100480, -28187, 541359, 94371840, -96, -1455, M,
+);
+pub const LIGHT_MAP: IntHomography = hom(
+    1121991, 12060, 62914560, -46867, 1041969, 62914560, 272, -332, M,
+);
+pub const SIMILAR_MAP: IntHomography = hom(
+    1095194, -44778, 73400320, -50732, 1055747, 83886080, -11, -267, M,
+);
+pub const CUT_OFF_MAP: IntHomography = hom(
+    1228481, -108457, 157286400, 195764, 1313578, 41943040, -50, 298, M,
+);
+pub const UNDER_MAP: IntHomography = hom(
+    806253, 18023, 31457280, -48774, 760787, 41943040, 39, -88, M,
+);
+pub const TOP_MAP: IntHomography = hom(
+    1053725, -86609, 125829120, 102517, 953472, 157286400, 16, -160, M,
+);
+pub const LEFT_MAP: IntHomography = hom(
+    741204, 21217, 20971520, -45071, 763036, 125829120, -46, 1, M,
+);
+pub const RIGHT_MAP: IntHomography =
+    hom(748983, -21183, 199229440, 29959, 766131, 120586240, 0, 0, M);
+pub const ROUND_TRIP_MAP: IntHomography = hom(
+    1454408, -35269, 41943040, 82485, 1426885, 37748736, 50, 1, M,
+);
 
 /// An upright page 1.4 photo pixels per page pixel whose bottom edge lies `gap` px above the frame's bottom.
 pub fn bottom_gap_map(gap: i64) -> IntHomography {
-    hom(1468006, 0, 33 * M, 0, 1468006, (HEIGHT - gap) * M - 1468006 * PAGE_HEIGHT, 0, 0, M)
+    hom(
+        1468006,
+        0,
+        33 * M,
+        0,
+        1468006,
+        (HEIGHT - gap) * M - 1468006 * PAGE_HEIGHT,
+        0,
+        0,
+        M,
+    )
 }
 
 /// The same page with its right edge `gap` px from the frame's right side.
 pub fn right_gap_map(gap: i64) -> IntHomography {
-    hom(1468006, 0, (WIDTH - gap) * M - 1468006 * PAGE_WIDTH, 0, 1468006, 30 * M, 0, 0, M)
+    hom(
+        1468006,
+        0,
+        (WIDTH - gap) * M - 1468006 * PAGE_WIDTH,
+        0,
+        1468006,
+        30 * M,
+        0,
+        0,
+        M,
+    )
 }
 
 #[derive(Clone, Copy)]
@@ -136,7 +200,12 @@ pub struct Lighting {
 }
 
 const fn light(across_x: i64, down_y: i64) -> Lighting {
-    Lighting { across_x, down_y, shadow: None, glare: None }
+    Lighting {
+        across_x,
+        down_y,
+        shadow: None,
+        glare: None,
+    }
 }
 
 pub struct Sheet {
@@ -145,32 +214,91 @@ pub struct Sheet {
 }
 
 fn page_sheet(seed: u32, map: IntHomography) -> Sheet {
-    Sheet { rgb: page_raster(seed, 246, 244, 238), map }
+    Sheet {
+        rgb: page_raster(seed, 246, 244, 238),
+        map,
+    }
 }
 
 pub fn wood_scene() -> Rgba {
-    scene(Backdrop::Wood, 0x3D00_D001, light(180, 0), &[page_sheet(0x9A6E_0001, WOOD_MAP)])
+    scene(
+        Backdrop::Wood,
+        0x3D00_D001,
+        light(180, 0),
+        &[page_sheet(0x9A6E_0001, WOOD_MAP)],
+    )
 }
 
 pub fn dark_scene() -> Rgba {
-    let lit = Lighting { glare: Some(Glare { cx: 280, cy: 120, r: 70, strength: 900 }), ..light(0, 120) };
-    scene(Backdrop::Dark, 0x3D00_D002, lit, &[page_sheet(0x9A6E_0002, DARK_MAP)])
+    let lit = Lighting {
+        glare: Some(Glare {
+            cx: 280,
+            cy: 120,
+            r: 70,
+            strength: 900,
+        }),
+        ..light(0, 120)
+    };
+    scene(
+        Backdrop::Dark,
+        0x3D00_D002,
+        lit,
+        &[page_sheet(0x9A6E_0002, DARK_MAP)],
+    )
 }
 
 pub fn light_scene() -> Rgba {
-    let lit = Lighting { shadow: Some(Shadow { cx: 40, cy: 470, rx: 220, ry: 260, depth: 380 }), ..light(0, 0) };
-    scene(Backdrop::Light, 0x3D00_D003, lit, &[page_sheet(0x9A6E_0003, LIGHT_MAP)])
+    let lit = Lighting {
+        shadow: Some(Shadow {
+            cx: 40,
+            cy: 470,
+            rx: 220,
+            ry: 260,
+            depth: 380,
+        }),
+        ..light(0, 0)
+    };
+    scene(
+        Backdrop::Light,
+        0x3D00_D003,
+        lit,
+        &[page_sheet(0x9A6E_0003, LIGHT_MAP)],
+    )
 }
 
 pub fn similar_scene() -> Rgba {
-    let lit = Lighting { glare: Some(Glare { cx: 180, cy: 250, r: 55, strength: 800 }), ..light(100, 60) };
-    scene(Backdrop::Similar, 0x3D00_D004, lit, &[page_sheet(0x9A6E_0004, SIMILAR_MAP)])
+    let lit = Lighting {
+        glare: Some(Glare {
+            cx: 180,
+            cy: 250,
+            r: 55,
+            strength: 800,
+        }),
+        ..light(100, 60)
+    };
+    scene(
+        Backdrop::Similar,
+        0x3D00_D004,
+        lit,
+        &[page_sheet(0x9A6E_0004, SIMILAR_MAP)],
+    )
 }
 
 pub fn no_page_scene() -> Rgba {
     let lit = Lighting {
-        shadow: Some(Shadow { cx: 300, cy: 100, rx: 150, ry: 120, depth: 350 }),
-        glare: Some(Glare { cx: 120, cy: 300, r: 60, strength: 900 }),
+        shadow: Some(Shadow {
+            cx: 300,
+            cy: 100,
+            rx: 150,
+            ry: 120,
+            depth: 350,
+        }),
+        glare: Some(Glare {
+            cx: 120,
+            cy: 300,
+            r: 60,
+            strength: 900,
+        }),
         ..light(150, 0)
     };
     scene(Backdrop::Wood, 0x3D00_D005, lit, &[])
@@ -181,7 +309,12 @@ pub fn plain_scene() -> Rgba {
 }
 
 pub fn cut_off_scene() -> Rgba {
-    scene(Backdrop::Dark, 0x3D00_D007, light(0, 0), &[page_sheet(0x9A6E_0007, CUT_OFF_MAP)])
+    scene(
+        Backdrop::Dark,
+        0x3D00_D007,
+        light(0, 0),
+        &[page_sheet(0x9A6E_0007, CUT_OFF_MAP)],
+    )
 }
 
 /// A smaller sheet of cream paper with a larger white one lying over its lower right part.
@@ -191,7 +324,10 @@ pub fn overlap_scene() -> Rgba {
         0x3D00_D008,
         light(0, 0),
         &[
-            Sheet { rgb: page_raster(0x9A6E_0008, 232, 226, 210), map: UNDER_MAP },
+            Sheet {
+                rgb: page_raster(0x9A6E_0008, 232, 226, 210),
+                map: UNDER_MAP,
+            },
             page_sheet(0x9A6E_0009, TOP_MAP),
         ],
     )
@@ -203,7 +339,10 @@ pub fn two_pages_scene() -> Rgba {
         Backdrop::Light,
         0x3D00_D00A,
         light(0, 0),
-        &[page_sheet(0x9A6E_000A, LEFT_MAP), page_sheet(0x9A6E_000B, RIGHT_MAP)],
+        &[
+            page_sheet(0x9A6E_000A, LEFT_MAP),
+            page_sheet(0x9A6E_000B, RIGHT_MAP),
+        ],
     )
 }
 
@@ -213,16 +352,29 @@ pub fn round_trip_scene() -> Rgba {
         Backdrop::Dark,
         0x3D00_D00C,
         light(0, 0),
-        &[Sheet { rgb: block_raster(0x9A6E_000C), map: ROUND_TRIP_MAP }],
+        &[Sheet {
+            rgb: block_raster(0x9A6E_000C),
+            map: ROUND_TRIP_MAP,
+        }],
     )
 }
 
 pub fn bottom_gap_scene(gap: i64) -> Rgba {
-    scene(Backdrop::Wood, 0x3D00_D00D, light(120, 0), &[page_sheet(0x9A6E_000D, bottom_gap_map(gap))])
+    scene(
+        Backdrop::Wood,
+        0x3D00_D00D,
+        light(120, 0),
+        &[page_sheet(0x9A6E_000D, bottom_gap_map(gap))],
+    )
 }
 
 pub fn right_gap_scene(gap: i64) -> Rgba {
-    scene(Backdrop::Wood, 0x3D00_D00E, light(120, 0), &[page_sheet(0x9A6E_000E, right_gap_map(gap))])
+    scene(
+        Backdrop::Wood,
+        0x3D00_D00E,
+        light(120, 0),
+        &[page_sheet(0x9A6E_000E, right_gap_map(gap))],
+    )
 }
 
 fn fill_rgb(p: &mut [u8], x: i64, y: i64, w: i64, h: i64, rgb: [u8; 3]) {
@@ -251,7 +403,9 @@ pub fn page_raster(seed: u32, paper_r: i64, paper_g: i64, paper_b: i64) -> Vec<u
     }
     fill_rgb(&mut p, 20, 18, 170, 14, [52, 64, 92]);
     let mut text = Rng::new(seed ^ 0x5A5A_5A5A);
-    let picks = [0b00111, 0b01011, 0b01101, 0b01110, 0b10011, 0b10101, 0b10110, 0b11001, 0b11010, 0b11100];
+    let picks = [
+        0b00111, 0b01011, 0b01101, 0b01110, 0b10011, 0b10101, 0b10110, 0b11001, 0b11010, 0b11100,
+    ];
     let ink = [40, 40, 46];
     for line in 0..15 {
         let y = 46 + line * 14;
@@ -427,7 +581,11 @@ fn backdrop_color(backdrop: Backdrop, x: i64, y: i64, rng: &mut Rng) -> [i64; 3]
             if (x + 75) % 150 < 2 {
                 shade -= 40;
             }
-            (150 + shade + 2 * n, 104 + shade * 3 / 4 + 2 * n, 64 + shade / 2 + 2 * n)
+            (
+                150 + shade + 2 * n,
+                104 + shade * 3 / 4 + 2 * n,
+                64 + shade / 2 + 2 * n,
+            )
         }
         Backdrop::Dark => (38 + 2 * n, 40 + 2 * n, 46 + 2 * n),
         Backdrop::Light => (196 + n, 198 + n, 200 + n),

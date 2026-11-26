@@ -45,6 +45,26 @@ impl Rgba {
 }
 
 impl Rgba {
+    /// Mirrored left to right.
+    pub fn mirrored(&self) -> Rgba {
+        let mut data = vec![0u8; self.data.len()];
+        for (row, out) in self
+            .data
+            .chunks_exact((self.width * 4).max(4))
+            .zip(data.chunks_exact_mut((self.width * 4).max(4)))
+        {
+            for x in 0..self.width {
+                out[(self.width - 1 - x) * 4..(self.width - x) * 4]
+                    .copy_from_slice(&row[x * 4..x * 4 + 4]);
+            }
+        }
+        Rgba {
+            width: self.width,
+            height: self.height,
+            data,
+        }
+    }
+
     /// Turned clockwise on screen by `quarter_turns` quarter turns, any integer.
     pub fn rotated_quarter_turns(&self, quarter_turns: i32) -> Rgba {
         let turns = quarter_turns.rem_euclid(4);
@@ -167,6 +187,20 @@ mod tests {
         assert_eq!(first(&image.rotated_quarter_turns(2)), [5, 4, 3, 2, 1, 0]);
         assert_eq!(first(&image.rotated_quarter_turns(-1)), [2, 5, 1, 4, 0, 3]);
         assert_eq!(image.rotated_quarter_turns(4), image);
+    }
+
+    #[test]
+    fn mirroring_swaps_each_row_end_to_end() {
+        let mut data = Vec::new();
+        for v in 0..6u8 {
+            data.extend_from_slice(&[v, 0, 0, 255]);
+        }
+        let image = Rgba::new(3, 2, data);
+        let reds = |i: &Rgba| i.data.iter().step_by(4).copied().collect::<Vec<_>>();
+        assert_eq!(reds(&image.mirrored()), [2, 1, 0, 5, 4, 3]);
+        assert_eq!(image.mirrored().mirrored(), image);
+        let empty = Rgba::new(0, 0, vec![]);
+        assert_eq!(empty.mirrored(), empty);
     }
 
     #[test]
