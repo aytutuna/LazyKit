@@ -1,6 +1,8 @@
 //! Stream data. The length is taken from /Length when "endstream" follows it; otherwise from the keyword itself, as
 //! viewers do.
 
+use std::sync::Arc;
+
 use crate::document::Document;
 use crate::error::{Problem, ReadError};
 use crate::filters::{DecodeError, Parm};
@@ -21,6 +23,7 @@ const CHAIN_OUTPUT_FACTOR: usize = 4;
 
 /// The most a JBIG2 globals stream may expand to; they hold symbols, not pictures.
 const MAX_GLOBALS: usize = 32 << 20;
+const MAX_CACHED_GLOBALS: usize = 64 << 20;
 
 /// One stage of a stream's filter chain with its parameters.
 #[derive(Debug, Clone, PartialEq)]
@@ -247,11 +250,17 @@ impl Document {
     /// The data of a globals stream. Its own filters are read without any globals of theirs (a JBIG2 stage on it is
     /// damage), so that streams that name each other cannot send this round in circles.
     fn globals_data(&mut self, globals: &Stream, max_size: usize) -> Result<Vec<u8>, ReadError> {
+        let limit = max_size.min(MAX_GLOBALS);
+        let cached = (globals.number != 0)
+            .then(|| self.globals.get(&globals.number))
+            .flatten();
+        if let Some(data) = cached.filter(|d| d.len() <= limit) {
+            return Ok(data.to_vec());
+        }
         let stages = self.decode_spec(globals, false, max_size)?;
         if stages.iter().any(|s| s.filter == b"JBIG2Decode") {
             return Err(ReadError::damaged("A JBIG2 globals stream is JBIG2 coded."));
         }
-        let limit = max_size.min(MAX_GLOBALS);
         let mut data = self.raw_data(globals);
         for stage in stages {
             data = self
@@ -263,6 +272,13 @@ impl Document {
                         ReadError::new(Problem::Unsupported, detail)
                     }
                 })?;
+        }
+        if globals.number != 0 {
+            let held: usize = self.globals.values().map(|d| d.len()).sum();
+            if held + data.len() > MAX_CACHED_GLOBALS {
+                self.globals.clear();
+            }
+            self.globals.insert(globals.number, Arc::new(data.clone()));
         }
         Ok(data)
     }
