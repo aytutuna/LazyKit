@@ -8,7 +8,7 @@ use sha2::{Digest, Sha256};
 use std::fmt;
 use std::io;
 use std::pin::Pin;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::{Arc, OnceLock};
 use std::task::{Context, Poll};
 use std::time::Duration;
@@ -38,6 +38,8 @@ const WAKE_POLL_SLOW: Duration = Duration::from_secs(4);
 /// A larger Retry-After from the relay or anything in front of it is cut to this many seconds.
 const MAX_RETRY_AFTER: u64 = 3600;
 /// A connection that has said nothing for this long, not even the relay's answer to a ping, is dead.
+const DEAD: Duration = Duration::from_secs(60);
+
 // A stream given up on mid-transfer must not look like a normal end to the other side.
 fn cut_off() -> Message {
     Message::Close(Some(CloseFrame {
@@ -46,7 +48,6 @@ fn cut_off() -> Message {
     }))
 }
 
-const DEAD: Duration = Duration::from_secs(60);
 /// How long a connect or a plain request may take before it counts as failed.
 const REQUEST_TIMEOUT: Duration = Duration::from_secs(15);
 /// How much a stream holds before a write waits.
@@ -64,8 +65,6 @@ fn keepalive() -> tokio::time::Interval {
 
 // What the reading half of a stream tells the writing half.
 enum Ctl {
-    /// The other end delivered a frame, so one more may be sent.
-    Credit,
     /// A frame arrived and went to the reader; the other end is told so.
     Ack,
 }
@@ -204,7 +203,7 @@ pub fn random_id() -> String {
 /// The room two devices meet in, named from their pairing secret so the relay learns nothing else.
 pub fn room_id(secret: &[u8]) -> String {
     let mut h = Sha256::new();
-    h.update(b"lazy relay room v1");
+    h.update(b"lazy-relay-room-v1:");
     h.update(secret);
     hex(&h.finalize())
 }
@@ -526,18 +525,23 @@ impl RelayStream {
         let (mut sink, mut source) = ws.split();
         let (ctl, mut ctl_rx) = mpsc::unbounded_channel();
         let close = Arc::new(OnceLock::new());
+        // Frames sent that the other end has not acknowledged; at most WINDOW_FRAMES, and an
+        // ack with none outstanding is a fault, so a peer cannot push the credit past the window.
+        let unacked = Arc::new(AtomicUsize::new(0));
+        let acked = Arc::new(Notify::new());
         let dropped = Arc::new((AtomicBool::new(false), Notify::new()));
 
         let gone = dropped.clone();
+        let (sent, freed) = (unacked.clone(), acked.clone());
         let outbound = tokio::spawn(async move {
             let mut ping = keepalive();
             let mut buf = vec![0u8; MAX_FRAME];
             let mut writing = true;
-            let mut credit = WINDOW_FRAMES;
             let mut acks = true;
             let mut moved = tokio::time::Instant::now();
             loop {
                 // Nothing more can be sent once the credit is spent and no answer can come.
+                let credit = WINDOW_FRAMES - sent.load(Ordering::Acquire);
                 if credit == 0 && !acks {
                     let _ = sink.send(cut_off()).await;
                     return;
@@ -556,18 +560,15 @@ impl RelayStream {
                             }
                         }
                         Ok(n) => {
-                            credit -= 1;
+                            sent.fetch_add(1, Ordering::AcqRel);
                             moved = tokio::time::Instant::now();
                             if sink.send(Message::binary(buf[..n].to_vec())).await.is_err() {
                                 return;
                             }
                         }
                     },
+                    _ = freed.notified() => moved = tokio::time::Instant::now(),
                     c = ctl_rx.recv(), if acks => match c {
-                        Some(Ctl::Credit) => {
-                            credit += 1;
-                            moved = tokio::time::Instant::now();
-                        }
                         Some(Ctl::Ack) => {
                             if sink.send(Message::text("ack")).await.is_err() {
                                 return;
@@ -599,7 +600,6 @@ impl RelayStream {
         // data nobody has read yet. The other end sends at most WINDOW_FRAMES before one is
         // acknowledged, and a frame is acknowledged once it is delivered.
         let (queue, mut queued) = mpsc::channel(2 * WINDOW_FRAMES);
-        let credit_ctl = ctl.clone();
         let gone = dropped.clone();
         tokio::spawn(async move {
             while let Some(item) = queued.recv().await {
@@ -635,7 +635,13 @@ impl RelayStream {
                         }
                     }
                     Some(Ok(Message::Text(t))) if t.as_str() == "ack" => {
-                        let _ = credit_ctl.send(Ctl::Credit);
+                        let owed = unacked
+                            .try_update(Ordering::AcqRel, Ordering::Acquire, |n| n.checked_sub(1));
+                        if owed.is_err() {
+                            let _ = code.set(1008);
+                            break;
+                        }
+                        acked.notify_one();
                     }
                     Some(Ok(Message::Text(t))) if t.as_str() == "eof" => {
                         let _ = queue.try_send(Inbound::Eof);

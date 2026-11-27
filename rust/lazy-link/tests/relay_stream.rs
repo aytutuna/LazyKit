@@ -2,6 +2,8 @@
 #![allow(clippy::result_large_err)] // the handshake callback's error type is the library's
 //! The relay client against small stand-in servers, so no relay has to run.
 
+mod data;
+
 use futures_util::{SinkExt, StreamExt};
 use lazy_link::relay::{MAX_FRAME, Relay, RelayError, Store, WINDOW_FRAMES, random_id, room_id};
 use std::time::Duration;
@@ -43,6 +45,24 @@ fn ids_have_the_shape_the_relay_expects() {
     assert_eq!(room.len(), 64);
     assert_eq!(room, room_id(b"secret"));
     assert_ne!(room, room_id(b"secreT"));
+}
+
+#[test]
+fn rooms_are_named_as_the_data_says() {
+    let data = data::load("rooms.json");
+    for case in data["rooms"].as_array().unwrap() {
+        let hex = case["secretHex"].as_str().unwrap();
+        let secret: Vec<u8> = (0..hex.len())
+            .step_by(2)
+            .map(|i| u8::from_str_radix(&hex[i..i + 2], 16).unwrap())
+            .collect();
+        assert_eq!(
+            room_id(&secret),
+            case["room"].as_str().unwrap(),
+            "{}",
+            case["name"]
+        );
+    }
 }
 
 #[tokio::test]
@@ -517,11 +537,38 @@ async fn a_writer_stops_when_the_other_end_has_not_taken_its_frames() {
     }
     assert_eq!(got, WINDOW_FRAMES);
     assert!(!writer.is_finished());
-    ack_tx.send(3 * WINDOW_FRAMES).unwrap();
+    // Each batch answers only frames that were sent, as a real reader does.
+    for _ in 0..3 {
+        ack_tx.send(WINDOW_FRAMES).unwrap();
+        tokio::time::sleep(Duration::from_millis(500)).await;
+    }
     let _s = timeout(Duration::from_secs(10), writer)
         .await
         .expect("the writer did not go on after the acks")
         .unwrap();
+}
+
+#[tokio::test]
+async fn an_ack_for_nothing_sent_ends_the_stream() {
+    let (l, relay) = listener().await;
+    tokio::spawn(async move {
+        let mut ws = tokio_tungstenite::accept_async(l.accept().await.unwrap().0)
+            .await
+            .unwrap();
+        for _ in 0..1000 {
+            if ws.send(Message::text("ack")).await.is_err() {
+                return;
+            }
+        }
+        let _ = ws.next().await;
+    });
+    let mut s = relay.connect(&room_id(b"r")).await.unwrap();
+    let mut got = Vec::new();
+    timeout(Duration::from_secs(10), s.read_to_end(&mut got))
+        .await
+        .expect("the stream was not ended")
+        .unwrap();
+    assert_eq!(s.close_code(), Some(1008));
 }
 
 #[tokio::test]

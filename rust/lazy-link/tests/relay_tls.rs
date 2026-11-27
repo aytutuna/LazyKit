@@ -1,8 +1,9 @@
 #![cfg(feature = "relay")]
 //! TLS to a real host with the system trust store, for the HTTP calls and the WebSocket. It
-//! needs network and is ignored in the normal run (`cargo test -- --ignored`), so a failure here that is not a certificate error means the host is
-//! unreachable. The relay need not be deployed: any answer from the server past the handshake,
-//! a 404 included, shows the certificate was accepted.
+//! needs network and is ignored in the normal run (`cargo test -- --ignored`), so a failure here
+//! that is not a certificate error means the host is unreachable. The relay need not be deployed:
+//! any answer from the server past the handshake, a 404 included, shows the certificate was
+//! accepted.
 
 use lazy_link::relay::{Relay, RelayError, random_id, room_id};
 

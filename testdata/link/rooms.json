@@ -1,0 +1,25 @@
+{
+  "about": "A relay room is the lowercase hex SHA-256 of the ASCII bytes lazy-relay-room-v1: followed by the secret bytes. secretHex is the secret in hex.",
+  "rooms": [
+    {
+      "name": "secret",
+      "secretHex": "736563726574",
+      "room": "e16d4c784f25ec64534db3ce780f780eab821084f372ba7294fe3f6249901e9e"
+    },
+    {
+      "name": "short code ABCD2345",
+      "secretHex": "4142434432333435",
+      "room": "69d599f1d5f68393657d690336264b557fc5b9ff4a9c93a5a914cc204aaed1fe"
+    },
+    {
+      "name": "16-byte token 00..0f",
+      "secretHex": "000102030405060708090a0b0c0d0e0f",
+      "room": "ac096b20e89cebc1daaaed08c7bfb95907bb1965ebef40124a3310c3a53fa266"
+    },
+    {
+      "name": "empty",
+      "secretHex": "",
+      "room": "0b3a7aa61eb1d8e70f2fd15b2a6708641dfc646c4886fd4d423979ec392891df"
+    }
+  ]
+}
