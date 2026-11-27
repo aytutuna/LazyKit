@@ -12,6 +12,10 @@ const MAX_TREE_DEPTH: usize = 256;
 /// Nodes one walk looks at, direct dictionaries included: a /Kids array shared by its own children has no end.
 const MAX_TREE_NODES: usize = 1 << 20;
 
+/// Entries one walk may copy into the values pages inherit; a direct /Resources on each of a million shared nodes
+/// would otherwise be copied a million times.
+const MAX_TREE_COPIED: usize = 32 << 20;
+
 /// Content streams of one page that may fail to read; each failure can have cost a full decode.
 const MAX_CONTENT_FAILURES: usize = 16;
 
@@ -96,6 +100,19 @@ struct Walk {
     visited: HashSet<u32>,
     skipped: usize,
     nodes: usize,
+    copied: usize,
+}
+
+/// How much a copy of the value costs: one for each object in it.
+fn weight(object: &Object) -> usize {
+    let dict_weight =
+        |dict: &Dict| 1 + dict.entries().iter().map(|(_, v)| 1 + weight(v)).sum::<usize>();
+    match object {
+        Object::Array(items) => 1 + items.iter().map(weight).sum::<usize>(),
+        Object::Dict(dict) => dict_weight(dict),
+        Object::Stream(stream) => dict_weight(&stream.dict),
+        _ => 1,
+    }
 }
 
 impl Page {
@@ -319,6 +336,7 @@ impl Document {
             visited: HashSet::new(),
             skipped: 0,
             nodes: 0,
+            copied: 0,
         };
         if let Some(root) = catalog.get("Pages") {
             self.walk_node(root, &Inherited::default(), 0, &mut walk);
@@ -359,15 +377,21 @@ impl Document {
         {
             None
         } else {
-            self.resolve(node).map(|v| v.into_shared())
+            self.resolve(node)
         };
-        let Some(dict_object) = resolved.filter(|o| matches!(**o, Object::Dict(_))) else {
+        let Some(Object::Dict(dict)) = resolved.as_deref() else {
             walk.skipped += 1;
             return;
         };
-        let Object::Dict(dict) = &*dict_object else {
-            unreachable!()
-        };
+        walk.copied += ["Resources", "MediaBox", "CropBox", "Rotate"]
+            .iter()
+            .filter_map(|key| dict.get(key))
+            .map(weight)
+            .sum::<usize>();
+        if walk.copied > MAX_TREE_COPIED {
+            walk.skipped += 1;
+            return;
+        }
         let kind = self.name_of(dict, "Type");
         let own = |key: &str| {
             dict.get(key)
@@ -381,7 +405,7 @@ impl Document {
             rotate: own("Rotate").or_else(|| inherited.rotate.clone()),
         };
         if kind.as_deref() != Some(b"Page")
-            && let Some(kids) = self.lookup(dict, "Kids").map(|k| k.into_shared())
+            && let Some(kids) = self.lookup(dict, "Kids")
             && let Some(kids) = kids.as_array()
         {
             for kid in kids {

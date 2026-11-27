@@ -489,3 +489,17 @@ fn an_object_stream_that_failed_before_a_rebuild_is_read_again_from_its_new_defi
     assert!(document.xref_rebuilt());
     assert_eq!(document.pages().len(), 1);
 }
+
+#[test]
+fn direct_nodes_that_each_carry_a_large_resources_are_walked_in_bounded_time() {
+    let resources: String = (0..1000).map(|i| format!("/F{i} 7 0 R ")).collect();
+    let node = format!("<</Kids 5 0 R /Resources <<{resources}>>>>");
+    let mut pdf = TestPdf::new();
+    pdf.obj(1, "<</Type /Catalog /Pages 2 0 R>>")
+        .obj(2, "<</Type /Pages /Kids 5 0 R>>")
+        .obj(5, &format!("[{node} {node}]"));
+    let started = Instant::now();
+    let mut document = open(pdf.finish());
+    assert!(document.pages().is_empty());
+    must_finish_within(Duration::from_secs(20), started);
+}
