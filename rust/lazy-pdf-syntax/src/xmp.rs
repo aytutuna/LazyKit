@@ -223,7 +223,7 @@ fn decode(text: &str) -> Option<String> {
                     None if digits.bytes().all(|b| b.is_ascii_digit()) => digits.parse().ok()?,
                     _ => return None,
                 };
-                out.push(char::from_u32(code).filter(|c| *c != ' ')?);
+                out.push(char::from_u32(code).filter(|c| *c != '\0')?);
             }
         }
         rest = &after[end + 1..];
