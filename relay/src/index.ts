@@ -10,7 +10,7 @@ const ROOM_ID = /^[0-9a-f]{64}$/;
 const ID = /^[0-9a-f]{32}$/;
 const MAX_BODY = 64 * 1024;
 
-const limiter = new RateLimiter(120, 60_000);
+const limiter = new RateLimiter(300, 60_000);
 
 const text = (body: string, status: number) => new Response(body, { status });
 

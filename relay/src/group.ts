@@ -9,6 +9,8 @@ export const MAX_TOKEN = 4096;
 const KEEP_WEEKS = 8;
 const WAKE_GAP_MS = 10_000;
 const DEVICE_KEEP_MS = 90 * 86_400_000;
+const SEEN_REFRESH_MS = 86_400_000;
+const SWEEP_MS = 86_400_000;
 
 interface Device {
   platform: Platform;
@@ -50,10 +52,60 @@ export class Group extends DurableObject<Cloudflare.Env> {
   async record(bytes: number, now = Date.now()): Promise<boolean> {
     const week = weekOf(now);
     this.usage[week] = (this.usage[week] ?? 0) + bytes;
-    const oldest = weekOf(now - KEEP_WEEKS * 7 * 86_400_000);
-    for (const w of Object.keys(this.usage)) if (w < oldest) delete this.usage[w];
+    this.pruneUsage(now);
     await this.ctx.storage.put("usage", this.usage);
+    await this.sweepSoon();
     return !this.status(now).capped;
+  }
+
+  private pruneUsage(now: number): boolean {
+    const oldest = weekOf(now - KEEP_WEEKS * 7 * 86_400_000);
+    let dropped = false;
+    for (const w of Object.keys(this.usage)) {
+      if (w < oldest) {
+        delete this.usage[w];
+        dropped = true;
+      }
+    }
+    return dropped;
+  }
+
+  // A device that has not registered or connected for a long time is gone, so its token is
+  // neither kept nor woken.
+  private async pruneDevices(now: number): Promise<void> {
+    let dropped = false;
+    for (const [id, d] of Object.entries(this.devices)) {
+      if (now - d.seen > DEVICE_KEEP_MS) {
+        delete this.devices[id];
+        dropped = true;
+      }
+    }
+    if (dropped) await this.ctx.storage.put("devices", this.devices);
+  }
+
+  private async sweepSoon(): Promise<void> {
+    if ((await this.ctx.storage.getAlarm()) === null) await this.ctx.storage.setAlarm(Date.now() + SWEEP_MS);
+  }
+
+  // Forgets old weeks and devices; a group with nothing left to remember is deleted.
+  async alarm(): Promise<void> {
+    const now = Date.now();
+    if (this.pruneUsage(now)) await this.ctx.storage.put("usage", this.usage);
+    await this.pruneDevices(now);
+    if (Object.keys(this.devices).length === 0 && Object.keys(this.usage).length === 0 && this.paidUntil <= now) {
+      await this.ctx.storage.deleteAll();
+      this.paidUntil = 0;
+      return;
+    }
+    await this.ctx.storage.setAlarm(now + SWEEP_MS);
+  }
+
+  // A host or guest connecting shows the device is in use.
+  async touch(device: string, now = Date.now()): Promise<void> {
+    const d = this.devices[device];
+    if (!d || now - d.seen < SEEN_REFRESH_MS) return;
+    d.seen = now;
+    await this.ctx.storage.put("devices", this.devices);
   }
 
   status(now = Date.now()): GroupStatus {
@@ -74,6 +126,7 @@ export class Group extends DurableObject<Cloudflare.Env> {
       if (until > this.paidUntil) {
         this.paidUntil = until;
         await this.ctx.storage.put("paidUntil", until);
+        await this.sweepSoon();
       }
       return "ok";
     } catch (e) {
@@ -83,15 +136,12 @@ export class Group extends DurableObject<Cloudflare.Env> {
     }
   }
 
-  // A full group makes room by dropping devices that have not registered
-  // for a long time, so lost phones do not block new ones for good.
   async setPush(device: string, platform: Platform, token: string, now = Date.now()): Promise<boolean> {
-    if (!(device in this.devices) && Object.keys(this.devices).length >= MAX_DEVICES) {
-      for (const [id, d] of Object.entries(this.devices)) if (now - d.seen > DEVICE_KEEP_MS) delete this.devices[id];
-      if (Object.keys(this.devices).length >= MAX_DEVICES) return false;
-    }
+    await this.pruneDevices(now);
+    if (!(device in this.devices) && Object.keys(this.devices).length >= MAX_DEVICES) return false;
     this.devices[device] = { platform, token, seen: now };
     await this.ctx.storage.put("devices", this.devices);
+    await this.sweepSoon();
     return true;
   }
 
@@ -105,6 +155,7 @@ export class Group extends DurableObject<Cloudflare.Env> {
   // twice within a few seconds.
   async wake(room: string, except: string, now = Date.now()): Promise<boolean> {
     let sent = false;
+    await this.pruneDevices(now);
     for (const [device, d] of Object.entries(this.devices)) {
       if (device === except) continue;
       if (now - (this.woken.get(device) ?? 0) < WAKE_GAP_MS) {

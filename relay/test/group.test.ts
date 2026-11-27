@@ -221,6 +221,57 @@ describe("group", () => {
     expect(await g.setPush(device(MAX_DEVICES + 3), "fcm", "t", now)).toBe(false);
   });
 
+  it("drops quiet devices on every registration and wake, not only when full", async () => {
+    const g = stub(newGroup());
+    const day = 86_400_000;
+    const now = Date.now();
+    let sent = 0;
+    useServices({ push: { send: async () => void sent++ } });
+    await g.setPush(device(1), "fcm", "old", now - 100 * day);
+    await g.setPush(device(2), "fcm", "old", now - 100 * day);
+    expect(await g.wake("room", device(9), now)).toBe(false);
+    expect(sent).toBe(0);
+    await runInDurableObject(g, async (_o, state) => {
+      expect(await state.storage.get("devices")).toEqual({});
+    });
+  });
+
+  it("keeps a device that connects, and forgets one that does not", async () => {
+    const g = stub(newGroup());
+    const day = 86_400_000;
+    const now = Date.now();
+    await g.setPush(device(1), "fcm", "a", now - 80 * day);
+    await g.setPush(device(2), "fcm", "b", now - 80 * day);
+    await g.touch(device(1), now - 5 * day);
+    await g.touch(device(1), now - 5 * day + 1000);
+    await g.setPush(device(3), "fcm", "c", now + 20 * day);
+    await runInDurableObject(g, async (_o, state) => {
+      const kept = await state.storage.get<Record<string, unknown>>("devices");
+      expect(Object.keys(kept!)).toEqual([device(1), device(3)]);
+    });
+  });
+
+  it("sweeps old weeks and devices on an alarm and deletes a group with nothing left", async () => {
+    const group = newGroup();
+    const g = stub(group);
+    const day = 86_400_000;
+    const now = Date.now();
+    await g.record(5, now - 100 * day);
+    await g.setPush(device(1), "fcm", "t", now - 100 * day);
+    await runInDurableObject(g, async (o, state) => {
+      expect(await state.storage.getAlarm()).not.toBeNull();
+      await o.alarm();
+      expect(await state.storage.list()).toEqual(new Map());
+      expect(await state.storage.getAlarm()).toBeNull();
+    });
+    await g.setPush(device(2), "fcm", "t");
+    await runInDurableObject(g, async (o, state) => {
+      await o.alarm();
+      expect((await state.storage.get<Record<string, unknown>>("devices"))![device(2)]).toBeDefined();
+      expect(await state.storage.getAlarm()).not.toBeNull();
+    });
+  });
+
   it("does not wake a device twice in a few seconds", async () => {
     const g = stub(newGroup());
     let count = 0;
@@ -307,7 +358,7 @@ describe("rate limit", () => {
   it("answers 503 with Retry-After from the worker once an address is over the limit", async () => {
     const ip = "203.0.113.7";
     let last = 0;
-    for (let i = 0; i < 125; i++) {
+    for (let i = 0; i < 305; i++) {
       const res = await exports.default.fetch("https://alazy.app/relay/v1/nothing", { headers: { "CF-Connecting-IP": ip } });
       last = res.status;
       if (last === 503) {
