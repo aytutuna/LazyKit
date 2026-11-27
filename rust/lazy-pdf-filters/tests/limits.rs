@@ -162,13 +162,21 @@ fn jbig2_many_custom_tables_are_charged_to_the_budget() {
 }
 
 #[test]
-fn jbig2_cut_off_segment_header_is_damage_when_the_page_must_be_whole() {
-    let mut data = page(61, 40);
-    data.extend(&generic_region(1, 61, 40, 0, 0, AT)[..10]);
-    let decode = |whole| lazy_pdf_filters::jbig2::decode(&[], &data, 256 << 20, 0, 0, whole);
-    assert!(decode(false).is_ok());
-    let e = decode(true).unwrap_err();
-    assert_eq!(e.problem, Problem::Damaged);
+fn jbig2_stray_bytes_after_the_last_segment_end_the_data_in_whole_mode() {
+    for tail in [
+        &b"
+"[..],
+        &b"
+"[..],
+        &[0x41; 10][..],
+    ] {
+        let mut data = page(61, 40);
+        data.extend(generic_region(1, 61, 40, 0, 0, AT));
+        data.extend(tail);
+        let decode = |whole| lazy_pdf_filters::jbig2::decode(&[], &data, 256 << 20, 0, 0, whole);
+        assert!(decode(false).is_ok());
+        assert!(decode(true).is_ok());
+    }
 }
 
 #[test]

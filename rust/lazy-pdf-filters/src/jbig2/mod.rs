@@ -201,9 +201,6 @@ impl Decoder {
         };
         while position <= last {
             if data.len() - position < MIN_HEADER {
-                if self.whole {
-                    self.fail(FilterError::damaged("A JBIG2 segment header is cut off."));
-                }
                 return Ok(());
             }
             self.limit = data.len();
