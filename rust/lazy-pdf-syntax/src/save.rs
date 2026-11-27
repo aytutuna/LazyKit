@@ -66,6 +66,7 @@ impl Document {
             items: Vec::new(),
             followed: 0,
             dropped: HashSet::new(),
+            read: 0,
         };
         let bytes = rewriter.run();
         Rewritten {
@@ -201,6 +202,8 @@ struct Rewriter<'a> {
     items: Vec<Arc<Object>>,
     followed: usize,
     dropped: HashSet<u32>,
+    /// What the streams read from the file store, together.
+    read: usize,
 }
 
 impl Rewriter<'_> {
@@ -416,6 +419,20 @@ impl Rewriter<'_> {
     /// is smaller. A stream with a predictor is left (deflating without it would lose more than it gains), as are
     /// Flate streams already, metadata, and image data, which is never touched.
     fn stored(&mut self, stream: &crate::object::Stream, dict: &mut Dict) -> Vec<u8> {
+        // Streams that end where the next begins share bytes (a missing /Length runs to the next endstream), so a
+        // small file could make a rewrite quadratic. Streams that are apart never store more than the file holds.
+        if stream.data.is_none() {
+            self.read = self.read.saturating_add(self.document.raw_length(stream));
+            if self.read > self.document.data.len() {
+                self.document.add_repair(
+                    "A stream was left empty in the rewrite: the streams store more than the file holds."
+                        .to_string(),
+                );
+                dict.remove("Filter");
+                dict.remove("DecodeParms");
+                return Vec::new();
+            }
+        }
         let raw = self.document.raw_data(stream);
         if !self.can_repack(&stream.dict) {
             return raw;

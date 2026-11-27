@@ -773,3 +773,34 @@ fn the_deepest_allowed_nesting_and_page_tree_fit_a_1_mb_stack() {
         .join()
         .unwrap();
 }
+
+#[test]
+fn streams_that_share_their_bytes_do_not_make_a_rewrite_grow_with_the_square() {
+    let count = 1500u32;
+    let mut pdf = TestPdf::new();
+    let refs: Vec<String> = (0..count).map(|k| format!("{} 0 R", 10 + k)).collect();
+    pdf.obj(
+        1,
+        &format!("<</Type /Catalog /Pages 2 0 R /A [{}]>>", refs.join(" ")),
+    );
+    pdf.obj(2, "<</Type /Pages /Kids [] /Count 0>>");
+    // No /Length and no endstream until the last one: each runs to the end. A filter the rewrite leaves alone
+    // keeps the copies from deflating away.
+    let mut seed = 12345u32;
+    for k in 0..count {
+        let data: Vec<u8> = (0..100)
+            .map(|_| {
+                seed = seed.wrapping_mul(1664525).wrapping_add(1013904223);
+                b'a' + (seed >> 24) as u8 % 26
+            })
+            .collect();
+        pdf.stream_with(10 + k, "/Filter /DCTDecode", &data, Some(-1), k == count - 1);
+    }
+    let file = pdf.finish();
+    let mut document = open(file.clone());
+    let saved = document.save_rewrite(&lazy_pdf_syntax::SaveOptions {
+        use_object_streams: false,
+        document_id: None,
+    });
+    assert!(saved.bytes.len() < 2 * file.len(), "{}", saved.bytes.len());
+}
