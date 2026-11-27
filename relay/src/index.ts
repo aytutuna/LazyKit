@@ -8,6 +8,7 @@ export { Purchase } from "./purchase";
 
 const ROOM_ID = /^[0-9a-f]{64}$/;
 const ID = /^[0-9a-f]{32}$/;
+const ROOM_PATH = /^\/relay\/v1\/([^/]+)$/;
 const MAX_BODY = 64 * 1024;
 
 const limiter = new RateLimiter(1200, 60_000);
@@ -17,18 +18,20 @@ const text = (body: string, status: number) => new Response(body, { status });
 export default {
   async fetch(req: Request, env: Cloudflare.Env): Promise<Response> {
     const url = new URL(req.url);
-    // The host's end of a stream is gated by a random id that must be pending, and it follows
-    // every guest connect, so counting it too would halve what a guest can open.
     const ip = req.headers.get("CF-Connecting-IP");
+    // The host's end of a stream is gated by a random id that must be pending, and it follows
+    // every guest connect, so counting it too would halve what a guest can open. Only a room's
+    // path gets this exemption; everything else is counted whatever its query says.
+    const exempt = ROOM_PATH.test(url.pathname) && url.searchParams.get("role") === "stream";
     // Not 429, which a room uses for too many streams.
-    if (ip && url.searchParams.get("role") !== "stream" && !limiter.allow(ip)) {
+    if (ip && !exempt && !limiter.allow(ip)) {
       return new Response("slow down", { status: 503, headers: { "Retry-After": "60" } });
     }
 
     const g = /^\/relay\/v1\/group\/([^/]+)(?:\/(push|paid)(?:\/([^/]+))?)?$/.exec(url.pathname);
     if (g) return groupApi(req, env, g[1], g[2], g[3]);
 
-    const m = /^\/relay\/v1\/([^/]+)$/.exec(url.pathname);
+    const m = ROOM_PATH.exec(url.pathname);
     if (!m) return text("not found", 404);
     if (!ROOM_ID.test(m[1])) return text("bad room", 400);
     const role = url.searchParams.get("role");

@@ -119,6 +119,8 @@ export class Room extends DurableObject {
     const group = this.groupStub(groupId);
     if ((await group.status()).capped) return new Response("weekly cap reached", { status: 402 });
     await group.touch(device);
+    // The room may have been claimed by another group while the calls above were out.
+    if ((this.group ?? groupId) !== groupId) return new Response("wrong group", { status: 403 });
     const control = this.control();
     if (!control) return this.nobodyWaiting(groupId, room, device);
     const open = this.ctx.getWebSockets("guest").filter((s) => s.readyState === WebSocket.OPEN).length;
@@ -136,9 +138,9 @@ export class Room extends DurableObject {
     this.joining.delete(id);
     if (!ok) {
       // A host that has pinged lately is only slow, and only this guest
-      // loses. One that has been silent for longer is a suspended or killed
-      // app: treat it like no host so the push goes out.
-      if (Date.now() - this.lastSeen(control) < HOST_SILENT_MS) return new Response("host did not answer", { status: 504 });
+      // loses. One that has been silent for longer, or has closed its socket,
+      // is a suspended or killed app: treat it like no host so the push goes out.
+      if (control.readyState === WebSocket.OPEN && Date.now() - this.lastSeen(control) < HOST_SILENT_MS) return new Response("host did not answer", { status: 504 });
       control.close(1001, "not answering");
       return this.nobodyWaiting(groupId, room, device);
     }
@@ -201,6 +203,10 @@ export class Room extends DurableObject {
   }
 
   async webSocketClose(ws: WebSocket, code: number): Promise<void> {
+    // Guests waiting for the host's answer will not get one from a control socket that is gone.
+    if (this.ctx.getTags(ws)[0] === "host" && !this.control()) {
+      for (const done of this.joining.values()) done(false);
+    }
     // 1005 is a close without a code; 1006 is a connection that died, which the other end
     // must not take for a finished transfer.
     const out = code === 1005 ? 1000 : sendable(code) ? code : 1011;

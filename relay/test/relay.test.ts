@@ -588,6 +588,33 @@ describe("relay", () => {
     expect(control.ws.readyState).toBe(WebSocket.OPEN);
   });
 
+  it("answers 404 and wakes the host's device when its control socket closes under a waiting guest", async () => {
+    const sent: unknown[] = [];
+    useServices({ push: { send: async (platform, token, message) => void sent.push([platform, token, message]) } });
+    const room = newRoom();
+    const group = groupOf(room);
+    expect((await groupApi(group, "push", { device: HOST, platform: "fcm", token: "tok" })).status).toBe(204);
+    const control = await open(room, "role=host", undefined, HOST);
+    const waiting = ask(room, "role=guest");
+    await control.nextText();
+    control.ws.close(1000);
+    const res = await waiting;
+    expect(res.status).toBe(404);
+    expect(res.headers.get("x-relay-woken")).toBe("1");
+    expect(sent).toEqual([["fcm", "tok", { room }]]);
+  });
+
+  it("does not join a guest of another group that was checked before the room was claimed", async () => {
+    const room = newRoom();
+    const mine = groupOf(room);
+    const other = newGroup();
+    // The guest's group check finds the room unclaimed; the host claims it before the guest's calls return.
+    const stranger = ask(room, "role=guest", other);
+    const control = await open(room, "role=host", mine);
+    expect((await stranger).status).toBe(403);
+    expect(control.texts).toEqual([]);
+  });
+
   it("counts into the week of the bytes and forgets old weeks", async () => {
     const group = newGroup();
     const day = 86_400_000;

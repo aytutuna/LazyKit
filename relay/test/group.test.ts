@@ -381,6 +381,19 @@ describe("rate limit", () => {
     expect(last).toBe(503);
   });
 
+  it("counts a group call that claims to be a stream", async () => {
+    const ip = "203.0.113.9";
+    let last = 0;
+    for (let i = 0; i < 1205; i++) {
+      const res = await exports.default.fetch(`https://alazy.app/relay/v1/group/${"a".repeat(32)}?role=stream`, {
+        headers: { "CF-Connecting-IP": ip },
+      });
+      last = res.status;
+      if (last === 503) break;
+    }
+    expect(last).toBe(503);
+  });
+
   it("does not count a host's stream opens against the address", async () => {
     const ip = "203.0.113.8";
     const stream = () =>
