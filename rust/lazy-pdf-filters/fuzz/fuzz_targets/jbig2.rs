@@ -11,8 +11,16 @@ fuzz_target!(|data: &[u8]| {
     let Some((head, rest)) = data.split_at_checked(5) else {
         return;
     };
-    let width = if head[0] & 1 == 0 { 0 } else { head[1] as i32 * 3 };
-    let height = if head[0] & 1 == 0 { 0 } else { head[2] as i32 * 3 };
+    let width = if head[0] & 1 == 0 {
+        0
+    } else {
+        head[1] as i32 * 3
+    };
+    let height = if head[0] & 1 == 0 {
+        0
+    } else {
+        head[2] as i32 * 3
+    };
     let (globals, image) = rest.split_at(rest.len().min(head[3] as usize * head[4] as usize / 4));
     if let Ok(page) = jbig2::decode(globals, image, CAP, width, height, head[0] & 2 != 0) {
         assert!(page.len() as u64 <= CAP);

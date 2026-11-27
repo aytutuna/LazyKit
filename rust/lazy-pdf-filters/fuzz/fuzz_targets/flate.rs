@@ -12,9 +12,15 @@ fuzz_target!(|data: &[u8]| {
     };
     let mut parms = Params::new();
     parms
-        .set("Predictor", Value::Int([1, 2, 10, 12, 15, 3][head[0] as usize % 6]))
+        .set(
+            "Predictor",
+            Value::Int([1, 2, 10, 12, 15, 3][head[0] as usize % 6]),
+        )
         .set("Colors", Value::Int(head[1] as i64 % 5))
-        .set("BitsPerComponent", Value::Int([1, 2, 4, 8, 16, 3][head[2] as usize % 6]))
+        .set(
+            "BitsPerComponent",
+            Value::Int([1, 2, 4, 8, 16, 3][head[2] as usize % 6]),
+        )
         .set("Columns", Value::Int(head[3] as i64 * 7));
     let filter = [Filter::new("FlateDecode", Some(parms))];
     if let Ok(out) = decode(rest, &filter, CAP) {
