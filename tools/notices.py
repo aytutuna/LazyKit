@@ -20,7 +20,7 @@ UniFFI (MPL-2.0) is used unmodified; its source is at https://github.com/mozilla
 
 LICENCE_FILE = re.compile(r"(LICEN[CS]E|COPYING|NOTICE|UNLICENSE)", re.I)
 
-NATIVE = """ONNX Runtime 1.24.2 (MIT), the library the scanner loads, from the Microsoft.ML.OnnxRuntime NuGet package
+NATIVE = """ONNX Runtime {ort} (MIT), the library the scanner loads, from the Microsoft.ML.OnnxRuntime NuGet package
 
   Copyright (c) Microsoft Corporation
 
@@ -39,10 +39,10 @@ NATIVE = """ONNX Runtime 1.24.2 (MIT), the library the scanner loads, from the M
 
   ONNX Runtime bundles code of other projects. Their notices are in ThirdPartyNotices.txt, which comes with the NuGet package
   (the package root) and is at
-  https://github.com/microsoft/onnxruntime/blob/v1.24.2/ThirdPartyNotices.txt
+  {ort_notices}
   It has to be shipped with any build that includes the library.
 
-DocAligner FastViT-T8 corner model 1.1.1 (Apache-2.0), by DocsaidLab, https://github.com/DocsaidLab/DocAligner
+DocAligner FastViT-T8 corner model {model} (Apache-2.0), by DocsaidLab, https://github.com/DocsaidLab/DocAligner
 
   Licensed under the Apache License, Version 2.0; the licence text is at https://www.apache.org/licenses/LICENSE-2.0 and in
   the project's LICENSE file. The model is used as published, except for the copy made for tract (the file named
@@ -60,6 +60,15 @@ pdf.js 4.10.38 (Apache-2.0), Copyright 2012 Mozilla Foundation, https://github.c
   https://www.apache.org/licenses/LICENSE-2.0. The software is distributed on an "AS IS" basis, without warranties or
   conditions of any kind.
 """
+
+def native_text(pins_text):
+    """The native section, with the versions and the notices address read from the pins."""
+    pins = {p["name"]: p for p in tomllib.loads(pins_text).get("pin", [])}
+    return NATIVE.format(
+        ort=pins["onnxruntime-nuget"]["version"],
+        ort_notices=pins["onnxruntime-nuget"]["notices"],
+        model=pins["docaligner-model"]["version"],
+    )
 
 
 def crate_rows(metadata):
@@ -80,19 +89,36 @@ def native_rows(pins_text):
     return sorted(rows)
 
 
-def licence_texts(metadata):
-    """The licence, copying and notice files at the top of each crate's source: {(name, version): [(file, text)]}."""
+FALLBACK = Path(__file__).resolve().parent / "licences"
+
+
+def read_files(folder, keep):
+    return [(f.name, f.read_text(encoding="utf-8", errors="replace")) for f in sorted(folder.iterdir()) if f.is_file() and keep(f.name)]
+
+
+def licence_texts(metadata, fallback=FALLBACK):
+    """The licence, copying and notice files at the top of each crate's source: {(name, version): [(file, text)]}. A crate
+    that ships none uses the files in `fallback`/<name>-<version>/ (copied from its upstream repository; SOURCE says where);
+    a crate with neither is an error."""
     members = set(metadata["workspace_members"])
-    found = {}
+    found, missing = {}, []
     for p in metadata["packages"]:
         if p["id"] in members:
             continue
-        files = []
-        for f in sorted(Path(p["manifest_path"]).parent.iterdir()):
-            if f.is_file() and LICENCE_FILE.match(f.name):
-                files.append((f.name, f.read_text(encoding="utf-8", errors="replace")))
+        files = read_files(Path(p["manifest_path"]).parent, lambda n: LICENCE_FILE.match(n))
+        extra = fallback / f"{p['name']}-{p['version']}"
+        if not files and extra.is_dir():
+            files = read_files(extra, lambda n: n != "SOURCE")
+        if not files:
+            missing.append(f"{p['name']} {p['version']}")
         found[(p["name"], p["version"])] = files
+    if missing:
+        raise MissingTexts("no licence text for " + ", ".join(missing) + f": add them under {fallback}/<crate>-<version>/")
     return found
+
+
+class MissingTexts(Exception):
+    pass
 
 
 def text_sections(texts):
@@ -113,7 +139,7 @@ def render(metadata, pins_text, texts=None):
     lines += ["", "Downloaded files (native/pins.toml)", ""]
     for name, version, licence, source in native_rows(pins_text):
         lines.append(f"{name} {version}".rstrip() + f"\n  {licence}\n  {source}")
-    lines += ["", "Native components", "", NATIVE.rstrip("\n")]
+    lines += ["", "Native components", "", native_text(pins_text).rstrip("\n")]
     lines += ["", "Licence texts of the Rust crates", ""]
     for crates, body in text_sections(texts or {}):
         lines += ["=" * 78, "Used by: " + ", ".join(crates), "=" * 78, body, ""]
@@ -129,7 +155,12 @@ def main(argv):
         check=True, capture_output=True, text=True,
     ).stdout
     metadata = json.loads(out)
-    text = render(metadata, (root / "native" / "pins.toml").read_text(encoding="utf-8"), licence_texts(metadata))
+    try:
+        texts = licence_texts(metadata)
+    except MissingTexts as err:
+        print(err, file=sys.stderr)
+        return 1
+    text = render(metadata, (root / "native" / "pins.toml").read_text(encoding="utf-8"), texts)
     target = root / "THIRD-PARTY-NOTICES.txt"
     if check:
         if not target.exists() or target.read_text(encoding="utf-8") != text:

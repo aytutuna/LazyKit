@@ -6,10 +6,10 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 import check_pins
 
 A, B = "a" * 64, "b" * 64
-FETCH = f'url="https://example.org/pkg/tool/1.0"\nsum={A}\nother={B}\n'
+FETCH = f'url="https://example.org/pkg/tool/1.0"\nsum={A}\nother={B}\ndownload "$url" "out" "$sum"\n'
 # the shapes the real script uses: a variable per digest, one case line per desktop library, abi paths as jni/$abi/
 REAL = (
-    f'url="https://example.org/pkg/tool/1.0"\ntool_sha={A}\nabi_sha_x86={A[::-1]}\nabi_sha_arm={B[::-1]}\n'
+    f'url="https://example.org/pkg/tool/1.0"\ntool_sha={A}\ndownload "$url" "out" "$tool_sha"\nabi_sha_x86={A[::-1]}\nabi_sha_arm={B[::-1]}\n'
     f'case x in\n  L/x) entry=runtimes/linux-x64/lib.so; lib_sha={B} ;;\n'
     f'  L/y) entry=runtimes/linux-arm64/lib.so; lib_sha={"c" * 64} ;;\nesac\n'
     'unzip "jni/$abi/lib.so"\n'
@@ -63,11 +63,33 @@ class CheckPins(unittest.TestCase):
         self.assertTrue(any("tool_version=1.1" in p for p in problems))
 
     def test_a_url_made_of_a_base_and_a_file_the_script_never_joins(self):
-        fetch = f'base="https://example.org/a"\nfile=x.bin\nstray=y.bin\nsum={A}\nother={B}\ndownload "$base/$file" f {A}\n'
+        fetch = f'base="https://example.org/a"\nfile=x.bin\nstray=y.bin\nsum={A}\nother={B}\ndownload "$base/$file" "f" "$sum"\n'
         good = pin("tool", A, 'url = "https://example.org/a/x.bin"') + pin("inner", B, 'from = "tool"')
         self.assertEqual(self.problems(good, fetch), [])
         bad = pin("tool", A, 'url = "https://example.org/a/y.bin"') + pin("inner", B, 'from = "tool"')
-        self.assertTrue(any("tool: url https://example.org/a/y.bin" in p for p in self.problems(bad, fetch)))
+        self.assertTrue(any("tool: no download call" in p for p in self.problems(bad, fetch)))
+
+    def test_a_bare_base_directory_is_not_a_download(self):
+        fetch = f'base="https://example.org/a"\nsum={A}\nother={B}\ndownload "$base/x.bin" "f" "$sum"\n'
+        pins = pin("tool", A, 'url = "https://example.org/a"') + pin("inner", B, 'from = "tool"')
+        self.assertTrue(any("tool: no download call" in p for p in self.problems(pins, fetch)))
+
+    def test_a_commented_download_line_does_not_count(self):
+        fetch = FETCH.replace("download", "# download")
+        pins = pin("tool", A) + pin("inner", B, 'from = "tool"')
+        self.assertTrue(any("tool: no download call" in p for p in self.problems(pins, fetch)))
+
+    def test_a_url_that_belongs_to_another_pin(self):
+        fetch = (
+            f'one="https://example.org/one"\ntwo="https://example.org/two"\nsum={A}\nother={B}\n'
+            'download "$one" "f" "$sum"\ndownload "$two" "f" "$other"\n'
+        )
+        good = pin("a", A, 'url = "https://example.org/one"') + pin("b", B, 'url = "https://example.org/two"')
+        self.assertEqual(self.problems(good, fetch), [])
+        swapped = pin("a", A, 'url = "https://example.org/two"') + pin("b", B, 'url = "https://example.org/one"')
+        problems = self.problems(swapped, fetch)
+        self.assertTrue(any("a: no download call" in p for p in problems))
+        self.assertTrue(any("b: no download call" in p for p in problems))
 
     def test_a_pin_from_nothing(self):
         pins = pin("tool", A) + pin("inner", B, 'from = "missing"')

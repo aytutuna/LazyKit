@@ -37,12 +37,8 @@ refused FreeBSD amd64
 
 # the iOS cache counts only while its stamp matches the files on disk
 ios_state() { LAZY_FETCH_DRY=1 bash "$fetch" "$out/cache" ios 2>"$err"; }
-stamp() {
-  local sum
-  if command -v sha256sum >/dev/null 2>&1; then sum="sha256sum"; else sum="shasum -a 256"; fi
-  digest="$(cd "$out/cache/ios" && echo "./onnxruntime.xcframework/lib $($sum onnxruntime.xcframework/lib | cut -d ' ' -f 1)" | $sum | cut -d ' ' -f 1)"
-  echo "$(grep '^xcframework_sha=' "$fetch" | cut -d = -f 2) $digest" > "$out/cache/ios/stamp"
-}
+eval "$(sed -n '/^sha256() {/,/^}/p;/^tree_sha() {/,/^}/p' "$fetch")"
+stamp() { echo "$(grep '^xcframework_sha=' "$fetch" | cut -d = -f 2) $(tree_sha "$out/cache/ios")" > "$out/cache/ios/stamp"; }
 mkdir -p "$out/cache/ios/onnxruntime.xcframework"
 echo framework > "$out/cache/ios/onnxruntime.xcframework/lib"
 [ "$(ios_state)" = stale ] || fail "an iOS cache with no stamp was trusted"
@@ -56,6 +52,25 @@ echo extra > "$out/cache/ios/onnxruntime.xcframework/extra"
 rm "$out/cache/ios/onnxruntime.xcframework/extra"
 echo "$(grep '^xcframework_sha=' "$fetch" | cut -d = -f 2)" > "$out/cache/ios/stamp"
 [ "$(ios_state)" = stale ] || fail "an iOS cache with the old plain stamp was trusted"
+
+# a nested file called stamp is part of the tree; a symlink counts by where it points
+stamp
+echo one > "$out/cache/ios/onnxruntime.xcframework/stamp"
+stamp
+[ "$(ios_state)" = cached ] || fail "a nested file called stamp broke a matching iOS cache"
+echo two > "$out/cache/ios/onnxruntime.xcframework/stamp"
+[ "$(ios_state)" = stale ] || fail "an edited nested file called stamp was ignored"
+rm "$out/cache/ios/onnxruntime.xcframework/stamp"
+if ln -s lib "$out/cache/ios/onnxruntime.xcframework/link" 2>/dev/null && [ -L "$out/cache/ios/onnxruntime.xcframework/link" ]; then
+  stamp
+  [ "$(ios_state)" = cached ] || fail "an iOS cache with a symlink was refused"
+  rm "$out/cache/ios/onnxruntime.xcframework/link"
+  ln -s elsewhere "$out/cache/ios/onnxruntime.xcframework/link"
+  [ "$(ios_state)" = stale ] || fail "a retargeted symlink was trusted"
+  rm "$out/cache/ios/onnxruntime.xcframework/link"
+else
+  echo "no symlinks here; symlink check skipped"
+fi
 
 [ "$failed" = 0 ] && echo "fetch.sh decisions ok"
 exit "$failed"
