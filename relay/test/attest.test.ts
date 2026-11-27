@@ -1,6 +1,5 @@
 import { env, exports } from "cloudflare:workers";
 import { afterEach, describe, expect, it } from "vitest";
-import { fromBase64 } from "../src/appattest";
 import { INSTALL_GROUPS_PER_WEEK, desktopMessage, verifyAttestation } from "../src/attest";
 import type { IntegrityPayload } from "../src/integrity";
 import { useServices } from "../src/services";
@@ -43,7 +42,7 @@ describe("app check at the relay", () => {
     useServices({ appleRoots: [pki.root] });
     const g = newGroup();
     const c = await challengeOf(g);
-    const { keyId, attestation } = await makeAttestation({ pki, appId: APP_ID, challenge: fromBase64(c) });
+    const { keyId, attestation } = await makeAttestation({ pki, appId: APP_ID, challenge: new TextEncoder().encode(c) });
     const res = await api(g, "attest", { challenge: c, platform: "apple", keyId: b64(keyId), attestation: b64(attestation) });
     expect(res.status).toBe(204);
     expect((await wantsRoom(g)).status).toBe(101);
@@ -54,7 +53,7 @@ describe("app check at the relay", () => {
     useServices({ appleRoots: [pki.root] });
     const g = newGroup();
     const c = await challengeOf(g);
-    const { keyId, attestation } = await makeAttestation({ pki, appId: "8XT2U634Z4.com.example.other", challenge: fromBase64(c) });
+    const { keyId, attestation } = await makeAttestation({ pki, appId: "8XT2U634Z4.com.example.other", challenge: new TextEncoder().encode(c) });
     expect((await api(g, "attest", { challenge: c, platform: "apple", keyId: b64(keyId), attestation: b64(attestation) })).status).toBe(422);
     expect((await wantsRoom(g)).status).toBe(403);
   });

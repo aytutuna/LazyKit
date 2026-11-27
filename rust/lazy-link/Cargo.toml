@@ -7,25 +7,25 @@ license-file.workspace = true
 publish.workspace = true
 
 [dependencies]
+async-trait = { version = "0.1", optional = true }
 base64 = "0.22"
 futures-util = { version = "0.3.34", optional = true }
 getrandom = { version = "0.4.3", optional = true }
+httparse = { version = "1", optional = true }
 serde_json = { version = "1", optional = true }
 sha2 = "0.10"
 subtle = "2"
-tokio = { version = "1.54.1", features = ["rt", "net", "time", "sync", "macros", "io-util"], optional = true }
-rustls = { version = "0.23", default-features = false, features = ["ring", "std", "tls12"], optional = true }
-rustls-platform-verifier = { version = "0.7.1", optional = true }
-tokio-tungstenite = { version = "0.30.0", features = ["rustls-tls-native-roots"], optional = true }
-ureq = { version = "3.5.2", default-features = false, features = ["rustls", "platform-verifier"], optional = true }
-
-[target.'cfg(target_os = "android")'.dependencies]
-jni = { version = "0.22", optional = true }
+tokio = { version = "1.54.1", features = ["rt", "time", "sync", "macros", "io-util"], optional = true }
+tokio-tungstenite = { version = "0.30.0", default-features = false, features = ["handshake"], optional = true }
 
 [dev-dependencies]
+async-trait = "0.1"
+p256 = { version = "0.13", features = ["ecdsa"] }
 serde_json = "1"
-tokio = { version = "1", features = ["rt-multi-thread", "test-util"] }
+tokio = { version = "1", features = ["net", "rt-multi-thread", "test-util"] }
 
 [features]
-# The relay client; the plain protocol code builds without it, and so does the wasm crate.
-relay = ["dep:tokio", "dep:tokio-tungstenite", "dep:rustls", "dep:rustls-platform-verifier", "dep:futures-util", "dep:getrandom", "dep:ureq", "dep:serde_json", "dep:jni"]
+# The relay client and the transport it runs over, which the app supplies; the plain protocol
+# code builds without it, and so does the wasm crate. No TLS library is in this tree: the app's
+# system opens the encrypted connection.
+relay = ["dep:async-trait", "dep:tokio", "dep:tokio-tungstenite", "dep:futures-util", "dep:getrandom", "dep:httparse", "dep:serde_json"]

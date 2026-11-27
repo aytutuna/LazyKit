@@ -3,6 +3,8 @@
 //! need it listening, so they are ignored by default; the `relay-client` workflow starts it and
 //! runs them with `--ignored`. RELAY_URL names the relay, default http://127.0.0.1:8787/relay/v1.
 
+mod common;
+
 use lazy_link::relay::{
     MAX_FRAME, MAX_STREAMS, Platform, Relay, RelayError, Store, WINDOW_FRAMES, random_id, room_id,
 };
@@ -15,12 +17,17 @@ fn url() -> String {
     std::env::var("RELAY_URL").unwrap_or_else(|_| "http://127.0.0.1:8787/relay/v1".into())
 }
 
+// A device that proves itself to the relay the way a computer does.
+fn device(group: &str) -> Relay {
+    Relay::new(&url(), group, &random_id(), common::tcp()).with_attester(common::Desktop::new())
+}
+
 // Two devices of one person: same group, different device ids.
 fn pair() -> (Relay, Relay, String) {
     let group = random_id();
     (
-        Relay::new(&url(), &group, &random_id()),
-        Relay::new(&url(), &group, &random_id()),
+        device(&group),
+        device(&group),
         room_id(random_id().as_bytes()),
     )
 }
@@ -139,7 +146,7 @@ async fn a_reader_that_stops_makes_the_writer_wait() {
 async fn another_group_cannot_use_the_room() {
     let (a, _, room) = pair();
     let _host = a.host(&room).await.unwrap();
-    let stranger = Relay::new(&url(), &random_id(), &random_id());
+    let stranger = device(&random_id());
     assert!(matches!(
         stranger.connect(&room).await,
         Err(RelayError::WrongGroup)

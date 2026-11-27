@@ -2,8 +2,11 @@
 //! there and the phone link's connections run through it as streams.
 //! Required Notice: Copyright (c) 2026 Alazy Inc. (https://alazy.app)
 
+use crate::base64url;
+use crate::http;
+use crate::transport::{self, Transport};
+use async_trait::async_trait;
 use futures_util::{SinkExt, StreamExt};
-use rustls_platform_verifier::BuilderVerifierExt;
 use sha2::{Digest, Sha256};
 use std::fmt;
 use std::io;
@@ -13,13 +16,12 @@ use std::sync::{Arc, OnceLock};
 use std::task::{Context, Poll};
 use std::time::Duration;
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt, DuplexStream, ReadBuf};
-use tokio::net::TcpStream;
 use tokio::sync::{Notify, mpsc};
 use tokio::task::JoinHandle;
+use tokio_tungstenite::WebSocketStream;
 use tokio_tungstenite::tungstenite::protocol::CloseFrame;
 use tokio_tungstenite::tungstenite::protocol::frame::coding::CloseCode;
 use tokio_tungstenite::tungstenite::{self, Message};
-use tokio_tungstenite::{MaybeTlsStream, WebSocketStream};
 
 /// The largest frame the relay forwards; a larger one closes the stream.
 pub const MAX_FRAME: usize = 64 * 1024;
@@ -30,6 +32,9 @@ pub const MAX_BUFFERED: usize = 8 * 1024 * 1024;
 pub const CLOSE_TOO_SLOW: u16 = 1013;
 /// The weekly cap closes streams with this application code; 1008 is a protocol fault.
 pub const CLOSE_CAPPED: u16 = 4402;
+
+/// The header the relay uses to say why a 403 is not about the room's group.
+const REASON: &str = "x-relay-reason";
 
 const KEEPALIVE: Duration = Duration::from_secs(30);
 /// The wait between tries while a woken host starts; it grows from the first to the second.
@@ -69,7 +74,7 @@ enum Ctl {
     Ack,
 }
 
-type Socket = WebSocketStream<MaybeTlsStream<TcpStream>>;
+type Socket = WebSocketStream<DuplexStream>;
 
 #[derive(Debug)]
 pub enum RelayError {
@@ -86,6 +91,15 @@ pub enum RelayError {
     },
     /// The room belongs to another group.
     WrongGroup,
+    /// The relay wants proof that this is the real app before this group may use it, and the
+    /// app has no [`Attester`] or its proof did not help.
+    AttestationRequired,
+    /// The relay looked at the proof and refused it.
+    AttestationRejected,
+    /// The relay cannot check this kind of proof yet.
+    AttestationUnavailable,
+    /// The app's [`Attester`] could not make a proof.
+    Attester(String),
     /// The purchase already pays for another group.
     PurchaseUsed,
     /// The relay cannot check this store's receipts yet.
@@ -107,6 +121,12 @@ impl fmt::Display for RelayError {
                 write!(f, "too many requests, retry in {} s", retry_after.as_secs())
             }
             Self::WrongGroup => f.write_str("the room belongs to another group"),
+            Self::AttestationRequired => f.write_str("the relay wants an app check first"),
+            Self::AttestationRejected => f.write_str("the relay refused the app check"),
+            Self::AttestationUnavailable => {
+                f.write_str("the relay cannot check this platform's app proof yet")
+            }
+            Self::Attester(e) => write!(f, "the app could not make its proof: {e}"),
             Self::PurchaseUsed => f.write_str("the purchase pays for another group"),
             Self::NotConfigured => f.write_str("the relay cannot check receipts of this store yet"),
             Self::ReceiptRejected => f.write_str("the store rejected the receipt"),
@@ -129,6 +149,13 @@ impl From<tungstenite::Error> for RelayError {
                 woken: res.headers().contains_key("x-relay-woken"),
             },
             402 => Self::Capped,
+            403 if res
+                .headers()
+                .get(REASON)
+                .is_some_and(|v| v == "attestation-required") =>
+            {
+                Self::AttestationRequired
+            }
             403 => Self::WrongGroup,
             429 => Self::TooManyStreams,
             503 => match retry_after(
@@ -212,22 +239,79 @@ fn hex(bytes: &[u8]) -> String {
     bytes.iter().map(|b| format!("{b:02x}")).collect()
 }
 
+/// What an app proves about itself to the relay: the real store app, or on a computer an install
+/// that holds a key.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Attestation {
+    /// App Attest: the key id and the attestation object made over the challenge.
+    Apple {
+        key_id: Vec<u8>,
+        attestation: Vec<u8>,
+    },
+    /// A Play Integrity token whose nonce is the challenge.
+    Google { token: String },
+    /// The install's P-256 public key (65 bytes, uncompressed) and its signature (64 bytes, r then
+    /// s) over `lazy relay install v1`, a zero byte, the group, a zero byte and the challenge.
+    Desktop {
+        public_key: Vec<u8>,
+        signature: Vec<u8>,
+    },
+}
+
+/// Made by the app, which alone can reach App Attest, Play Integrity or the install's key.
+/// `challenge` is the text the relay issued; App Attest gets its UTF-8 bytes as the client data
+/// and Play Integrity the text as the nonce.
+#[async_trait]
+pub trait Attester: Send + Sync {
+    async fn attest(&self, group: &str, challenge: &str) -> Result<Attestation, String>;
+}
+
 /// One device's view of the relay: its group and its own id.
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub struct Relay {
-    base: String,
+    /// As written in the base address, port included when there is one: what a Host header says.
+    authority: String,
+    host: String,
+    port: u16,
+    prefix: String,
     group: String,
     device: String,
+    transport: Arc<dyn Transport>,
+    attester: Option<Arc<dyn Attester>>,
 }
 
 impl Relay {
     /// `base` is the relay's address up to the version, for example `https://alazy.app/relay/v1`.
-    pub fn new(base: &str, group: &str, device: &str) -> Self {
+    /// Connections are opened by `transport`, which does the TLS.
+    pub fn new(base: &str, group: &str, device: &str, transport: Arc<dyn Transport>) -> Self {
+        let secure = base.starts_with("https");
+        let rest = base.split_once("://").map_or(base, |(_, rest)| rest);
+        let (authority, path) = rest.split_once('/').unwrap_or((rest, ""));
+        let (host, port) = match authority.rsplit_once(':') {
+            Some((host, port)) if port.parse::<u16>().is_ok() => (host, port.parse().unwrap()),
+            _ => (authority, if secure { 443 } else { 80 }),
+        };
+        let path = path.trim_end_matches('/');
         Self {
-            base: base.trim_end_matches('/').to_string(),
+            authority: authority.into(),
+            host: host.into(),
+            port,
+            prefix: if path.is_empty() {
+                String::new()
+            } else {
+                format!("/{path}")
+            },
             group: group.into(),
             device: device.into(),
+            transport,
+            attester: None,
         }
+    }
+
+    /// Lets the relay ask this device to prove itself the first time its group is used.
+    pub fn with_attester(mut self, attester: Arc<dyn Attester>) -> Self {
+        self.attester = Some(attester);
+        self
     }
 
     pub async fn status(&self) -> Result<GroupStatus, RelayError> {
@@ -296,26 +380,27 @@ impl Relay {
     }
 
     /// Like [`connect`](Self::connect), but when the relay has woken the host's closed app it
-    /// tries again, a little slower each time, until `timeout` has passed.
+    /// tries again after a second and then every four, until `timeout` has passed.
     pub async fn connect_waiting(
         &self,
         room: &str,
         timeout: Duration,
     ) -> Result<RelayStream, RelayError> {
-        let deadline = tokio::time::Instant::now() + timeout;
+        let now = tokio::time::Instant::now;
+        // A timeout too large to add to the clock is no deadline at all.
+        let deadline = now().checked_add(timeout);
+        let before = |wait: Duration| {
+            deadline.is_none_or(|d| now().checked_add(wait).is_some_and(|t| t < d))
+        };
         let mut poll = WAKE_POLL;
         loop {
-            let left = deadline.saturating_duration_since(tokio::time::Instant::now());
+            let left = deadline.map_or(REQUEST_TIMEOUT, |d| d.saturating_duration_since(now()));
             match self.connect_within(room, left.min(REQUEST_TIMEOUT)).await {
-                Err(RelayError::NoHost { woken: true })
-                    if tokio::time::Instant::now() + poll < deadline =>
-                {
+                Err(RelayError::NoHost { woken: true }) if before(poll) => {
                     tokio::time::sleep(poll).await;
-                    poll = (poll * 2).min(WAKE_POLL_SLOW);
+                    poll = WAKE_POLL_SLOW;
                 }
-                Err(RelayError::RateLimited { retry_after })
-                    if tokio::time::Instant::now() + retry_after < deadline =>
-                {
+                Err(RelayError::RateLimited { retry_after }) if before(retry_after) => {
                     tokio::time::sleep(retry_after.max(WAKE_POLL)).await;
                 }
                 other => return other,
@@ -329,21 +414,43 @@ impl Relay {
         query: &str,
         within: Duration,
     ) -> Result<Socket, RelayError> {
-        let base = self.base.replacen("http", "ws", 1);
+        match self.socket_once(room, query, within).await {
+            Err(RelayError::AttestationRequired) if self.attester.is_some() => {
+                self.attest().await?;
+                self.socket_once(room, query, within).await
+            }
+            other => other,
+        }
+    }
+
+    async fn socket_once(
+        &self,
+        room: &str,
+        query: &str,
+        within: Duration,
+    ) -> Result<Socket, RelayError> {
+        let path = format!("{}/{room}?{query}", self.prefix);
         let url = if query.starts_with("role=stream") {
-            format!("{base}/{room}?{query}")
+            format!("ws://{}{path}", self.authority)
         } else {
-            format!("{base}/{room}?{query}&group={}", self.group)
+            format!("ws://{}{path}&group={}", self.authority, self.group)
         };
-        let connector = tokio_tungstenite::Connector::Rustls(Arc::new(tls_config()?));
-        let connecting =
-            tokio_tungstenite::connect_async_tls_with_config(url, None, false, Some(connector));
+        let connecting = async {
+            let io = self.dial().await?;
+            Ok(tokio_tungstenite::client_async(url, io).await?.0)
+        };
         match tokio::time::timeout(within, connecting).await {
-            Ok(res) => Ok(res?.0),
+            Ok(res) => res,
             Err(_) => Err(RelayError::Transport(
                 "the relay did not answer in time".into(),
             )),
         }
+    }
+
+    async fn dial(&self) -> Result<DuplexStream, RelayError> {
+        transport::open(&*self.transport, &self.host, self.port, &self.host, None)
+            .await
+            .map_err(|e| RelayError::Transport(e.0))
     }
 
     async fn api(
@@ -352,54 +459,120 @@ impl Relay {
         path: &str,
         body: Option<String>,
     ) -> Result<(u16, String), RelayError> {
-        let url = format!("{}/group/{}{path}", self.base, self.group);
-        tokio::task::spawn_blocking(move || {
-            let agent: ureq::Agent = ureq::Agent::config_builder()
-                .http_status_as_error(false)
-                .timeout_global(Some(REQUEST_TIMEOUT))
-                .tls_config(
-                    ureq::tls::TlsConfig::builder()
-                        .root_certs(ureq::tls::RootCerts::PlatformVerifier)
-                        .build(),
-                )
-                .build()
-                .into();
-            let res = match (method, body) {
-                ("GET", _) => agent.get(&url).call(),
-                ("DELETE", _) => agent.delete(&url).call(),
-                (_, body) => agent
-                    .post(&url)
-                    .content_type("application/json")
-                    .send(body.unwrap_or_default()),
-            };
-            let mut res = res.map_err(|e| RelayError::Transport(e.to_string()))?;
-            let status = res.status().as_u16();
-            if status == 503
-                && let Some(retry_after) = retry_after(
-                    res.headers()
-                        .get("retry-after")
-                        .and_then(|v| v.to_str().ok()),
-                )
-            {
-                return Err(RelayError::RateLimited { retry_after });
+        let first = self.call(method, path, body.as_deref()).await?;
+        if first.wants_attestation() && self.attester.is_some() {
+            self.attest().await?;
+            return self
+                .call(method, path, body.as_deref())
+                .await?
+                .into_result();
+        }
+        first.into_result()
+    }
+
+    async fn call(
+        &self,
+        method: &str,
+        path: &str,
+        body: Option<&str>,
+    ) -> Result<Reply, RelayError> {
+        let path = format!("{}/group/{}{path}", self.prefix, self.group);
+        let request = async {
+            let io = self.dial().await?;
+            http::request(io, &self.authority, method, &path, body)
+                .await
+                .map_err(|e| RelayError::Transport(e.to_string()))
+        };
+        let answer = match tokio::time::timeout(REQUEST_TIMEOUT, request).await {
+            Ok(res) => res?,
+            Err(_) => {
+                return Err(RelayError::Transport(
+                    "the relay did not answer in time".into(),
+                ));
             }
-            let body = res.body_mut().read_to_string().unwrap_or_default();
-            Ok((status, body))
+        };
+        Ok(Reply {
+            status: answer.status,
+            retry_after: retry_after(answer.retry_after.as_deref()),
+            reason: answer.reason,
+            body: String::from_utf8_lossy(&answer.body).into_owned(),
         })
-        .await
-        .map_err(|e| RelayError::Transport(e.to_string()))?
+    }
+
+    // Gets a challenge from the relay, has the app answer it and hands the answer back, which
+    // marks the group as verified.
+    async fn attest(&self) -> Result<(), RelayError> {
+        let Some(attester) = &self.attester else {
+            return Err(RelayError::AttestationRequired);
+        };
+        let (status, body) = self.call("POST", "/challenge", None).await?.into_result()?;
+        let challenge = serde_json::from_str::<serde_json::Value>(&body)
+            .ok()
+            .and_then(|v| v["challenge"].as_str().map(str::to_owned))
+            .filter(|_| status == 200)
+            .ok_or(RelayError::Refused(status))?;
+        let proof = attester
+            .attest(&self.group, &challenge)
+            .await
+            .map_err(RelayError::Attester)?;
+        let mut body = match proof {
+            Attestation::Apple {
+                key_id,
+                attestation,
+            } => serde_json::json!({
+                "platform": "apple",
+                "keyId": base64url::encode(&key_id),
+                "attestation": base64url::encode(&attestation),
+            }),
+            Attestation::Google { token } => {
+                serde_json::json!({ "platform": "google", "token": token })
+            }
+            Attestation::Desktop {
+                public_key,
+                signature,
+            } => serde_json::json!({
+                "platform": "desktop",
+                "publicKey": base64url::encode(&public_key),
+                "signature": base64url::encode(&signature),
+            }),
+        };
+        body["challenge"] = challenge.into();
+        let reply = self
+            .call("POST", "/attest", Some(&body.to_string()))
+            .await?;
+        match reply.into_result()?.0 {
+            204 => Ok(()),
+            422 => Err(RelayError::AttestationRejected),
+            501 => Err(RelayError::AttestationUnavailable),
+            status => Err(RelayError::Refused(status)),
+        }
     }
 }
 
-// The same system trust store the HTTP calls use. rustls-native-certs finds none on iPhone or
-// Android, so the socket cannot rely on tokio-tungstenite's own roots.
-fn tls_config() -> Result<rustls::ClientConfig, RelayError> {
-    let provider = Arc::new(rustls::crypto::ring::default_provider());
-    rustls::ClientConfig::builder_with_provider(provider)
-        .with_safe_default_protocol_versions()
-        .and_then(|b| b.with_platform_verifier())
-        .map(|b| b.with_no_client_auth())
-        .map_err(|e| RelayError::Transport(e.to_string()))
+// What a group call came back with, before it is turned into a result.
+struct Reply {
+    status: u16,
+    retry_after: Option<Duration>,
+    reason: Option<String>,
+    body: String,
+}
+
+impl Reply {
+    fn wants_attestation(&self) -> bool {
+        self.status == 403 && self.reason.as_deref() == Some("attestation-required")
+    }
+
+    fn into_result(self) -> Result<(u16, String), RelayError> {
+        if self.wants_attestation() {
+            return Err(RelayError::AttestationRequired);
+        }
+        if self.status == 503
+            && let Some(retry_after) = self.retry_after
+        {
+            return Err(RelayError::RateLimited { retry_after });
+        }
+        Ok((self.status, self.body))
+    }
 }
 
 fn status_of(status: u16, body: &str) -> Result<GroupStatus, RelayError> {

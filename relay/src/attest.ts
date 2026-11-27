@@ -43,7 +43,8 @@ const installId = async (publicKey: Uint8Array) =>
 // that holds a key). The challenge has been consumed by the caller.
 export async function verifyAttestation(env: Cloudflare.Env, group: string, challenge: string, a: Attestation): Promise<Outcome> {
   try {
-    const bytes = fromBase64(challenge);
+    // App Attest's client data is the challenge text itself, so every platform hands the same string over.
+    const bytes = new TextEncoder().encode(challenge);
     if (a.platform === "apple") {
       const appIds = list(env.APPLE_APP_IDS);
       if (appIds.length === 0) return "not-configured";

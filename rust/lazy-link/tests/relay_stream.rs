@@ -2,6 +2,7 @@
 #![allow(clippy::result_large_err)] // the handshake callback's error type is the library's
 //! The relay client against small stand-in servers, so no relay has to run.
 
+mod common;
 mod data;
 
 use futures_util::{SinkExt, StreamExt};
@@ -21,6 +22,7 @@ async fn listener() -> (TcpListener, Relay) {
         &format!("http://{}/relay/v1", l.local_addr().unwrap()),
         &random_id(),
         &random_id(),
+        common::tcp(),
     );
     (l, relay)
 }
@@ -389,6 +391,7 @@ async fn the_guest_names_its_own_device() {
         &format!("http://{}/relay/v1", l.local_addr().unwrap()),
         &random_id(),
         &device,
+        common::tcp(),
     );
     let server = tokio::spawn(async move {
         let query = std::sync::Arc::new(std::sync::Mutex::new(String::new()));
@@ -594,6 +597,10 @@ async fn a_frame_given_to_the_reader_is_acknowledged() {
     let mut s = relay.connect(&room_id(b"r")).await.unwrap();
     let mut got = [0u8; 30];
     s.read_exact(&mut got).await.unwrap();
+    assert_eq!(
+        got.to_vec(),
+        [vec![0u8; 10], vec![1; 10], vec![2; 10]].concat()
+    );
     assert_eq!(
         timeout(Duration::from_secs(5), server)
             .await
