@@ -18,7 +18,7 @@ const MAX_LOAD_DEPTH: usize = 32;
 const MAX_FLATTENED_NODES: usize = 4096;
 /// What parses that fail may read in all: an unclosed string runs to the end of the data, and every object listed
 /// in front of one would pay for that again.
-const MAX_FAILED_PARSE_BYTES: usize = 128 << 20;
+const MAX_PARSE_BYTES: usize = 128 << 20;
 
 impl Document {
     /// Object `number` as the newest revision has it; none when it is free or not listed. One that is listed but
@@ -65,6 +65,8 @@ impl Document {
             value.write_to(&mut print);
             self.originals.insert(number, print);
         }
+        // The slot has to be the only owner, or make_mut copies the whole object.
+        drop(value);
         self.changed.insert(number);
         let slot = self.objects.get_mut(&number)?;
         Some(Arc::make_mut(&mut slot.value))
@@ -281,18 +283,17 @@ impl Document {
         if number != 0 && found != number {
             return None;
         }
-        // Once failed parses have read their share, a parse stops at the next "obj": two headers are never inside
-        // one window, so what is read in all stays within the file.
-        if self.failed_parse_bytes.get() > MAX_FAILED_PARSE_BYTES {
-            let end = crate::bytes::find(&self.data, b"obj", lexer.pos).unwrap_or(self.data.len());
+        // Spans may overlap (a header inside a string), so what parses read in all is capped: once it is spent a
+        // parse stops where the next object the file lists starts, which a valid object never reaches.
+        if self.parse_budget_spent() {
+            let end = self.next_object_start(offset).min(self.data.len() as u64) as usize;
             lexer = Lexer::new(&self.data[..end], lexer.pos);
         }
-        let mut value = match lexer.read_object(true) {
+        let result = lexer.read_object(true);
+        self.charge_parse(lexer.pos.saturating_sub(offset as usize));
+        let mut value = match result {
             Ok(value) => value,
-            Err(_) => {
-                self.charge_failed_parse(lexer.pos.saturating_sub(offset as usize));
-                return None;
-            }
+            Err(_) => return None,
         };
         if let Object::Stream(stream) = &mut value {
             stream.number = found;
@@ -301,9 +302,36 @@ impl Document {
         Some((value, generation))
     }
 
-    fn charge_failed_parse(&self, bytes: usize) {
-        self.failed_parse_bytes
-            .set(self.failed_parse_bytes.get().saturating_add(bytes));
+    fn charge_parse(&self, bytes: usize) {
+        self.parsed_bytes
+            .set(self.parsed_bytes.get().saturating_add(bytes));
+    }
+
+    /// Where the first object listed after `offset` starts; the end of the data when none does.
+    fn next_object_start(&self, offset: u64) -> u64 {
+        let mut cache = self.object_starts.borrow_mut();
+        if cache.0 != self.entries.len() {
+            let mut starts: Vec<u64> = self
+                .entries
+                .values()
+                .filter(|e| e.kind == EntryKind::InUse)
+                .map(|e| e.offset)
+                .chain(
+                    self.scan
+                        .iter()
+                        .flat_map(|s| s.objects.values().map(|o| o.0 as u64)),
+                )
+                .collect();
+            starts.sort_unstable();
+            starts.dedup();
+            *cache = (self.entries.len(), starts);
+        }
+        let next = cache.1.partition_point(|s| *s <= offset);
+        cache.1.get(next).copied().unwrap_or(u64::MAX)
+    }
+
+    fn parse_budget_spent(&self) -> bool {
+        self.parsed_bytes.get() > MAX_PARSE_BYTES.saturating_add(self.data.len())
     }
 
     fn read_compressed(&mut self, number: u32, entry: Entry) -> Option<Object> {
@@ -323,14 +351,15 @@ impl Document {
             return None;
         };
         let end = match next {
-            Some(next) if self.failed_parse_bytes.get() > MAX_FAILED_PARSE_BYTES => next,
+            Some(next) if self.parse_budget_spent() => next,
             _ => data.len(),
         };
         let mut lexer = Lexer::new(&data[..end], at);
-        match lexer.read_object(false) {
+        let result = lexer.read_object(false);
+        self.charge_parse(lexer.pos.saturating_sub(at));
+        match result {
             Ok(value) => Some(value),
             Err(_) => {
-                self.charge_failed_parse(lexer.pos.saturating_sub(at));
                 self.add_repair(format!(
                     "Object {number} in object stream {} could not be read.",
                     entry.stream_number
@@ -410,6 +439,8 @@ impl Document {
             if !(1..=MAX_OBJECT_NUMBER as i64).contains(&object_number)
                 || first.saturating_add(relative) >= data.len() as i64
             {
+                // A gap, so later members keep their place in the stream.
+                numbers.push(0);
                 continue;
             }
             offsets
@@ -443,7 +474,7 @@ impl Document {
         let stream = self.object_streams.get_mut(&entry.stream_number).unwrap();
         let index = stream.number_index.get_or_insert_with(|| {
             let mut index = HashMap::with_capacity(stream.numbers.len());
-            for (i, n) in stream.numbers.iter().enumerate() {
+            for (i, n) in stream.numbers.iter().enumerate().filter(|(_, n)| **n != 0) {
                 index.entry(*n).or_insert(i);
             }
             index

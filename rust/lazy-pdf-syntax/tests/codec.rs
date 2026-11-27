@@ -119,3 +119,11 @@ fn the_stages_of_a_chain_share_one_output_budget() {
             .is_ok()
     );
 }
+
+#[test]
+fn an_abbreviated_codec_is_returned_under_its_full_name() {
+    let mut document = open(image_file("/Filter [/Fl /DCT]", &deflate(b"jpeg bytes")));
+    let stream = stream_20(&mut document);
+    let decoded = document.stream_data_to_codec(&stream, 1 << 20).unwrap();
+    assert_eq!(decoded.codec.unwrap().filter, b"DCTDecode");
+}

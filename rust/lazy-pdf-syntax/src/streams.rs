@@ -127,9 +127,13 @@ impl Document {
                 if data.len() > max_size {
                     return Err(ReadError::damaged("The stream is longer than the limit."));
                 }
+                let mut codec = stage;
+                if codec.filter == b"DCT" {
+                    codec.filter = b"DCTDecode".to_vec();
+                }
                 return Ok(Decoded {
                     data,
-                    codec: Some(stage),
+                    codec: Some(codec),
                 });
             }
             if stage.filter == b"Crypt" {

@@ -316,3 +316,11 @@ fn catalogs_in_an_object_stream_are_tried_in_the_order_they_are_listed() {
     let mut document = open(pdf.finish_without_xref());
     assert_eq!(document.pages().len(), 2);
 }
+
+#[test]
+fn changing_an_object_does_not_copy_it() {
+    let mut document = open(TestPdf::simple(1));
+    let before = std::sync::Arc::as_ptr(&document.get(1).unwrap());
+    document.get_mut(1).unwrap();
+    assert_eq!(std::sync::Arc::as_ptr(&document.get(1).unwrap()), before);
+}

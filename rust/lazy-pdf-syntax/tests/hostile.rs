@@ -575,3 +575,42 @@ fn contents_named_again_and_again_are_not_read_again_and_again_when_they_decode_
     assert!(pages[0].contents(&mut document).len() < 5000);
     must_finish_within(Duration::from_secs(20), started);
 }
+
+#[test]
+fn members_after_a_skipped_header_pair_keep_their_place_in_the_object_stream() {
+    let bodies = [
+        "<</Type /Catalog /Pages 2 0 R>>",
+        "<</Type /Pages /Kids [] /Count 0>>",
+    ];
+    let header = format!("99999999 0 1 0 2 {} ", bodies[0].len() + 1);
+    let mut pdf = TestPdf::with_header("%PDF-1.5\n");
+    pdf.stream(4, "", "q Q");
+    pdf.stream_with(
+        5,
+        &format!("/Type /ObjStm /N 3 /First {}", header.len()),
+        &latin(&format!("{header}{}\n{}\n", bodies[0], bodies[1])),
+        None,
+        true,
+    );
+    let file = [pdf.finish_without_xref(), latin("startxref\n12\n%%EOF\n")].concat();
+    let mut document = open(file.clone());
+    assert_eq!(document.entry(2).unwrap().stream_number, 5);
+    *document.get_mut(4).unwrap() = Object::int(7);
+    let saved = document.save_incremental().unwrap();
+    let update = &saved[file.len()..];
+    let from = update
+        .windows(7)
+        .position(|w| {
+            w == b"stream
+"
+        })
+        .unwrap()
+        + 7;
+    let (rows, _) = update[from..].as_chunks::<5>();
+    let indexes: Vec<u16> = rows
+        .iter()
+        .filter(|row| row[..3] == [2, 0, 5])
+        .map(|row| u16::from_be_bytes([row[3], row[4]]))
+        .collect();
+    assert!(indexes.ends_with(&[1, 2]), "{indexes:?}");
+}

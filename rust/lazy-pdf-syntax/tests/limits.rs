@@ -233,3 +233,66 @@ fn a_size_beyond_the_number_limit_is_not_taken_at_its_word() {
     let saved = document.save_incremental().unwrap();
     assert!(!open(saved).xref_rebuilt());
 }
+
+#[test]
+fn objects_nested_in_each_others_strings_are_not_read_over_and_over() {
+    // Object k's string holds the headers of every later object, so each span runs to the end of the file.
+    let count = 12_000;
+    let mut pdf = TestPdf::with_pages(1);
+    let mut starts: Vec<u64> = (1..=4).map(|n| pdf.offset_of(n)).collect();
+    let mut nested = String::new();
+    for k in 100..100 + count {
+        starts.push(pdf.position() + nested.len() as u64);
+        nested.push_str(&format!(
+            "{k} 0 obj
+("
+        ));
+    }
+    nested.push_str(&")".repeat(count));
+    pdf.write(&nested);
+    let table_at = pdf.position();
+    let mut table = format!(
+        "xref
+0 {}
+0000000000 65535 f 
+",
+        100 + count
+    );
+    for n in 1..100 + count {
+        match n {
+            1..=4 => table.push_str(&format!(
+                "{:010} 00000 n 
+",
+                starts[n - 1]
+            )),
+            100.. => table.push_str(&format!(
+                "{:010} 00000 n 
+",
+                starts[n - 96]
+            )),
+            _ => table.push_str(
+                "0000000000 65535 f 
+",
+            ),
+        }
+    }
+    table.push_str(&format!(
+        "trailer
+<</Size {} /Root 1 0 R>>
+startxref
+{table_at}
+%%EOF
+",
+        100 + count
+    ));
+    pdf.write(&table);
+    let file = pdf.finish_without_xref();
+    let mut document = Document::open(file, Box::new(TestFilters)).unwrap();
+    let mut held = 0;
+    for number in 100..100 + count as u32 {
+        if let Some(Object::String(s)) = document.get(number).as_deref() {
+            held += s.bytes.len();
+        }
+    }
+    assert!(held < 400 << 20, "{held} bytes held");
+}
