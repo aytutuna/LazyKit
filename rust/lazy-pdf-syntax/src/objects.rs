@@ -11,7 +11,8 @@ const MAX_REFERENCE_HOPS: usize = 32;
 const MAX_CACHED_OBJECT_STREAMS: usize = 256;
 const MAX_CACHED_OBJECT_STREAM_BYTES: usize = 128 << 20;
 const MAX_OBJECT_STREAM_SIZE: usize = 64 << 20;
-/// All the object streams a document may decode in its life, however often the cache drops them.
+/// All the object streams a document may decode in its life, however often the cache drops them, on top of eight
+/// times the file's own size: a big file with a cache too small for it decodes the same streams over and over.
 const MAX_DECODED_OBJECT_STREAM_BYTES: usize = 1 << 30;
 /// Reading an object can need another (a stream's /Length, an object stream); a longer chain is a trap.
 const MAX_LOAD_DEPTH: usize = 32;
@@ -409,7 +410,9 @@ impl Document {
         if n < 0 || first < 0 {
             return None;
         }
-        if self.object_stream_bytes >= MAX_DECODED_OBJECT_STREAM_BYTES {
+        if self.object_stream_bytes
+            >= MAX_DECODED_OBJECT_STREAM_BYTES.saturating_add(self.data.len().saturating_mul(8))
+        {
             self.add_repair(format!(
                 "Object stream {number} was not read: the file's object streams were decoded too often."
             ));
@@ -551,4 +554,56 @@ impl Document {
 fn charge(budget: &mut i64, size: usize) -> bool {
     *budget -= size as i64;
     *budget >= 0
+}
+
+#[cfg(test)]
+mod tests {
+    use crate::document::Document;
+    use crate::filters::{DecodeError, Filters, Parm};
+
+    struct Plain;
+
+    impl Filters for Plain {
+        fn decode(
+            &self,
+            _: &[u8],
+            _: &[(Vec<u8>, Parm)],
+            _: &[u8],
+            _: usize,
+            _: bool,
+        ) -> Result<Vec<u8>, DecodeError> {
+            Err(DecodeError::Unsupported(String::new()))
+        }
+
+        fn flate(&self, data: &[u8]) -> Vec<u8> {
+            data.to_vec()
+        }
+    }
+
+    #[test]
+    fn the_decode_budget_grows_with_the_file() {
+        let members = "2 0 <</Type /Pages /Kids [] /Count 0>>";
+        let file = format!(
+            "%PDF-1.5
+1 0 obj
+<</Type /Catalog /Pages 2 0 R>>
+endobj
+5 0 obj
+<</Type /ObjStm /N 1 /First 4 /Length {}>>
+stream
+{members}
+endstream
+endobj
+trailer
+<</Root 1 0 R>>
+",
+            members.len()
+        );
+        let mut document = Document::open(file.into_bytes(), Box::new(Plain)).unwrap();
+        document.object_streams.clear();
+        document.objects.remove(&2);
+        // Spent by the flat limit alone, but not by that and the file's size.
+        document.object_stream_bytes = super::MAX_DECODED_OBJECT_STREAM_BYTES;
+        assert!(document.get(2).is_some_and(|o| o.as_dict().is_some()));
+    }
 }
