@@ -794,7 +794,13 @@ fn streams_that_share_their_bytes_do_not_make_a_rewrite_grow_with_the_square() {
                 b'a' + (seed >> 24) as u8 % 26
             })
             .collect();
-        pdf.stream_with(10 + k, "/Filter /DCTDecode", &data, Some(-1), k == count - 1);
+        pdf.stream_with(
+            10 + k,
+            "/Filter /DCTDecode",
+            &data,
+            Some(-1),
+            k == count - 1,
+        );
     }
     let file = pdf.finish();
     let mut document = open(file.clone());

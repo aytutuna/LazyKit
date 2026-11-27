@@ -16,9 +16,6 @@ const MAX_TREE_NODES: usize = 1 << 20;
 /// would otherwise be copied a million times.
 const MAX_TREE_COPIED: usize = 32 << 20;
 
-/// Content streams of one page that may fail to read; each failure can have cost a full decode.
-const MAX_CONTENT_FAILURES: usize = 16;
-
 /// No page has more content than this; the limit is shared by all of its streams.
 const MAX_CONTENT_SIZE: usize = 256 << 20;
 
@@ -236,8 +233,8 @@ impl Page {
     pub fn contents(&self, document: &mut Document) -> Vec<u8> {
         let mut parts: Vec<Vec<u8>> = Vec::new();
         let mut room = MAX_CONTENT_SIZE;
-        let mut input_room = MAX_CONTENT_SIZE;
-        let mut failures = 0;
+        // Streams that are apart store no more than the file; only a stream named over and over can pass it.
+        let mut input_room = MAX_CONTENT_SIZE.max(document.data.len());
         let object = self.object(document);
         let contents = object
             .as_dict()
@@ -273,10 +270,6 @@ impl Page {
                         self.index + 1,
                         e.detail
                     ));
-                    failures += 1;
-                    if failures >= MAX_CONTENT_FAILURES {
-                        break;
-                    }
                 }
             }
         }

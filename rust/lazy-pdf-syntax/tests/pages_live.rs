@@ -62,3 +62,28 @@ fn the_other_page_boxes_fall_back_to_the_crop_box() {
     assert_eq!(pages[0].art_box(&mut document).width(), 80.0);
     assert_eq!(pages[1].trim_box(&mut document).height(), 60.0);
 }
+
+#[test]
+fn a_page_keeps_reading_content_streams_after_many_that_fail() {
+    let mut pdf = TestPdf::new();
+    pdf.obj(1, "<</Type /Catalog /Pages 2 0 R>>");
+    pdf.obj(
+        2,
+        "<</Type /Pages /Kids [3 0 R] /Count 1 /MediaBox [0 0 10 10]>>",
+    );
+    let streams: Vec<String> = (0..21).map(|k| format!("{} 0 R", 4 + k)).collect();
+    pdf.obj(
+        3,
+        &format!(
+            "<</Type /Page /Parent 2 0 R /Contents [{}]>>",
+            streams.join(" ")
+        ),
+    );
+    for k in 0..20 {
+        pdf.stream(4 + k, "/Filter /Nope", "junk");
+    }
+    pdf.stream(24, "", "q Q");
+    let mut document = open(pdf.finish());
+    let page = document.pages()[0].clone();
+    assert!(page.contents(&mut document).ends_with(b"q Q"));
+}
