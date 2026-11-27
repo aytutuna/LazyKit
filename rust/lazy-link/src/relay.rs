@@ -15,7 +15,7 @@ use std::time::Duration;
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt, DuplexStream, ReadBuf};
 use tokio::net::TcpStream;
 use tokio::sync::{Notify, mpsc};
-use tokio::task::{AbortHandle, JoinHandle};
+use tokio::task::JoinHandle;
 use tokio_tungstenite::tungstenite::{self, Message};
 use tokio_tungstenite::{MaybeTlsStream, WebSocketStream};
 
@@ -30,7 +30,11 @@ pub const CLOSE_TOO_SLOW: u16 = 1013;
 pub const CLOSE_CAPPED: u16 = 4402;
 
 const KEEPALIVE: Duration = Duration::from_secs(30);
+/// The wait between tries while a woken host starts; it grows from the first to the second.
 const WAKE_POLL: Duration = Duration::from_secs(1);
+const WAKE_POLL_SLOW: Duration = Duration::from_secs(4);
+/// A larger Retry-After from the relay or anything in front of it is cut to this many seconds.
+const MAX_RETRY_AFTER: u64 = 3600;
 /// A connection that has said nothing for this long, not even the relay's answer to a ping, is dead.
 const DEAD: Duration = Duration::from_secs(60);
 /// How long a connect or a plain request may take before it counts as failed.
@@ -133,7 +137,8 @@ impl From<tungstenite::Error> for RelayError {
 
 // The relay answers its per-address limit with 503 and a Retry-After in seconds.
 fn retry_after(value: Option<&str>) -> Option<Duration> {
-    value?.trim().parse().ok().map(Duration::from_secs)
+    let secs: u64 = value?.trim().parse().ok()?;
+    Some(Duration::from_secs(secs.min(MAX_RETRY_AFTER)))
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -282,20 +287,22 @@ impl Relay {
     }
 
     /// Like [`connect`](Self::connect), but when the relay has woken the host's closed app it
-    /// tries again every second until `timeout` has passed.
+    /// tries again, a little slower each time, until `timeout` has passed.
     pub async fn connect_waiting(
         &self,
         room: &str,
         timeout: Duration,
     ) -> Result<RelayStream, RelayError> {
         let deadline = tokio::time::Instant::now() + timeout;
+        let mut poll = WAKE_POLL;
         loop {
             let left = deadline.saturating_duration_since(tokio::time::Instant::now());
             match self.connect_within(room, left.min(REQUEST_TIMEOUT)).await {
                 Err(RelayError::NoHost { woken: true })
-                    if tokio::time::Instant::now() + WAKE_POLL < deadline =>
+                    if tokio::time::Instant::now() + poll < deadline =>
                 {
-                    tokio::time::sleep(WAKE_POLL).await;
+                    tokio::time::sleep(poll).await;
+                    poll = (poll * 2).min(WAKE_POLL_SLOW);
                 }
                 Err(RelayError::RateLimited { retry_after })
                     if tokio::time::Instant::now() + retry_after < deadline =>
@@ -411,8 +418,7 @@ pub struct RelayHost {
 
 impl RelayHost {
     /// Waits for the next guest and returns the host's end of its stream. An error means the
-    /// control connection is gone or the relay cannot be reached; a guest that has already given
-    /// up is skipped.
+    /// control connection is gone; a guest whose stream could not be joined is skipped.
     pub async fn accept(&mut self) -> Result<RelayStream, RelayError> {
         self.opens
             .recv()
@@ -477,13 +483,11 @@ async fn join(
     tx: mpsc::Sender<Result<RelayStream, RelayError>>,
 ) {
     let query = format!("role=stream&id={id}");
-    let found = match relay.socket(&room, &query, REQUEST_TIMEOUT).await {
-        Ok(ws) => Ok(RelayStream::new(ws)),
-        // The relay forgets a join after ten seconds, so this guest is gone.
-        Err(RelayError::NoHost { .. }) => return,
-        Err(e) => Err(e),
-    };
-    let _ = tx.send(found).await;
+    // A refused join (the relay forgets one after ten seconds, or limits the address) costs
+    // only that guest, who gives up by itself; the control connection is still good.
+    if let Ok(ws) = relay.socket(&room, &query, REQUEST_TIMEOUT).await {
+        let _ = tx.send(Ok(RelayStream::new(ws))).await;
+    }
 }
 
 /// One connection of the phone link through the relay, as a byte stream. A clean close from
@@ -491,12 +495,18 @@ async fn join(
 /// [`close_code`](Self::close_code), and reads then end and writes fail.
 ///
 /// `shutdown` is a half-close, as on TCP: the other end reads end of input, and this end can
-/// still read the reply. Dropping the stream closes both directions.
+/// still read the reply. Dropping the stream closes both directions, but what was written
+/// before is still sent first, as TCP would, for as long as the other end keeps taking it.
 pub struct RelayStream {
     io: DuplexStream,
     close: Arc<OnceLock<u16>>,
-    reader: AbortHandle,
     dropped: Arc<(AtomicBool, Notify)>,
+}
+
+// What the socket's reading task hands to the task that delivers to the reader.
+enum Inbound {
+    Data(Vec<u8>),
+    Eof,
 }
 
 impl RelayStream {
@@ -515,6 +525,7 @@ impl RelayStream {
             let mut writing = true;
             let mut credit = WINDOW_FRAMES;
             let mut acks = true;
+            let mut moved = tokio::time::Instant::now();
             loop {
                 // Nothing more can be sent once the credit is spent and no answer can come.
                 if credit == 0 && !acks {
@@ -536,13 +547,17 @@ impl RelayStream {
                         }
                         Ok(n) => {
                             credit -= 1;
+                            moved = tokio::time::Instant::now();
                             if sink.send(Message::binary(buf[..n].to_vec())).await.is_err() {
                                 return;
                             }
                         }
                     },
                     c = ctl_rx.recv(), if acks => match c {
-                        Some(Ctl::Credit) => credit += 1,
+                        Some(Ctl::Credit) => {
+                            credit += 1;
+                            moved = tokio::time::Instant::now();
+                        }
                         Some(Ctl::Ack) => {
                             if sink.send(Message::text("ack")).await.is_err() {
                                 return;
@@ -556,6 +571,11 @@ impl RelayStream {
                         return;
                     }
                     _ = ping.tick() => {
+                        // A dropped stream whose data the other end has stopped taking is given up on.
+                        if gone.0.load(Ordering::Acquire) && moved.elapsed() > DEAD {
+                            let _ = sink.send(Message::Close(None)).await;
+                            return;
+                        }
                         if sink.send(Message::text("ping")).await.is_err() {
                             return;
                         }
@@ -565,9 +585,32 @@ impl RelayStream {
         })
         .abort_handle();
 
+        // Frames wait here for the reader, so an ack from the other end is never stuck behind
+        // data nobody has read yet. The other end sends at most WINDOW_FRAMES before one is
+        // acknowledged, and a frame is acknowledged once it is delivered.
+        let (queue, mut queued) = mpsc::channel(2 * WINDOW_FRAMES);
+        let credit_ctl = ctl.clone();
+        let gone = dropped.clone();
+        tokio::spawn(async move {
+            while let Some(item) = queued.recv().await {
+                match item {
+                    Inbound::Data(b) => {
+                        // After a drop nobody reads, but the other end still gets its acks.
+                        if !gone.0.load(Ordering::Acquire) {
+                            let _ = wr.write_all(&b).await;
+                        }
+                        let _ = ctl.send(Ctl::Ack);
+                    }
+                    Inbound::Eof => {
+                        let _ = wr.shutdown().await;
+                    }
+                }
+            }
+        });
+
         let stop = outbound.clone();
         let code = close.clone();
-        let inbound = tokio::spawn(async move {
+        tokio::spawn(async move {
             loop {
                 // Pings are answered, so any silence this long means the path is dead.
                 let Ok(msg) = tokio::time::timeout(DEAD, source.next()).await else {
@@ -576,16 +619,16 @@ impl RelayStream {
                 };
                 match msg {
                     Some(Ok(Message::Binary(b))) => {
-                        if wr.write_all(&b).await.is_err() {
+                        if queue.try_send(Inbound::Data(b.to_vec())).is_err() {
+                            let _ = code.set(1008);
                             break;
                         }
-                        let _ = ctl.send(Ctl::Ack);
                     }
                     Some(Ok(Message::Text(t))) if t.as_str() == "ack" => {
-                        let _ = ctl.send(Ctl::Credit);
+                        let _ = credit_ctl.send(Ctl::Credit);
                     }
                     Some(Ok(Message::Text(t))) if t.as_str() == "eof" => {
-                        let _ = wr.shutdown().await;
+                        let _ = queue.try_send(Inbound::Eof);
                     }
                     Some(Ok(Message::Close(frame))) => {
                         let _ = code.set(frame.map_or(1005, |f| u16::from(f.code)));
@@ -601,13 +644,11 @@ impl RelayStream {
             }
             let _ = code.set(1006);
             stop.abort();
-        })
-        .abort_handle();
+        });
 
         Self {
             io: local,
             close,
-            reader: inbound,
             dropped,
         }
     }
@@ -622,11 +663,10 @@ impl RelayStream {
 
 impl Drop for RelayStream {
     fn drop(&mut self) {
-        // The writer task says goodbye to the relay when its end of the pipe closes, so only the
-        // reader is stopped here; it ends by itself once the relay answers.
+        // The writer task sends what is still in the pipe and then says goodbye to the relay;
+        // the reading tasks go on until the relay answers, so credit keeps coming back.
         self.dropped.0.store(true, Ordering::Release);
         self.dropped.1.notify_one();
-        self.reader.abort();
     }
 }
 

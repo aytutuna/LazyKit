@@ -620,3 +620,136 @@ async fn a_slow_handshake_does_not_hold_up_the_next_guest() {
     s.read_exact(&mut b).await.unwrap();
     assert_eq!(b, [2]);
 }
+
+// A host writes a reply and drops the stream at once, as it would with TCP. The server hands
+// out acks slowly, so the credit and the pipe are both full when the stream goes.
+#[tokio::test]
+async fn data_written_before_a_drop_is_all_sent() {
+    let (l, relay) = listener().await;
+    let total = (WINDOW_FRAMES * MAX_FRAME + 256 * 1024 + 5000) * 2;
+    let server = tokio::spawn(async move {
+        let mut ws = tokio_tungstenite::accept_async(l.accept().await.unwrap().0)
+            .await
+            .unwrap();
+        let mut got = 0;
+        let mut pending = 0;
+        loop {
+            tokio::select! {
+                msg = ws.next() => match msg {
+                    Some(Ok(Message::Binary(b))) => {
+                        got += b.len();
+                        pending += 1;
+                    }
+                    Some(Ok(Message::Close(_))) => return (got, true),
+                    Some(Ok(_)) => {}
+                    _ => return (got, false),
+                },
+                _ = tokio::time::sleep(Duration::from_millis(20)), if pending > 0 => {
+                    ws.send(Message::text("ack")).await.unwrap();
+                    pending -= 1;
+                }
+            }
+        }
+    });
+    let mut s = relay.connect(&room_id(b"r")).await.unwrap();
+    s.write_all(&vec![3u8; total]).await.unwrap();
+    s.shutdown().await.unwrap();
+    drop(s);
+    let (got, closed) = timeout(Duration::from_secs(30), server)
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(got, total);
+    assert!(closed);
+}
+
+// One side reads nothing until its own upload is done while the other sends more than the
+// pipe holds; the upload still goes through because acks are not queued behind that data.
+#[tokio::test]
+async fn an_upload_goes_on_while_incoming_data_waits_to_be_read() {
+    let (l, relay) = listener().await;
+    let upload = 4 * WINDOW_FRAMES * MAX_FRAME;
+    let server = tokio::spawn(async move {
+        let mut ws = tokio_tungstenite::accept_async(l.accept().await.unwrap().0)
+            .await
+            .unwrap();
+        for _ in 0..20 {
+            ws.send(Message::binary(vec![8u8; MAX_FRAME]))
+                .await
+                .unwrap();
+        }
+        let mut got = 0;
+        while got < upload {
+            match ws.next().await {
+                Some(Ok(Message::Binary(b))) => {
+                    got += b.len();
+                    ws.send(Message::text("ack")).await.unwrap();
+                }
+                Some(Ok(_)) => {}
+                _ => break,
+            }
+        }
+        got
+    });
+    let mut s = relay.connect(&room_id(b"r")).await.unwrap();
+    timeout(Duration::from_secs(10), s.write_all(&vec![1u8; upload]))
+        .await
+        .expect("the upload stalled behind unread data")
+        .unwrap();
+    assert_eq!(server.await.unwrap(), upload);
+}
+
+#[tokio::test]
+async fn a_huge_retry_after_does_not_panic() {
+    let (l, relay) = listener().await;
+    tokio::spawn(refuse(
+        l,
+        "503 Service Unavailable",
+        "Retry-After: 18446744073709551615\r\n",
+    ));
+    let res = relay
+        .connect_waiting(&room_id(b"r"), Duration::from_secs(2))
+        .await;
+    assert!(matches!(res, Err(RelayError::RateLimited { .. })));
+}
+
+#[tokio::test]
+async fn accept_skips_a_join_the_relay_refuses() {
+    let (l, relay) = listener().await;
+    tokio::spawn(async move {
+        let mut control = tokio_tungstenite::accept_async(l.accept().await.unwrap().0)
+            .await
+            .unwrap();
+        control.send(Message::text("open limited")).await.unwrap();
+        control.send(Message::text("open fine")).await.unwrap();
+        let mut ok = None;
+        for _ in 0..2 {
+            let ws = tokio_tungstenite::accept_hdr_async(
+                l.accept().await.unwrap().0,
+                |req: &Request, res: Response| {
+                    if req.uri().query().unwrap_or_default().contains("id=limited") {
+                        Err(tokio_tungstenite::tungstenite::http::Response::builder()
+                            .status(503)
+                            .header("retry-after", "60")
+                            .body(None)
+                            .unwrap())
+                    } else {
+                        Ok(res)
+                    }
+                },
+            )
+            .await;
+            if let Ok(ws) = ws {
+                ok = Some(ws);
+            }
+        }
+        let mut ok = ok.unwrap();
+        ok.send(Message::binary(vec![6])).await.unwrap();
+        let _ = control.next().await;
+    });
+    let mut host = relay.host(&room_id(b"r")).await.unwrap();
+    let mut s = host.accept().await.unwrap();
+    let mut b = [0u8; 1];
+    s.read_exact(&mut b).await.unwrap();
+    assert_eq!(b, [6]);
+}
