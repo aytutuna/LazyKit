@@ -223,6 +223,7 @@ impl Page {
     pub fn contents(&self, document: &mut Document) -> Vec<u8> {
         let mut parts: Vec<Vec<u8>> = Vec::new();
         let mut room = MAX_CONTENT_SIZE;
+        let mut input_room = MAX_CONTENT_SIZE;
         let mut failures = 0;
         let object = self.object(document);
         let contents = object
@@ -242,6 +243,12 @@ impl Page {
             let Object::Stream(stream) = &*found else {
                 continue;
             };
+            // What a stream stores is read each time it is named, whatever it decodes to.
+            let stored = document.raw_length(stream).max(1);
+            if stored > input_room {
+                break;
+            }
+            input_room -= stored;
             match document.stream_data_limited(stream, room, false) {
                 Ok(part) => {
                     room = room.saturating_sub(part.len() + 1);

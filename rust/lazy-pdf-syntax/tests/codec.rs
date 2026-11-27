@@ -56,3 +56,58 @@ fn the_filter_chain_lists_each_stage_with_its_parameters() {
     assert_eq!(chain[1].filter, b"JPXDecode");
     assert!(chain[1].parms.is_empty());
 }
+
+#[test]
+fn a_codec_stream_longer_than_the_limit_is_refused() {
+    let mut document = open(image_file("/Filter /JPXDecode", &vec![7; 300_000]));
+    let stream = stream_20(&mut document);
+    assert_eq!(
+        document
+            .stream_data_to_codec(&stream, 100_000)
+            .unwrap_err()
+            .problem,
+        Problem::Damaged
+    );
+    assert!(document.stream_data_to_codec(&stream, 400_000).is_ok());
+}
+
+#[test]
+fn a_chain_of_many_stages_is_refused() {
+    let names = "/FlateDecode ".repeat(17);
+    let mut document = open(image_file(&format!("/Filter [{names}]"), &deflate(b"x")));
+    let stream = stream_20(&mut document);
+    assert_eq!(
+        document.stream_data(&stream).unwrap_err().problem,
+        Problem::Damaged
+    );
+    assert!(document.filter_chain(&stream).is_err());
+}
+
+struct Same;
+
+impl lazy_pdf_syntax::Filters for Same {
+    fn decode(
+        &self,
+        _filter: &[u8],
+        _parms: &[(Vec<u8>, Parm)],
+        data: &[u8],
+        _max_size: usize,
+        _strict: bool,
+    ) -> Result<Vec<u8>, lazy_pdf_syntax::DecodeError> {
+        Ok(data.to_vec())
+    }
+
+    fn flate(&self, data: &[u8]) -> Vec<u8> {
+        data.to_vec()
+    }
+}
+
+#[test]
+fn the_stages_of_a_chain_share_one_output_budget() {
+    let names = "/RL ".repeat(16);
+    let file = image_file(&format!("/Filter [{names}]"), &vec![0xFF; 100_000]);
+    let mut document = lazy_pdf_syntax::Document::open(file, Box::new(Same)).unwrap();
+    let stream = stream_20(&mut document);
+    assert!(document.stream_data_limited(&stream, 200_000, false).is_err());
+    assert!(document.stream_data_limited(&stream, 1_000_000, false).is_ok());
+}

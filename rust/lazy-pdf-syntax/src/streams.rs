@@ -13,6 +13,12 @@ const ENDSTREAM_SLACK: usize = 16;
 /// The most a filter chain may expand to unless the caller says otherwise.
 pub const DEFAULT_MAX_SIZE: usize = 256 << 20;
 
+/// Stages of one filter chain; real files have one to three.
+const MAX_FILTER_STAGES: usize = 16;
+
+/// What all the stages of a chain may produce between them, as a multiple of the size limit.
+const CHAIN_OUTPUT_FACTOR: usize = 4;
+
 /// The most a JBIG2 globals stream may expand to; they hold symbols, not pictures.
 const MAX_GLOBALS: usize = 32 << 20;
 
@@ -45,6 +51,14 @@ impl Document {
         match self.raw_span(stream) {
             Some((start, length)) => self.data[start..start + length].to_vec(),
             None => Vec::new(),
+        }
+    }
+
+    /// How many bytes `stream` stores, filters applied.
+    pub(crate) fn raw_length(&mut self, stream: &Stream) -> usize {
+        match &stream.data {
+            Some(memory) => memory.len(),
+            None => self.raw_span(stream).map_or(0, |(_, length)| length),
         }
     }
 
@@ -97,15 +111,22 @@ impl Document {
         let stages = self.decode_spec(stream, true, max_size)?;
         // With no filter to hold it to the limit, a span that is too long is refused before it is copied.
         if stream.data.is_none()
-            && stages.iter().all(|s| s.filter == b"Crypt")
+            && stages
+                .iter()
+                .take_while(|s| !(stop_at_codec && is_codec(&s.filter)))
+                .all(|s| s.filter == b"Crypt")
             && let Some((_, length)) = self.raw_span(stream)
             && length > max_size
         {
             return Err(ReadError::damaged("The stream is longer than the limit."));
         }
         let mut data = self.raw_data(stream);
+        let mut output = 0usize;
         for stage in stages {
             if stop_at_codec && is_codec(&stage.filter) {
+                if data.len() > max_size {
+                    return Err(ReadError::damaged("The stream is longer than the limit."));
+                }
                 return Ok(Decoded {
                     data,
                     codec: Some(stage),
@@ -133,6 +154,10 @@ impl Document {
                         ReadError::new(Problem::Unsupported, detail)
                     }
                 })?;
+            output = output.saturating_add(data.len());
+            if output > max_size.saturating_mul(CHAIN_OUTPUT_FACTOR) {
+                return Err(ReadError::damaged("The filters produce too much data."));
+            }
         }
         // A stream with no filter, or only /Identity, is not held to the limit by any filter.
         if data.len() > max_size {
@@ -160,6 +185,9 @@ impl Document {
                 .collect(),
             Some(_) => return Err(ReadError::damaged("A stream's /Filter is not a name.")),
         };
+        if names.len() > MAX_FILTER_STAGES {
+            return Err(ReadError::damaged("A stream has too many filters."));
+        }
         let mut each: Vec<Object> = match parameters {
             Some(Object::Array(items)) => items,
             Some(single @ Object::Dict(_)) => vec![single],

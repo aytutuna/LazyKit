@@ -549,3 +549,22 @@ fn many_members_that_run_to_the_end_of_their_object_stream_are_not_each_parsed_t
     assert_eq!(open(saved.bytes).pages().len(), 1);
     must_finish_within(Duration::from_secs(20), started);
 }
+
+#[test]
+fn contents_named_again_and_again_are_not_read_again_and_again_when_they_decode_to_nothing() {
+    // A zlib stream of empty stored blocks: 5 bytes each, nothing out.
+    let mut raw = vec![0x78, 0x01];
+    for _ in 0..400_000 {
+        raw.extend_from_slice(&[0, 0, 0, 0xFF, 0xFF]);
+    }
+    raw.extend_from_slice(&[1, 0, 0, 0xFF, 0xFF, 0, 0, 0, 1]);
+    let mut pdf = TestPdf::with_pages(1);
+    pdf.stream_with(20, "/Filter /FlateDecode", &raw, None, true);
+    pdf.obj(21, &format!("[{}]", "20 0 R ".repeat(5000)));
+    let file = TestPdf::replace(&pdf.finish(), "/Contents 4 0 R", "/Contents 21 0 R");
+    let mut document = open(file);
+    let pages = document.pages();
+    let started = Instant::now();
+    assert!(pages[0].contents(&mut document).len() < 5000);
+    must_finish_within(Duration::from_secs(20), started);
+}
