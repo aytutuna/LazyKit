@@ -12,6 +12,7 @@ let n = 0;
 const newRoom = () => (++n).toString(16).padStart(64, "0");
 const newGroup = () => (++n).toString(16).padStart(32, "f");
 const DEVICE = "d".repeat(32);
+const HOST = "e".repeat(32);
 
 // The test config turns on web_socket_manual_reply_to_close, so a closed end
 // stays CLOSING until it answers; stall makes it never answer.
@@ -63,13 +64,13 @@ class Peer {
 // unless the test says otherwise.
 const groupOf = (room: string) => room.slice(32);
 
-const ask = (room: string, query: string, group = groupOf(room)) =>
-  exports.default.fetch(`https://alazy.app/relay/v1/${room}?${query}&group=${group}&device=${DEVICE}`, {
+const ask = (room: string, query: string, group = groupOf(room), device = DEVICE) =>
+  exports.default.fetch(`https://alazy.app/relay/v1/${room}?${query}&group=${group}&device=${device}`, {
     headers: { Upgrade: "websocket" },
   });
 
-async function open(room: string, query: string, group?: string): Promise<Peer> {
-  const res = await ask(room, query, group);
+async function open(room: string, query: string, group?: string, device?: string): Promise<Peer> {
+  const res = await ask(room, query, group, device);
   expect(res.status).toBe(101);
   return new Peer(res.webSocket!);
 }
@@ -339,6 +340,59 @@ describe("relay", () => {
     expect(await used(groupOf(h.room))).toBe(0);
   });
 
+  it("closes a stream whose end acks a frame it was never sent", async () => {
+    const h = await host(newRoom());
+    const [guest, side] = await stream(h);
+    guest.ws.send(bytes(1));
+    await side.next();
+    side.ws.send("ack");
+    expect(await guest.nextText()).toBe("ack");
+    side.ws.send("ack");
+    expect((await side.closed).code).toBe(1008);
+    await guest.closed;
+  });
+
+  it("closes a stream whose end half-closes twice", async () => {
+    const h = await host(newRoom());
+    const [guest, side] = await stream(h);
+    guest.ws.send("eof");
+    expect(await side.nextText()).toBe("eof");
+    guest.ws.send("eof");
+    expect((await guest.closed).code).toBe(1008);
+    await side.closed;
+  });
+
+  it("checks the receiver's backlog after an eof too", async () => {
+    const h = await host(newRoom());
+    const [guest, side] = await stream(h);
+    await runInDurableObject(stub(h.room), (_o, state) => {
+      const [id] = state.getTags(state.getWebSockets("guest")[0]).slice(1);
+      for (const ws of state.getWebSockets(id)) {
+        if (state.getTags(ws)[0] === "stream") Object.defineProperty(ws, "bufferedAmount", { value: MAX_BUFFERED + 1 });
+      }
+    });
+    guest.ws.send("eof");
+    expect((await guest.closed).code).toBe(1013);
+    await side.closed;
+  });
+
+  it("passes a close code workerd refuses on as a lost connection", async () => {
+    const h = await host(newRoom());
+    const [guest, side] = await stream(h);
+    await runInDurableObject(stub(h.room), async (o, state) => {
+      await o.webSocketClose(state.getWebSockets("guest")[0], 1004);
+    });
+    expect((await side.closed).code).toBe(1011);
+    void guest;
+  });
+
+  it("remembers the device that hosted last", async () => {
+    const room = newRoom();
+    const kept = () => runInDurableObject(stub(room), (_o, state) => state.storage.get("host"));
+    await open(room, "role=host", undefined, HOST);
+    expect(await kept()).toBe(HOST);
+  });
+
   it("passes a half-close to the other end and keeps the stream open", async () => {
     const h = await host(newRoom());
     const [guest, side] = await stream(h);
@@ -473,22 +527,36 @@ describe("relay", () => {
     useServices({ push: { send: async (platform, token, message) => void sent.push([platform, token, message]) } });
     const room = newRoom();
     const group = groupOf(room);
-    const h = await host(room);
-    h.control.ws.close(1000);
-    await h.control.closed;
+    const control = await open(room, "role=host", undefined, HOST);
+    control.ws.close(1000);
+    await control.closed;
     expect((await ask(room, "role=guest")).status).toBe(404);
     expect(sent).toEqual([]);
 
-    // The guest's own device is never woken, whoever hosted last.
+    // The guest's own device is never woken.
     expect((await groupApi(group, "push", { device: DEVICE, platform: "apns", token: "mine" })).status).toBe(204);
     expect((await ask(room, "role=guest")).status).toBe(404);
     expect(sent).toEqual([]);
 
-    expect((await groupApi(group, "push", { device: "e".repeat(32), platform: "fcm", token: "tok" })).status).toBe(204);
+    // Only the device that hosted the room is woken, not the group's others.
+    expect((await groupApi(group, "push", { device: "b".repeat(32), platform: "apns", token: "other" })).status).toBe(204);
+    expect((await groupApi(group, "push", { device: HOST, platform: "fcm", token: "tok" })).status).toBe(204);
     const res = await ask(room, "role=guest");
     expect(res.status).toBe(404);
     expect(res.headers.get("x-relay-woken")).toBe("1");
     expect(sent).toEqual([["fcm", "tok", { room }]]);
+  });
+
+  it("wakes the group's other devices when the room has never had a host", async () => {
+    const sent: unknown[] = [];
+    useServices({ push: { send: async (platform, token) => void sent.push([platform, token]) } });
+    const room = newRoom();
+    const group = groupOf(room);
+    for (const [device, token] of [[HOST, "one"], ["b".repeat(32), "two"]]) {
+      expect((await groupApi(group, "push", { device, platform: "fcm", token })).status).toBe(204);
+    }
+    expect((await ask(room, "role=guest")).status).toBe(404);
+    expect(sent).toEqual([["fcm", "one"], ["fcm", "two"]]);
   });
 
   it("wakes the group when the host's control socket has been silent and never answers", async () => {
@@ -496,8 +564,8 @@ describe("relay", () => {
     useServices({ push: { send: async (platform, token, message) => void sent.push([platform, token, message]) } });
     const room = newRoom();
     const group = groupOf(room);
-    expect((await groupApi(group, "push", { device: "e".repeat(32), platform: "fcm", token: "tok" })).status).toBe(204);
-    const control = await open(room, "role=host");
+    expect((await groupApi(group, "push", { device: HOST, platform: "fcm", token: "tok" })).status).toBe(204);
+    const control = await open(room, "role=host", undefined, HOST);
     await runInDurableObject(stub(room), (_o, state) => {
       state.getWebSockets("host")[0].serializeAttachment({ seen: Date.now() - 60_000 });
     });
@@ -513,8 +581,8 @@ describe("relay", () => {
     useServices({ push: { send: async (platform, token, message) => void sent.push([platform, token, message]) } });
     const room = newRoom();
     const group = groupOf(room);
-    expect((await groupApi(group, "push", { device: "e".repeat(32), platform: "fcm", token: "tok" })).status).toBe(204);
-    const control = await open(room, "role=host");
+    expect((await groupApi(group, "push", { device: HOST, platform: "fcm", token: "tok" })).status).toBe(204);
+    const control = await open(room, "role=host", undefined, HOST);
     expect((await ask(room, "role=guest")).status).toBe(504);
     expect(sent).toEqual([]);
     expect(control.ws.readyState).toBe(WebSocket.OPEN);

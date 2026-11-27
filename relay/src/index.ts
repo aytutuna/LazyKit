@@ -10,17 +10,21 @@ const ROOM_ID = /^[0-9a-f]{64}$/;
 const ID = /^[0-9a-f]{32}$/;
 const MAX_BODY = 64 * 1024;
 
-const limiter = new RateLimiter(300, 60_000);
+const limiter = new RateLimiter(1200, 60_000);
 
 const text = (body: string, status: number) => new Response(body, { status });
 
 export default {
   async fetch(req: Request, env: Cloudflare.Env): Promise<Response> {
+    const url = new URL(req.url);
+    // The host's end of a stream is gated by a random id that must be pending, and it follows
+    // every guest connect, so counting it too would halve what a guest can open.
     const ip = req.headers.get("CF-Connecting-IP");
     // Not 429, which a room uses for too many streams.
-    if (ip && !limiter.allow(ip)) return new Response("slow down", { status: 503, headers: { "Retry-After": "60" } });
+    if (ip && url.searchParams.get("role") !== "stream" && !limiter.allow(ip)) {
+      return new Response("slow down", { status: 503, headers: { "Retry-After": "60" } });
+    }
 
-    const url = new URL(req.url);
     const g = /^\/relay\/v1\/group\/([^/]+)(?:\/(push|paid)(?:\/([^/]+))?)?$/.exec(url.pathname);
     if (g) return groupApi(req, env, g[1], g[2], g[3]);
 

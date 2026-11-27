@@ -15,6 +15,17 @@ const HOST_SILENT_MS = 45_000;
 // A room nobody has connected to for this long forgets its group.
 const ROOM_KEEP_MS = 90 * 86_400_000;
 
+// Kept per socket across hibernation. owed counts the frames forwarded to this end that it has
+// not acknowledged yet; eof is set once this end has half-closed.
+interface Mark {
+  seen?: number;
+  owed?: number;
+  eof?: boolean;
+}
+
+// Close codes a peer may be sent; workerd's close() refuses the rest (1004, 1005, 1006, 1015).
+const sendable = (code: number) => (code >= 1000 && code <= 1003) || (code >= 1007 && code <= 1014) || (code >= 3000 && code <= 4999);
+
 // A room has one control socket, the host waiting for guests, and any number
 // of streams. A guest that connects gets a stream id sent to the host on the
 // control socket; the host opens its end of the stream under that id and the
@@ -22,6 +33,7 @@ const ROOM_KEEP_MS = 90 * 86_400_000;
 // connection of the phone link.
 export class Room extends DurableObject {
   private group?: string;
+  private host?: string;
   private stored = false;
   private idleSince?: number;
   private pending = 0;
@@ -33,6 +45,7 @@ export class Room extends DurableObject {
     ctx.setWebSocketAutoResponse(new WebSocketRequestResponsePair("ping", "pong"));
     ctx.blockConcurrencyWhile(async () => {
       this.group = await ctx.storage.get<string>("group");
+      this.host = await ctx.storage.get<string>("host");
       this.stored = this.group !== undefined;
       this.idleSince = await ctx.storage.get<number>("idleSince");
     });
@@ -65,7 +78,15 @@ export class Room extends DurableObject {
   }
 
   private lastSeen(ws: WebSocket): number {
-    return Math.max(ws.deserializeAttachment()?.seen ?? 0, this.ctx.getWebSocketAutoResponseTimestamp(ws)?.getTime() ?? 0);
+    return Math.max(this.marks(ws).seen ?? 0, this.ctx.getWebSocketAutoResponseTimestamp(ws)?.getTime() ?? 0);
+  }
+
+  private marks(ws: WebSocket): Mark {
+    return ws.deserializeAttachment() ?? {};
+  }
+
+  private mark(ws: WebSocket, patch: Mark): void {
+    ws.serializeAttachment({ ...this.marks(ws), ...patch });
   }
 
   private groupStub(group: string) {
@@ -81,10 +102,15 @@ export class Room extends DurableObject {
   private async acceptHost(group: string, device: string): Promise<Response> {
     await this.keep(group);
     await this.groupStub(group).touch(device);
+    // The last host is the device a push should wake when a guest finds nobody here.
+    if (this.host !== device) {
+      this.host = device;
+      await this.ctx.storage.put("host", device);
+    }
     for (const old of this.ctx.getWebSockets("host")) old.close(1012, "replaced");
     const pair = new WebSocketPair();
     this.ctx.acceptWebSocket(pair[1], ["host"]);
-    pair[1].serializeAttachment({ seen: Date.now() });
+    this.mark(pair[1], { seen: Date.now() });
     await this.schedule(SWEEP_MS);
     return new Response(null, { status: 101, webSocket: pair[0] });
   }
@@ -120,14 +146,14 @@ export class Room extends DurableObject {
     await this.keep(groupId);
     const pair = new WebSocketPair();
     this.ctx.acceptWebSocket(pair[1], ["guest", id]);
-    pair[1].serializeAttachment({ seen: Date.now() });
+    this.mark(pair[1], { seen: Date.now() });
     return new Response(null, { status: 101, webSocket: pair[0] });
   }
 
   // The group's other devices may be closed phone apps; they are woken to
   // connect and the guest tries again.
   private async nobodyWaiting(group: string, room: string, device: string): Promise<Response> {
-    const woken = await this.groupStub(group).wake(room, device);
+    const woken = await this.groupStub(group).wake(room, device, this.host);
     return new Response("nobody waiting", { status: 404, headers: woken ? { "x-relay-woken": "1" } : {} });
   }
 
@@ -137,7 +163,7 @@ export class Room extends DurableObject {
     this.joining.delete(id);
     const pair = new WebSocketPair();
     this.ctx.acceptWebSocket(pair[1], ["stream", id]);
-    pair[1].serializeAttachment({ seen: Date.now() });
+    this.mark(pair[1], { seen: Date.now() });
     join(true);
     await this.schedule(SWEEP_MS);
     return new Response(null, { status: 101, webSocket: pair[0] });
@@ -146,17 +172,30 @@ export class Room extends DurableObject {
   async webSocketMessage(ws: WebSocket, data: string | ArrayBuffer): Promise<void> {
     const [role] = this.ctx.getTags(ws);
     // "eof" is a stream's half-close: the writer is done, the reader is not.
-    // "ack" returns one frame of credit to the sender.
+    // "ack" returns one frame of credit to the sender. An end may ack only frames it was sent
+    // and half-close once, so neither can be used to make the room queue without limit.
     if ((data === "eof" || data === "ack") && role !== "host") {
-      this.peerOf(ws)?.send(data);
+      const peer = this.peerOf(ws);
+      if (!peer) return;
+      const mine = this.marks(ws);
+      if (data === "ack") {
+        if (!mine.owed) return this.end(ws, 1008, "ack without a frame");
+        this.mark(ws, { owed: mine.owed - 1 });
+      } else {
+        if (mine.eof) return this.end(ws, 1008, "second eof");
+        this.mark(ws, { eof: true });
+      }
+      peer.send(data);
+      if (peer.bufferedAmount > MAX_BUFFERED) return this.end(ws, 1013, "receiver too slow");
       return;
     }
     if (typeof data === "string" || role === "host") return this.end(ws, 1003, "binary frames on streams only");
     if (data.byteLength > MAX_FRAME) return this.end(ws, 1009, "frame too large");
     const peer = this.peerOf(ws);
     if (!peer) return this.end(ws, 1008, "no peer");
-    ws.serializeAttachment({ seen: Date.now() });
+    this.mark(ws, { seen: Date.now() });
     peer.send(data);
+    this.mark(peer, { owed: (this.marks(peer).owed ?? 0) + 1 });
     await this.count(data.byteLength);
     if (peer.bufferedAmount > MAX_BUFFERED) return this.end(ws, 1013, "receiver too slow");
   }
@@ -164,8 +203,10 @@ export class Room extends DurableObject {
   async webSocketClose(ws: WebSocket, code: number): Promise<void> {
     // 1005 is a close without a code; 1006 is a connection that died, which the other end
     // must not take for a finished transfer.
-    const out = code === 1005 ? 1000 : code === 1006 ? 1011 : code;
-    this.peerOf(ws)?.close(out, out === 1011 ? "peer lost" : "peer closed");
+    const out = code === 1005 ? 1000 : sendable(code) ? code : 1011;
+    try {
+      this.peerOf(ws)?.close(out, out === 1011 ? "peer lost" : "peer closed");
+    } catch {}
     try {
       ws.close(out);
     } catch {}
@@ -193,6 +234,7 @@ export class Room extends DurableObject {
     if (now - this.idleSince < ROOM_KEEP_MS) return this.ctx.storage.setAlarm(this.idleSince + ROOM_KEEP_MS);
     await this.ctx.storage.deleteAll();
     this.group = undefined;
+    this.host = undefined;
     this.stored = false;
     this.idleSince = undefined;
   }

@@ -150,14 +150,14 @@ export class Group extends DurableObject<Cloudflare.Env> {
     await this.ctx.storage.put("devices", this.devices);
   }
 
-  // Wakes the closed apps of the group's other devices so one of them
-  // connects to the room. True when a push went out; a device is not woken
-  // twice within a few seconds.
-  async wake(room: string, except: string, now = Date.now()): Promise<boolean> {
+  // Wakes the closed app that hosts the room, or the group's other devices
+  // when the room has had no host yet, so one of them connects. True when a
+  // push went out; a device is not woken twice within a few seconds.
+  async wake(room: string, except: string, host?: string, now = Date.now()): Promise<boolean> {
     let sent = false;
     await this.pruneDevices(now);
     for (const [device, d] of Object.entries(this.devices)) {
-      if (device === except) continue;
+      if (device === except || (host !== undefined && device !== host)) continue;
       if (now - (this.woken.get(device) ?? 0) < WAKE_GAP_MS) {
         sent = true;
         continue;

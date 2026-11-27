@@ -181,11 +181,11 @@ describe("group", () => {
     useServices({ push: { send: async (p, t) => void sent.push([p, t]) } });
     const g = stub(group);
     expect((await post(group, "/push", { device: device(), platform: "apns", token: "one" })).status).toBe(204);
-    expect(await g.wake("room", device(2), 100_000)).toBe(true);
+    expect(await g.wake("room", device(2), undefined, 100_000)).toBe(true);
     expect((await post(group, "/push", { device: device(), platform: "fcm", token: "two" })).status).toBe(204);
-    expect(await g.wake("room", device(2), 200_000)).toBe(true);
+    expect(await g.wake("room", device(2), undefined, 200_000)).toBe(true);
     expect((await call(group, `/push/${device()}`, { method: "DELETE" })).status).toBe(204);
-    expect(await g.wake("room", device(2), 300_000)).toBe(false);
+    expect(await g.wake("room", device(2), undefined, 300_000)).toBe(false);
     expect(sent).toEqual([
       ["apns", "one"],
       ["fcm", "two"],
@@ -229,7 +229,7 @@ describe("group", () => {
     useServices({ push: { send: async () => void sent++ } });
     await g.setPush(device(1), "fcm", "old", now - 100 * day);
     await g.setPush(device(2), "fcm", "old", now - 100 * day);
-    expect(await g.wake("room", device(9), now)).toBe(false);
+    expect(await g.wake("room", device(9), undefined, now)).toBe(false);
     expect(sent).toBe(0);
     await runInDurableObject(g, async (_o, state) => {
       expect(await state.storage.get("devices")).toEqual({});
@@ -277,10 +277,10 @@ describe("group", () => {
     let count = 0;
     useServices({ push: { send: async () => void count++ } });
     await g.setPush(device(), "fcm", "t");
-    await g.wake("room", device(2), 1_000_000);
-    await g.wake("room", device(2), 1_003_000);
+    await g.wake("room", device(2), undefined, 1_000_000);
+    await g.wake("room", device(2), undefined, 1_003_000);
     expect(count).toBe(1);
-    await g.wake("room", device(2), 1_020_000);
+    await g.wake("room", device(2), undefined, 1_020_000);
     expect(count).toBe(2);
   });
 
@@ -297,7 +297,7 @@ describe("group", () => {
     expect(await g.wake("room", device(2))).toBe(false);
     let sent = 0;
     useServices({ push: { send: async () => void sent++ } });
-    expect(await g.wake("room", device(2), Date.now() + 60_000)).toBe(false);
+    expect(await g.wake("room", device(2), undefined, Date.now() + 60_000)).toBe(false);
     expect(sent).toBe(0);
   });
 
@@ -307,12 +307,24 @@ describe("group", () => {
     expect(await g.wake("room", device(2))).toBe(false);
   });
 
+  it("wakes only the host's device when the room has one", async () => {
+    const g = stub(newGroup());
+    const sent: string[] = [];
+    useServices({ push: { send: async (_p, t) => void sent.push(t) } });
+    for (const i of [1, 2, 3]) await g.setPush(device(i), "fcm", `t${i}`);
+    expect(await g.wake("room", device(2), device(3), 5_000_000)).toBe(true);
+    expect(sent).toEqual(["t3"]);
+    expect(await g.wake("room", device(3), device(3), 6_000_000)).toBe(false);
+    expect(await g.wake("room", device(2), device(9), 7_000_000)).toBe(false);
+    expect(sent).toEqual(["t3"]);
+  });
+
   it("wakes every other device and not the caller", async () => {
     const g = stub(newGroup());
     const sent: string[] = [];
     useServices({ push: { send: async (_p, t) => void sent.push(t) } });
     for (const i of [1, 2, 3]) await g.setPush(device(i), "fcm", `t${i}`);
-    expect(await g.wake("room", device(2), 5_000_000)).toBe(true);
+    expect(await g.wake("room", device(2), undefined, 5_000_000)).toBe(true);
     expect(sent.sort()).toEqual(["t1", "t3"]);
   });
 });
@@ -358,7 +370,7 @@ describe("rate limit", () => {
   it("answers 503 with Retry-After from the worker once an address is over the limit", async () => {
     const ip = "203.0.113.7";
     let last = 0;
-    for (let i = 0; i < 305; i++) {
+    for (let i = 0; i < 1205; i++) {
       const res = await exports.default.fetch("https://alazy.app/relay/v1/nothing", { headers: { "CF-Connecting-IP": ip } });
       last = res.status;
       if (last === 503) {
@@ -367,5 +379,14 @@ describe("rate limit", () => {
       }
     }
     expect(last).toBe(503);
+  });
+
+  it("does not count a host's stream opens against the address", async () => {
+    const ip = "203.0.113.8";
+    const stream = () =>
+      exports.default.fetch(`https://alazy.app/relay/v1/${"0".repeat(64)}?role=stream&id=${"a".repeat(32)}`, {
+        headers: { "CF-Connecting-IP": ip, Upgrade: "websocket" },
+      });
+    for (let i = 0; i < 1300; i++) expect((await stream()).status).toBe(404);
   });
 });
