@@ -723,7 +723,7 @@ fn jbig2_globals_are_not_inflated_again_for_each_image() {
 }
 
 #[test]
-fn the_deepest_allowed_nesting_fits_the_documented_stack() {
+fn the_deepest_allowed_nesting_and_page_tree_fit_a_1_mb_stack() {
     std::thread::Builder::new()
         .stack_size(1 << 20)
         .spawn(|| {
@@ -734,7 +734,7 @@ fn the_deepest_allowed_nesting_fits_the_documented_stack() {
             );
             pdf.obj(1, &format!("<</Type /Catalog /Pages 2 0 R /A {nested}>>"));
             let mut parent = 2;
-            for k in 0..250u32 {
+            for k in 0..256u32 {
                 let kid = 3 + k;
                 pdf.obj(
                     parent,
@@ -756,7 +756,9 @@ fn the_deepest_allowed_nesting_fits_the_documented_stack() {
             ]
             .concat();
             let mut document = open(file);
-            let _ = document.pages();
+            assert_eq!(document.pages().len(), 1);
+            // Found through the tree, not by the scan that stands in for it.
+            assert!(!document.repairs().iter().any(|r| r.contains("found by scanning")));
             let _ = document.save_rewrite(&lazy_pdf_syntax::SaveOptions {
                 use_object_streams: false,
                 document_id: None,

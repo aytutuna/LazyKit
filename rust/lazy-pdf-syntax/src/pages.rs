@@ -7,7 +7,7 @@ use std::sync::Arc;
 use crate::document::Document;
 use crate::object::{Dict, Object, Ref};
 
-const MAX_TREE_DEPTH: usize = 64;
+const MAX_TREE_DEPTH: usize = 256;
 
 /// Nodes one walk looks at, direct dictionaries included: a /Kids array shared by its own children has no end.
 const MAX_TREE_NODES: usize = 1 << 20;
@@ -76,6 +76,14 @@ const DEFAULT_BOX: Rect = Rect {
     right: 612.0,
     top: 792.0,
 };
+
+/// A node being walked: its /Kids, the next of them to look at, and what they inherit from it and the nodes above.
+struct Level {
+    kids: Arc<Object>,
+    next: usize,
+    inherited: Inherited,
+    depth: usize,
+}
 
 /// What a page takes from the nodes above it when it has no value of its own.
 #[derive(Debug, Clone, Default)]
@@ -351,7 +359,7 @@ impl Document {
             copied: 0,
         };
         if let Some(root) = catalog.get("Pages") {
-            self.walk_node(root, &Inherited::default(), 0, &mut walk);
+            self.walk_tree(root, &mut walk);
         }
         if first {
             if walk.skipped > 0 {
@@ -377,7 +385,30 @@ impl Document {
         walk.pages
     }
 
-    fn walk_node(&mut self, node: &Object, inherited: &Inherited, depth: usize, walk: &mut Walk) {
+    /// Depth first, in /Kids order, with a stack of its own so that the depth of a tree costs no call stack.
+    fn walk_tree(&mut self, root: &Object, walk: &mut Walk) {
+        let mut open: Vec<Level> = Vec::new();
+        open.extend(self.walk_node(root, &Inherited::default(), 0, walk));
+        while let Some(level) = open.last_mut() {
+            let kid = level.kids.as_array().and_then(|k| k.get(level.next)).cloned();
+            let Some(kid) = kid else {
+                open.pop();
+                continue;
+            };
+            level.next += 1;
+            let (inherited, depth) = (level.inherited.clone(), level.depth + 1);
+            open.extend(self.walk_node(&kid, &inherited, depth, walk));
+        }
+    }
+
+    /// Looks at one node; a node with /Kids is returned to be walked on.
+    fn walk_node(
+        &mut self,
+        node: &Object,
+        inherited: &Inherited,
+        depth: usize,
+        walk: &mut Walk,
+    ) -> Option<Level> {
         let reference = match node {
             Object::Ref(r) => Some(*r),
             _ => None,
@@ -393,7 +424,7 @@ impl Document {
         };
         let Some(Object::Dict(dict)) = resolved.as_deref() else {
             walk.skipped += 1;
-            return;
+            return None;
         };
         walk.copied += ["Resources", "MediaBox", "CropBox", "Rotate"]
             .iter()
@@ -402,7 +433,7 @@ impl Document {
             .sum::<usize>();
         if walk.copied > MAX_TREE_COPIED {
             walk.skipped += 1;
-            return;
+            return None;
         }
         let kind = self.name_of(dict, "Type");
         let own = |key: &str| {
@@ -418,15 +449,17 @@ impl Document {
         };
         if kind.as_deref() != Some(b"Page")
             && let Some(kids) = self.lookup(dict, "Kids")
-            && let Some(kids) = kids.as_array()
+            && kids.as_array().is_some()
         {
-            for kid in kids {
-                self.walk_node(kid, &inherited, depth + 1, walk);
-            }
-            return;
+            return Some(Level {
+                kids: kids.into_shared(),
+                next: 0,
+                inherited,
+                depth,
+            });
         }
         if kind.as_deref() == Some(b"Pages") {
-            return;
+            return None;
         }
         // A page without a type is told by what pages have; a direct one cannot be referred to.
         let looks_like_page =
@@ -434,13 +467,14 @@ impl Document {
         let typed_right = matches!(kind.as_deref(), None | Some(b"Page"));
         let Some(reference) = reference.filter(|_| looks_like_page && typed_right) else {
             walk.skipped += 1;
-            return;
+            return None;
         };
         walk.pages.push(Page {
             reference,
             index: walk.pages.len(),
             inherited,
         });
+        None
     }
 
     /// A tree with no pages in it, in a file that has page objects: they are used in the order they are in the file.
