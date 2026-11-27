@@ -1,7 +1,9 @@
 //! Required Notice: Copyright (c) 2026 Alazy Inc. (https://alazy.app)
 //!
 //! The relay client checks certificates with Android's own trust manager, which Rust can reach
-//! only through the JVM. The app calls this once, before the first relay call, from Kotlin:
+//! only through the JVM. The app calls this once, before the first relay call, from Kotlin, on
+//! the library that carries the relay client. The relay has no bindings yet, so no library does:
+//! the cdylib that gets them must reference this module, or the linker drops the entry point.
 //!
 //! ```kotlin
 //! package app.alazy.link

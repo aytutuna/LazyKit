@@ -1,6 +1,8 @@
 //! The Lazy phone link: the parts of the protocol that are plain functions of their input.
 //! Required Notice: Copyright (c) 2026 Alazy Inc. (https://alazy.app)
 
+#[cfg(all(feature = "relay", target_os = "android"))]
+pub mod android;
 mod base64url;
 mod fingerprint;
 mod pairing_uri;

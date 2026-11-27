@@ -5,9 +5,6 @@ use std::sync::Arc;
 
 mod proof;
 
-#[cfg(target_os = "android")]
-mod android;
-
 uniffi::setup_scaffolding!();
 
 /// Every call can fail, even the ones that only compute: Swift turns a panic into an error only
