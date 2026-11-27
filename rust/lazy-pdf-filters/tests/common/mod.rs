@@ -100,6 +100,10 @@ pub fn check(
         }
     }
     assert!(
+        want.next().is_none(),
+        "golden file has cases the input lacks"
+    );
+    assert!(
         failures.is_empty(),
         "{} cases differ:\n{}",
         failures.len(),
