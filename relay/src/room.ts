@@ -45,15 +45,15 @@ export class Room extends DurableObject {
     // A room belongs to the first group that joins it; a request that finds nobody to join
     // leaves nothing behind.
     const group = url.searchParams.get("group") ?? "";
-    this.group ??= group;
-    if (this.group !== group) return new Response("wrong group", { status: 403 });
+    if ((this.group ?? group) !== group) return new Response("wrong group", { status: 403 });
     const device = url.searchParams.get("device") ?? "";
-    if (role === "host") return this.acceptHost(device);
-    return this.acceptGuest(url.pathname.split("/").pop() ?? "", device);
+    if (role === "host") return this.acceptHost(group, device);
+    return this.acceptGuest(group, url.pathname.split("/").pop() ?? "", device);
   }
 
   // Called once a host or guest has really joined.
-  private async keep(): Promise<void> {
+  private async keep(group: string): Promise<void> {
+    this.group ??= group;
     if (!this.stored) {
       this.stored = true;
       await this.ctx.storage.put("group", this.group);
@@ -68,8 +68,8 @@ export class Room extends DurableObject {
     return Math.max(ws.deserializeAttachment()?.seen ?? 0, this.ctx.getWebSocketAutoResponseTimestamp(ws)?.getTime() ?? 0);
   }
 
-  private groupStub() {
-    return this.env.GROUPS.get(this.env.GROUPS.idFromName(this.group!));
+  private groupStub(group: string) {
+    return this.env.GROUPS.get(this.env.GROUPS.idFromName(group));
   }
 
   private control(): WebSocket | undefined {
@@ -78,9 +78,9 @@ export class Room extends DurableObject {
 
   // A new host takes over from the old one, which may be a connection that
   // died without a close.
-  private async acceptHost(device: string): Promise<Response> {
-    await this.keep();
-    await this.groupStub().touch(device);
+  private async acceptHost(group: string, device: string): Promise<Response> {
+    await this.keep(group);
+    await this.groupStub(group).touch(device);
     for (const old of this.ctx.getWebSockets("host")) old.close(1012, "replaced");
     const pair = new WebSocketPair();
     this.ctx.acceptWebSocket(pair[1], ["host"]);
@@ -89,12 +89,12 @@ export class Room extends DurableObject {
     return new Response(null, { status: 101, webSocket: pair[0] });
   }
 
-  private async acceptGuest(room: string, device: string): Promise<Response> {
-    const group = this.groupStub();
+  private async acceptGuest(groupId: string, room: string, device: string): Promise<Response> {
+    const group = this.groupStub(groupId);
     if ((await group.status()).capped) return new Response("weekly cap reached", { status: 402 });
     await group.touch(device);
     const control = this.control();
-    if (!control) return this.nobodyWaiting(room, device);
+    if (!control) return this.nobodyWaiting(groupId, room, device);
     const open = this.ctx.getWebSockets("guest").filter((s) => s.readyState === WebSocket.OPEN).length;
     if (open + this.joining.size >= MAX_STREAMS) return new Response("too many streams", { status: 429 });
 
@@ -114,10 +114,10 @@ export class Room extends DurableObject {
       // app: treat it like no host so the push goes out.
       if (Date.now() - this.lastSeen(control) < HOST_SILENT_MS) return new Response("host did not answer", { status: 504 });
       control.close(1001, "not answering");
-      return this.nobodyWaiting(room, device);
+      return this.nobodyWaiting(groupId, room, device);
     }
 
-    await this.keep();
+    await this.keep(groupId);
     const pair = new WebSocketPair();
     this.ctx.acceptWebSocket(pair[1], ["guest", id]);
     pair[1].serializeAttachment({ seen: Date.now() });
@@ -126,8 +126,8 @@ export class Room extends DurableObject {
 
   // The group's other devices may be closed phone apps; they are woken to
   // connect and the guest tries again.
-  private async nobodyWaiting(room: string, device: string): Promise<Response> {
-    const woken = await this.groupStub().wake(room, device);
+  private async nobodyWaiting(group: string, room: string, device: string): Promise<Response> {
+    const woken = await this.groupStub(group).wake(room, device);
     return new Response("nobody waiting", { status: 404, headers: woken ? { "x-relay-woken": "1" } : {} });
   }
 
@@ -233,7 +233,7 @@ export class Room extends DurableObject {
     this.unsaved = false;
     if (bytes === 0 || this.group === undefined) return;
     try {
-      if (await this.groupStub().record(bytes)) return;
+      if (await this.groupStub(this.group).record(bytes)) return;
     } catch (e) {
       this.pending += bytes;
       throw e;

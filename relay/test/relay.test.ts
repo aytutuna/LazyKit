@@ -435,6 +435,12 @@ describe("relay", () => {
     expect((await ask(room, "role=host", newGroup())).status).toBe(403);
   });
 
+  it("does not bind a room to a guest that found nobody", async () => {
+    const room = newRoom();
+    expect((await ask(room, "role=guest", newGroup())).status).toBe(404);
+    await host(room, newGroup());
+  });
+
   it("refuses a guest once the group is over its cap, and closes its streams", async () => {
     const group = newGroup();
     const h = await host(newRoom(), group);
