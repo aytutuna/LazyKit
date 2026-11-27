@@ -338,8 +338,9 @@ impl Document {
                 "The cross-reference streams list too many entries.",
             ));
         }
-        let data =
-            self.stream_data_limited(&stream, listed as usize * entry_length + XREF_SLACK, false)?;
+        // A PNG predictor puts a tag byte in front of every row.
+        let limit = listed as usize * (entry_length + 1) + XREF_SLACK;
+        let data = self.stream_data_limited(&stream, limit, false)?;
         let mut highest = 0;
         let mut at = 0;
         for pair in index.chunks(2) {

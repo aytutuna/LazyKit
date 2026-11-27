@@ -296,3 +296,42 @@ startxref
     }
     assert!(held < 400 << 20, "{held} bytes held");
 }
+
+#[test]
+fn a_large_cross_reference_stream_with_a_png_predictor_is_not_refused() {
+    let last = 100_000u32;
+    let mut pdf = TestPdf::with_pages(1);
+    let at = pdf.position();
+    let mut rows = Vec::new();
+    for n in 0..=last {
+        let offset = match n {
+            1..=4 => Some(pdf.offset_of(n)),
+            n if n == last => Some(at),
+            _ => None,
+        };
+        // The PNG filter byte (none) in front of each row.
+        rows.push(0);
+        match offset {
+            Some(o) => rows.extend_from_slice(&row(1, o, 0)),
+            None => rows.extend_from_slice(&row(0, 0, 0)),
+        }
+    }
+    pdf.stream_with(
+        last,
+        &format!(
+            "/Type /XRef /Size {} /Root 1 0 R /W [1 3 1] /Filter /FlateDecode /DecodeParms <</Predictor 12 /Columns 5>>",
+            last + 1
+        ),
+        &deflate(&rows),
+        None,
+        true,
+    );
+    let file = [
+        pdf.finish_without_xref(),
+        latin(&format!("startxref\n{at}\n%%EOF\n")),
+    ]
+    .concat();
+    let mut document = open(file);
+    assert!(!document.xref_rebuilt());
+    assert_eq!(document.pages().len(), 1);
+}

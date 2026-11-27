@@ -758,7 +758,12 @@ fn the_deepest_allowed_nesting_and_page_tree_fit_a_1_mb_stack() {
             let mut document = open(file);
             assert_eq!(document.pages().len(), 1);
             // Found through the tree, not by the scan that stands in for it.
-            assert!(!document.repairs().iter().any(|r| r.contains("found by scanning")));
+            assert!(
+                !document
+                    .repairs()
+                    .iter()
+                    .any(|r| r.contains("found by scanning"))
+            );
             let _ = document.save_rewrite(&lazy_pdf_syntax::SaveOptions {
                 use_object_streams: false,
                 document_id: None,

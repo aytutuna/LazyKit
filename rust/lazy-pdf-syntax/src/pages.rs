@@ -390,7 +390,11 @@ impl Document {
         let mut open: Vec<Level> = Vec::new();
         open.extend(self.walk_node(root, &Inherited::default(), 0, walk));
         while let Some(level) = open.last_mut() {
-            let kid = level.kids.as_array().and_then(|k| k.get(level.next)).cloned();
+            let kid = level
+                .kids
+                .as_array()
+                .and_then(|k| k.get(level.next))
+                .cloned();
             let Some(kid) = kid else {
                 open.pop();
                 continue;
