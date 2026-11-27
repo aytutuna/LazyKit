@@ -16,6 +16,8 @@ use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt, DuplexStream
 use tokio::net::TcpStream;
 use tokio::sync::{Notify, mpsc};
 use tokio::task::JoinHandle;
+use tokio_tungstenite::tungstenite::protocol::CloseFrame;
+use tokio_tungstenite::tungstenite::protocol::frame::coding::CloseCode;
 use tokio_tungstenite::tungstenite::{self, Message};
 use tokio_tungstenite::{MaybeTlsStream, WebSocketStream};
 
@@ -36,6 +38,14 @@ const WAKE_POLL_SLOW: Duration = Duration::from_secs(4);
 /// A larger Retry-After from the relay or anything in front of it is cut to this many seconds.
 const MAX_RETRY_AFTER: u64 = 3600;
 /// A connection that has said nothing for this long, not even the relay's answer to a ping, is dead.
+// A stream given up on mid-transfer must not look like a normal end to the other side.
+fn cut_off() -> Message {
+    Message::Close(Some(CloseFrame {
+        code: CloseCode::Error,
+        reason: "peer stopped taking data".into(),
+    }))
+}
+
 const DEAD: Duration = Duration::from_secs(60);
 /// How long a connect or a plain request may take before it counts as failed.
 const REQUEST_TIMEOUT: Duration = Duration::from_secs(15);
@@ -529,7 +539,7 @@ impl RelayStream {
             loop {
                 // Nothing more can be sent once the credit is spent and no answer can come.
                 if credit == 0 && !acks {
-                    let _ = sink.send(Message::Close(None)).await;
+                    let _ = sink.send(cut_off()).await;
                     return;
                 }
                 tokio::select! {
@@ -573,7 +583,7 @@ impl RelayStream {
                     _ = ping.tick() => {
                         // A dropped stream whose data the other end has stopped taking is given up on.
                         if gone.0.load(Ordering::Acquire) && moved.elapsed() > DEAD {
-                            let _ = sink.send(Message::Close(None)).await;
+                            let _ = sink.send(cut_off()).await;
                             return;
                         }
                         if sink.send(Message::text("ping")).await.is_err() {

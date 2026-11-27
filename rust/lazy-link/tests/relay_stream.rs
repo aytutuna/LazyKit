@@ -308,6 +308,34 @@ async fn the_other_ends_half_close_leaves_the_writer_working() {
 }
 
 #[tokio::test]
+async fn a_dropped_stream_that_is_given_up_on_closes_with_1011() {
+    let (l, relay) = listener().await;
+    let server = tokio::spawn(async move {
+        let mut ws = tokio_tungstenite::accept_async(l.accept().await.unwrap().0)
+            .await
+            .unwrap();
+        while let Some(Ok(m)) = ws.next().await {
+            match m {
+                Message::Close(frame) => return frame.map(|f| u16::from(f.code)),
+                Message::Text(t) if t.as_str() == "ping" => {
+                    ws.send(Message::text("pong")).await.unwrap();
+                }
+                _ => {}
+            }
+        }
+        None
+    });
+    let mut s = relay.connect(&room_id(b"r")).await.unwrap();
+    s.write_all(&vec![1u8; WINDOW_FRAMES * MAX_FRAME + 256 * 1024])
+        .await
+        .unwrap();
+    tokio::time::sleep(Duration::from_millis(100)).await;
+    drop(s);
+    tokio::time::pause();
+    assert_eq!(server.await.unwrap(), Some(1011));
+}
+
+#[tokio::test]
 async fn a_stream_dropped_after_shutdown_still_says_goodbye() {
     let (l, relay) = listener().await;
     let server = tokio::spawn(async move {
