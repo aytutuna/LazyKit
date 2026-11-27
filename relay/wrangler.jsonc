@@ -6,10 +6,17 @@
   "workers_dev": false,
   "preview_urls": false,
   "observability": { "enabled": false, "logs": { "enabled": false, "invocation_logs": false } },
-  "durable_objects": { "bindings": [{ "name": "ROOMS", "class_name": "Room" }, { "name": "GROUPS", "class_name": "Group" }, { "name": "PURCHASES", "class_name": "Purchase" }] },
+  // Team id and bundle id of every app that may use the relay; the Play packages are the same apps on Android.
+  "vars": {
+    "APPLE_APP_IDS": "8XT2U634Z4.com.lazyscan.lazyscan,8XT2U634Z4.com.lazyprint.lazyprint,8XT2U634Z4.com.lazypdf.lazypdf,8XT2U634Z4.com.lazysend.lazysend,8XT2U634Z4.com.lazymail.lazymail",
+    "APPLE_ATTEST_ENV": "production",
+    "PLAY_PACKAGES": "com.lazyscan.lazyscan,com.lazyprint.lazyprint,com.lazypdf.lazypdf,com.lazysend.lazysend,com.lazymail.lazymail"
+  },
+  "durable_objects": { "bindings": [{ "name": "ROOMS", "class_name": "Room" }, { "name": "GROUPS", "class_name": "Group" }, { "name": "PURCHASES", "class_name": "Purchase" }, { "name": "INSTALLS", "class_name": "Install" }] },
   "migrations": [
     { "tag": "v1", "new_sqlite_classes": ["Room"] },
     { "tag": "v2", "new_sqlite_classes": ["Group"] },
-    { "tag": "v3", "new_sqlite_classes": ["Purchase"] }
+    { "tag": "v3", "new_sqlite_classes": ["Purchase"] },
+    { "tag": "v4", "new_sqlite_classes": ["Install"] }
   ]
 }

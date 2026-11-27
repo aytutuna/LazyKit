@@ -1,4 +1,5 @@
 import { DurableObject } from "cloudflare:workers";
+import { toBase64Url } from "./appattest";
 import { NotConfiguredError, ReceiptRejectedError, TokenGoneError, services, type Platform, type Store } from "./services";
 import { purchaseKey } from "./purchase";
 import { weekOf } from "./week";
@@ -6,11 +7,14 @@ import { weekOf } from "./week";
 export const WEEKLY_CAP = 5_000_000_000;
 export const MAX_DEVICES = 32;
 export const MAX_TOKEN = 4096;
+const CHALLENGE_BYTES = 32;
 const KEEP_WEEKS = 8;
 const WAKE_GAP_MS = 10_000;
 const DEVICE_KEEP_MS = 90 * 86_400_000;
 const SEEN_REFRESH_MS = 86_400_000;
 const SWEEP_MS = 86_400_000;
+const CHALLENGE_MS = 5 * 60_000;
+const MAX_CHALLENGES = 8;
 
 interface Device {
   platform: Platform;
@@ -36,11 +40,15 @@ export class Group extends DurableObject<Cloudflare.Env> {
   private paidUntil = 0;
   private devices: Record<string, Device> = {};
   private woken = new Map<string, number>();
+  private verified = false;
+  // Kept in memory only: a group nobody has verified writes nothing, and a lost challenge costs one retry.
+  private challenges = new Map<string, number>();
 
   constructor(ctx: DurableObjectState, env: Cloudflare.Env) {
     super(ctx, env);
     ctx.blockConcurrencyWhile(async () => {
-      const kept = await ctx.storage.get(["usage", "paidUntil", "devices"]);
+      const kept = await ctx.storage.get(["usage", "paidUntil", "devices", "verified"]);
+      this.verified = kept.get("verified") === true;
       this.usage = (kept.get("usage") as Record<string, number> | undefined) ?? {};
       this.paidUntil = (kept.get("paidUntil") as number | undefined) ?? 0;
       this.devices = (kept.get("devices") as Record<string, Device> | undefined) ?? {};
@@ -95,9 +103,38 @@ export class Group extends DurableObject<Cloudflare.Env> {
     if (Object.keys(this.devices).length === 0 && Object.keys(this.usage).length === 0 && this.paidUntil <= now) {
       await this.ctx.storage.deleteAll();
       this.paidUntil = 0;
+      this.verified = false;
       return;
     }
     await this.ctx.storage.setAlarm(now + SWEEP_MS);
+  }
+
+  isVerified(): boolean {
+    return this.verified;
+  }
+
+  // A one-time string the app has to bind its proof to; a few may be outstanding at once, for
+  // a person's devices attesting together.
+  newChallenge(now = Date.now()): string {
+    for (const [c, until] of this.challenges) if (until <= now) this.challenges.delete(c);
+    if (this.challenges.size >= MAX_CHALLENGES) this.challenges.delete(this.challenges.keys().next().value!);
+    const challenge = toBase64Url(crypto.getRandomValues(new Uint8Array(CHALLENGE_BYTES)));
+    this.challenges.set(challenge, now + CHALLENGE_MS);
+    return challenge;
+  }
+
+  // True once for a challenge this group issued and has not yet taken.
+  takeChallenge(challenge: string, now = Date.now()): boolean {
+    const until = this.challenges.get(challenge);
+    this.challenges.delete(challenge);
+    return until !== undefined && until > now;
+  }
+
+  async setVerified(): Promise<void> {
+    if (this.verified) return;
+    this.verified = true;
+    await this.ctx.storage.put("verified", true);
+    await this.sweepSoon();
   }
 
   // A host or guest connecting shows the device is in use.

@@ -1,10 +1,12 @@
 import { MAX_TOKEN } from "./group";
+import { parseAttestation, verifyAttestation } from "./attest";
 import { RateLimiter } from "./ratelimit";
 import type { Platform, Store } from "./services";
 
 export { Room } from "./room";
 export { Group } from "./group";
 export { Purchase } from "./purchase";
+export { Install } from "./install";
 
 const ROOM_ID = /^[0-9a-f]{64}$/;
 const ID = /^[0-9a-f]{32}$/;
@@ -12,8 +14,14 @@ const ROOM_PATH = /^\/relay\/v1\/([^/]+)$/;
 const MAX_BODY = 64 * 1024;
 
 const limiter = new RateLimiter(1200, 60_000);
+// A computer proves itself with a key it made, so a modified client can make as many as it likes;
+// what is counted here is how many fresh installs one network may start in an hour.
+const installs = new RateLimiter(10, 3_600_000);
 
 const text = (body: string, status: number) => new Response(body, { status });
+
+// 403 is also "wrong group", so the reason travels in a header the client reads.
+const unverified = () => new Response("attestation required", { status: 403, headers: { "x-relay-reason": "attestation-required" } });
 
 export default {
   async fetch(req: Request, env: Cloudflare.Env): Promise<Response> {
@@ -28,8 +36,8 @@ export default {
       return new Response("slow down", { status: 503, headers: { "Retry-After": "60" } });
     }
 
-    const g = /^\/relay\/v1\/group\/([^/]+)(?:\/(push|paid)(?:\/([^/]+))?)?$/.exec(url.pathname);
-    if (g) return groupApi(req, env, g[1], g[2], g[3]);
+    const g = /^\/relay\/v1\/group\/([^/]+)(?:\/(push|paid|challenge|attest)(?:\/([^/]+))?)?$/.exec(url.pathname);
+    if (g) return groupApi(req, env, g[1], g[2], g[3], ip);
 
     const m = ROOM_PATH.exec(url.pathname);
     if (!m) return text("not found", 404);
@@ -40,11 +48,12 @@ export default {
     if (role !== "stream" && !ID.test(url.searchParams.get("group") ?? "")) return text("bad group", 400);
     if (role !== "stream" && !ID.test(url.searchParams.get("device") ?? "")) return text("bad device", 400);
     if (req.headers.get("Upgrade") !== "websocket") return text("websocket only", 426);
+    if (role !== "stream" && !(await env.GROUPS.get(env.GROUPS.idFromName(url.searchParams.get("group")!)).isVerified())) return unverified();
     return env.ROOMS.get(env.ROOMS.idFromName(m[1])).fetch(req);
   },
 };
 
-async function groupApi(req: Request, env: Cloudflare.Env, group: string, what?: string, device?: string): Promise<Response> {
+async function groupApi(req: Request, env: Cloudflare.Env, group: string, what?: string, device?: string, ip?: string | null): Promise<Response> {
   if (!ID.test(group)) return text("bad group", 400);
   const stub = env.GROUPS.get(env.GROUPS.idFromName(group));
 
@@ -60,14 +69,29 @@ async function groupApi(req: Request, env: Cloudflare.Env, group: string, what?:
   }
 
   if (req.method !== "POST" || device) return text("method not allowed", 405);
+  if (what === "challenge") return Response.json({ challenge: await stub.newChallenge() });
   const body = await readJson(req);
   if (!body) return text("bad body", 400);
+
+  if (what === "attest") {
+    const a = parseAttestation(body);
+    if (!a || typeof body.challenge !== "string") return text("bad attestation", 400);
+    if (a.platform === "desktop" && ip && !installs.allow(ip)) return new Response("slow down", { status: 503, headers: { "Retry-After": "3600" } });
+    if (!(await stub.takeChallenge(body.challenge))) return text("no such challenge", 400);
+    const outcome = await verifyAttestation(env, group, body.challenge, a);
+    if (outcome === "not-configured") return text("not configured", 501);
+    if (outcome === "rejected") return text("attestation rejected", 422);
+    if (outcome === "limit") return text("too many new groups for this install", 429);
+    await stub.setVerified();
+    return new Response(null, { status: 204 });
+  }
 
   if (what === "push") {
     const { device, platform, token } = body;
     if (typeof device !== "string" || !ID.test(device)) return text("bad device", 400);
     if (platform !== "apns" && platform !== "fcm") return text("bad platform", 400);
     if (typeof token !== "string" || token.length === 0 || token.length > MAX_TOKEN) return text("bad token", 400);
+    if (!(await stub.isVerified())) return unverified();
     if (!(await stub.setPush(device, platform as Platform, token))) return text("too many devices", 409);
     return new Response(null, { status: 204 });
   }

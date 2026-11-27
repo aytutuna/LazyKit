@@ -1,3 +1,6 @@
+import { APPLE_ROOT, fromBase64 } from "./appattest";
+import type { IntegrityPayload } from "./integrity";
+
 export type Store = "apple" | "google" | "microsoft";
 export type Platform = "apns" | "fcm";
 
@@ -28,9 +31,17 @@ export interface PushSender {
   send(platform: Platform, token: string, message: { room: string }): Promise<void>;
 }
 
+export interface IntegrityDecoder {
+  // Has Google decode a Play Integrity token; needs a service account the relay does not hold yet.
+  decode(token: string): Promise<IntegrityPayload>;
+}
+
 export interface Services {
   verifier: PurchaseVerifier;
   push: PushSender;
+  integrity: IntegrityDecoder;
+  // The roots App Attest chains must lead to; only tests use another.
+  appleRoots: Uint8Array[];
 }
 
 // The stores' receipt checks and the APNs and FCM clients need keys that are
@@ -46,6 +57,12 @@ const notConfigured: Services = {
       throw new NotConfiguredError(`${platform} is not configured`);
     },
   },
+  integrity: {
+    async decode() {
+      throw new NotConfiguredError("Play Integrity is not configured");
+    },
+  },
+  appleRoots: [fromBase64(APPLE_ROOT)],
 };
 
 let current = notConfigured;

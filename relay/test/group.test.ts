@@ -13,8 +13,11 @@ const stub = (group: string) => env.GROUPS.get(env.GROUPS.idFromName(group));
 
 const call = (group: string, path: string, init?: RequestInit) =>
   exports.default.fetch(`https://alazy.app/relay/v1/group/${group}${path}`, init);
-const post = (group: string, path: string, body: unknown) =>
-  call(group, path, { method: "POST", body: JSON.stringify(body) });
+// Groups in these tests have passed the app check unless a test calls `call` itself.
+const post = async (group: string, path: string, body: unknown) => {
+  await stub(group).setVerified();
+  return call(group, path, { method: "POST", body: JSON.stringify(body) });
+};
 
 describe("group", () => {
   afterEach(() => useServices());

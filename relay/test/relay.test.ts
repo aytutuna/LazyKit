@@ -64,10 +64,12 @@ class Peer {
 // unless the test says otherwise.
 const groupOf = (room: string) => room.slice(32);
 
-const ask = (room: string, query: string, group = groupOf(room), device = DEVICE) =>
-  exports.default.fetch(`https://alazy.app/relay/v1/${room}?${query}&group=${group}&device=${device}`, {
+const ask = async (room: string, query: string, group = groupOf(room), device = DEVICE) => {
+  await env.GROUPS.get(env.GROUPS.idFromName(group)).setVerified();
+  return exports.default.fetch(`https://alazy.app/relay/v1/${room}?${query}&group=${group}&device=${device}`, {
     headers: { Upgrade: "websocket" },
   });
+};
 
 async function open(room: string, query: string, group?: string, device?: string): Promise<Peer> {
   const res = await ask(room, query, group, device);
@@ -103,11 +105,13 @@ async function stream(h: Host): Promise<[Peer, Peer]> {
   return [guest, await h.stream()];
 }
 
-const groupApi = (group: string, path: string, body: unknown) =>
-  exports.default.fetch(`https://alazy.app/relay/v1/group/${group}/${path}`, {
+const groupApi = async (group: string, path: string, body: unknown) => {
+  await env.GROUPS.get(env.GROUPS.idFromName(group)).setVerified();
+  return exports.default.fetch(`https://alazy.app/relay/v1/group/${group}/${path}`, {
     method: "POST",
     body: JSON.stringify(body),
   });
+};
 
 const bytes = (...v: number[]) => new Uint8Array(v);
 const stub = (room: string) => env.ROOMS.get(env.ROOMS.idFromName(room));
