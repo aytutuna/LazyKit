@@ -258,6 +258,49 @@ describe("relay", () => {
     expect((await ask(newRoom(), "role=guest")).status).toBe(404);
   });
 
+  it("tells the other end when a connection died, and passes a normal close on", async () => {
+    const h = await host(newRoom());
+    const [guest, side] = await stream(h);
+    await runInDurableObject(stub(h.room), async (o, state) => {
+      await o.webSocketClose(state.getWebSockets("guest")[0], 1006);
+    });
+    expect((await side.closed).code).toBe(1011);
+    const [guest2, side2] = await stream(h);
+    await runInDurableObject(stub(h.room), async (o, state) => {
+      await o.webSocketClose(state.getWebSockets("guest")[0], 1005);
+    });
+    expect((await side2.closed).code).toBe(1000);
+    void guest;
+    void guest2;
+  });
+
+  it("binds a room to its group only once somebody has joined", async () => {
+    const room = newRoom();
+    const kept = () => runInDurableObject(stub(room), (_o, state) => state.storage.get("group"));
+    expect((await ask(room, "role=guest")).status).toBe(404);
+    expect(await kept()).toBeUndefined();
+    await host(room);
+    expect(await kept()).toBe(groupOf(room));
+  });
+
+  it("forgets its group after 90 idle days", async () => {
+    const room = newRoom();
+    const h = await host(room);
+    h.control.ws.close(1000);
+    await h.control.closed;
+    await runInDurableObject(stub(room), async (o, state) => {
+      await o.alarm();
+      expect(await state.storage.get("idleSince")).toEqual(expect.any(Number));
+      expect(await state.storage.get("group")).toBe(groupOf(room));
+      (o as unknown as { idleSince: number }).idleSince = Date.now() - 91 * 86_400_000;
+      await o.alarm();
+      expect(await state.storage.get("group")).toBeUndefined();
+      expect(await state.storage.get("idleSince")).toBeUndefined();
+    });
+    // A different group can use the room now.
+    await open(room, "role=host", newGroup());
+  });
+
   it("refuses a stream nobody asked for", async () => {
     const room = newRoom();
     await host(room);

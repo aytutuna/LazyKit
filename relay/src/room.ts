@@ -12,6 +12,8 @@ const STREAM_IDLE_MS = 120_000;
 const JOIN_MS = 10_000;
 // The client pings every 30 s, so a control socket quiet for longer than this is not being read.
 const HOST_SILENT_MS = 45_000;
+// A room nobody has connected to for this long forgets its group.
+const ROOM_KEEP_MS = 90 * 86_400_000;
 
 // A room has one control socket, the host waiting for guests, and any number
 // of streams. A guest that connects gets a stream id sent to the host on the
@@ -20,6 +22,8 @@ const HOST_SILENT_MS = 45_000;
 // connection of the phone link.
 export class Room extends DurableObject {
   private group?: string;
+  private stored = false;
+  private idleSince?: number;
   private pending = 0;
   private unsaved = false;
   private joining = new Map<string, (ok: boolean) => void>();
@@ -29,6 +33,8 @@ export class Room extends DurableObject {
     ctx.setWebSocketAutoResponse(new WebSocketRequestResponsePair("ping", "pong"));
     ctx.blockConcurrencyWhile(async () => {
       this.group = await ctx.storage.get<string>("group");
+      this.stored = this.group !== undefined;
+      this.idleSince = await ctx.storage.get<number>("idleSince");
     });
   }
 
@@ -36,15 +42,26 @@ export class Room extends DurableObject {
     const url = new URL(req.url);
     const role = url.searchParams.get("role");
     if (role === "stream") return this.acceptStream(url.searchParams.get("id") ?? "");
-    // A room belongs to the first group that uses it.
+    // A room belongs to the first group that joins it; a request that finds nobody to join
+    // leaves nothing behind.
     const group = url.searchParams.get("group") ?? "";
-    if (this.group === undefined) {
-      this.group = group;
-      await this.ctx.storage.put("group", group);
-    }
+    this.group ??= group;
     if (this.group !== group) return new Response("wrong group", { status: 403 });
-    if (role === "host") return this.acceptHost();
-    return this.acceptGuest(url.pathname.split("/").pop() ?? "", url.searchParams.get("device") ?? "");
+    const device = url.searchParams.get("device") ?? "";
+    if (role === "host") return this.acceptHost(device);
+    return this.acceptGuest(url.pathname.split("/").pop() ?? "", device);
+  }
+
+  // Called once a host or guest has really joined.
+  private async keep(): Promise<void> {
+    if (!this.stored) {
+      this.stored = true;
+      await this.ctx.storage.put("group", this.group);
+    }
+    if (this.idleSince !== undefined) {
+      this.idleSince = undefined;
+      await this.ctx.storage.delete("idleSince");
+    }
   }
 
   private lastSeen(ws: WebSocket): number {
@@ -61,7 +78,9 @@ export class Room extends DurableObject {
 
   // A new host takes over from the old one, which may be a connection that
   // died without a close.
-  private async acceptHost(): Promise<Response> {
+  private async acceptHost(device: string): Promise<Response> {
+    await this.keep();
+    await this.groupStub().touch(device);
     for (const old of this.ctx.getWebSockets("host")) old.close(1012, "replaced");
     const pair = new WebSocketPair();
     this.ctx.acceptWebSocket(pair[1], ["host"]);
@@ -73,6 +92,7 @@ export class Room extends DurableObject {
   private async acceptGuest(room: string, device: string): Promise<Response> {
     const group = this.groupStub();
     if ((await group.status()).capped) return new Response("weekly cap reached", { status: 402 });
+    await group.touch(device);
     const control = this.control();
     if (!control) return this.nobodyWaiting(room, device);
     const open = this.ctx.getWebSockets("guest").filter((s) => s.readyState === WebSocket.OPEN).length;
@@ -97,6 +117,7 @@ export class Room extends DurableObject {
       return this.nobodyWaiting(room, device);
     }
 
+    await this.keep();
     const pair = new WebSocketPair();
     this.ctx.acceptWebSocket(pair[1], ["guest", id]);
     pair[1].serializeAttachment({ seen: Date.now() });
@@ -141,8 +162,10 @@ export class Room extends DurableObject {
   }
 
   async webSocketClose(ws: WebSocket, code: number): Promise<void> {
-    const out = code === 1005 || code === 1006 ? 1000 : code;
-    this.peerOf(ws)?.close(out, "peer closed");
+    // 1005 is a close without a code; 1006 is a connection that died, which the other end
+    // must not take for a finished transfer.
+    const out = code === 1005 ? 1000 : code === 1006 ? 1011 : code;
+    this.peerOf(ws)?.close(out, out === 1011 ? "peer lost" : "peer closed");
     try {
       ws.close(out);
     } catch {}
@@ -163,7 +186,15 @@ export class Room extends DurableObject {
       const limit = role === "host" ? CONTROL_IDLE_MS : STREAM_IDLE_MS;
       if (now - seen > limit) this.end(ws, 1001, "idle");
     }
-    if (this.ctx.getWebSockets().length > 0) await this.schedule(SWEEP_MS);
+    if (this.ctx.getWebSockets().length > 0) return this.schedule(SWEEP_MS);
+    if (this.group === undefined) return;
+    this.idleSince ??= now;
+    await this.ctx.storage.put("idleSince", this.idleSince);
+    if (now - this.idleSince < ROOM_KEEP_MS) return this.ctx.storage.setAlarm(this.idleSince + ROOM_KEEP_MS);
+    await this.ctx.storage.deleteAll();
+    this.group = undefined;
+    this.stored = false;
+    this.idleSince = undefined;
   }
 
   // Bytes are handed to the group in batches, so a busy stream costs one
