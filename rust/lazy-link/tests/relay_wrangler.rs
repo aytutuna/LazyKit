@@ -243,3 +243,26 @@ async fn a_host_that_writes_and_drops_still_delivers_everything() {
     assert_eq!(Sha256::digest(&got), want);
     assert_eq!(s.close_code(), Some(1000));
 }
+
+#[tokio::test(flavor = "multi_thread")]
+#[ignore = "needs the relay on RELAY_URL"]
+async fn a_host_that_drops_without_shutdown_still_delivers_everything() {
+    let (a, b, room) = pair();
+    let mut host = a.host(&room).await.unwrap();
+    let body = pattern(WINDOW_FRAMES * MAX_FRAME + 100_000, 5);
+    let want = Sha256::digest(&body);
+    let len = body.len();
+    let server = tokio::spawn(async move {
+        let mut s = host.accept().await.unwrap();
+        s.write_all(&body).await.unwrap();
+    });
+    let mut s = b.connect(&room).await.unwrap();
+    server.await.unwrap();
+    let mut got = Vec::new();
+    timeout(Duration::from_secs(20), s.read_to_end(&mut got))
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(got.len(), len);
+    assert_eq!(Sha256::digest(&got), want);
+}
