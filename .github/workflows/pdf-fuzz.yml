@@ -5,6 +5,7 @@ on:
     branches: [main, 'ci/**']
     paths:
       - rust/lazy-pdf-syntax/**
+      - rust/Cargo.toml
       - testdata/pdf/**
       - rust/rust-toolchain.toml
       - .github/workflows/pdf-fuzz.yml

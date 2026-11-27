@@ -11,10 +11,15 @@ use lazy_pdf_syntax::{Dict, Document, Number, Object, ReadError, Rect, SaveOptio
 // (the names in make), read, repaired, updated or rewritten, and what came of it, in text.
 const EXACT: [&str; 3] = ["table", "stream", "hybrid"];
 
+// A line whose file is one of the encrypted ones (aes128, aes256, aes256objects).
+fn encrypted(line: &str) -> bool {
+    line.split(' ').nth(1).is_some_and(|name| name.starts_with("aes"))
+}
+
 fn run(input: &str) -> String {
     let mut output = String::new();
     for line in input.split('\n') {
-        if line.is_empty() || line.starts_with("# ") || line.contains("aes") {
+        if line.is_empty() || line.starts_with("# ") || encrypted(line) {
             continue;
         }
         let words: Vec<&str> = line.split(' ').collect();
@@ -356,7 +361,7 @@ fn document_output_is_the_golden_file() {
         .split_inclusive('\n')
         .fold((String::new(), true), |(mut kept, keep), line| {
             let keep = match line.strip_prefix("> ") {
-                Some(command) => !command.contains("aes"),
+                Some(command) => !encrypted(command),
                 None => keep,
             };
             if keep {
@@ -382,7 +387,7 @@ fn write_fuzz_seeds() {
     let input = golden("document/document-input.txt");
     let mut names: Vec<&str> = input
         .lines()
-        .filter(|l| !l.is_empty() && !l.starts_with("# ") && !l.contains("aes"))
+        .filter(|l| !l.is_empty() && !l.starts_with("# ") && !encrypted(l))
         .filter_map(|l| l.split(' ').nth(1))
         .collect();
     names.sort();
