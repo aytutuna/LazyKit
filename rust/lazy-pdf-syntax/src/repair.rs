@@ -2,7 +2,7 @@
 //! built from what is there, the newest definition of an object winning. One pass over the bytes; a stream is skipped
 //! by its length or its "endstream", so nothing is looked at twice.
 
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
 use std::sync::Arc;
 
 use crate::document::{Document, Entry, MAX_OBJECT_NUMBER};
@@ -215,7 +215,6 @@ impl Document {
         self.check_not_encrypted()?;
         // Members of object streams in the order met, for the catalog search.
         let mut stored: Vec<u32> = Vec::new();
-        let mut met: HashSet<u32> = scan.objects.keys().copied().collect();
         for &stream_number in &scan.object_streams {
             let Some(members) = self
                 .load_object_stream(stream_number)
@@ -225,15 +224,16 @@ impl Document {
             };
             let at = written[&stream_number];
             for number in members {
+                if number == 0 {
+                    continue;
+                }
                 if written.get(&number).is_some_and(|existing| *existing >= at) {
                     continue;
                 }
                 self.entries
                     .insert(number, Entry::compressed(stream_number));
                 written.insert(number, at);
-                if met.insert(number) {
-                    stored.push(number);
-                }
+                stored.push(number);
                 self.next_object_number = self.next_object_number.max(number + 1);
             }
         }
