@@ -72,7 +72,7 @@ fn parse(xml: &str) -> Option<(Option<String>, Option<String>)> {
                     return None;
                 }
             } else {
-                collect(&mut stack, chunk);
+                collect(&mut stack, &decode(chunk)?);
             }
             at = next;
             continue;
@@ -108,6 +108,10 @@ fn parse(xml: &str) -> Option<(Option<String>, Option<String>)> {
         } else {
             let (name, attributes, empty, used) = start_tag(&rest[1..])?;
             at += 1 + used;
+            let attributes = attributes
+                .into_iter()
+                .map(|(key, value)| Some((key, decode(&value)?)))
+                .collect::<Option<Vec<_>>>()?;
             if stack.len() >= MAX_DEPTH {
                 return None;
             }
@@ -124,6 +128,19 @@ fn parse(xml: &str) -> Option<(Option<String>, Option<String>)> {
                 } else if let Some(prefix) = key.strip_prefix("xmlns:") {
                     bindings.push(prefix.to_string(), value.clone());
                 }
+            }
+            let unbound = |prefix: &str| {
+                !prefix.is_empty()
+                    && prefix != "xml"
+                    && prefix != "xmlns"
+                    && bound(&bindings, prefix).is_none()
+            };
+            if unbound(name.split_once(':').map_or("", |(prefix, _)| prefix))
+                || attributes
+                    .iter()
+                    .any(|(key, _)| key.split_once(':').is_some_and(|(prefix, _)| unbound(prefix)))
+            {
+                return None;
             }
             for (key, value) in &attributes {
                 match key.split_once(':') {
@@ -175,6 +192,43 @@ fn parse(xml: &str) -> Option<(Option<String>, Option<String>)> {
     }
     let first = |all: Candidates| all.into_iter().flatten().next();
     Some((first(parts), first(conformances)))
+}
+
+/// Text with its character references and the five predefined entities replaced; any other entity is an error,
+/// since a packet declares none.
+fn decode(text: &str) -> Option<String> {
+    if !text.contains('&') {
+        return Some(text.to_string());
+    }
+    let mut out = String::with_capacity(text.len());
+    let mut rest = text;
+    while let Some(at) = rest.find('&') {
+        out.push_str(&rest[..at]);
+        let after = &rest[at + 1..];
+        let end = after.find(';')?;
+        let name = &after[..end];
+        match name {
+            "amp" => out.push('&'),
+            "lt" => out.push('<'),
+            "gt" => out.push('>'),
+            "quot" => out.push('"'),
+            "apos" => out.push('\''),
+            _ => {
+                let digits = name.strip_prefix('#')?;
+                let code = match digits.strip_prefix('x') {
+                    Some(hex) if hex.bytes().all(|b| b.is_ascii_hexdigit()) => {
+                        u32::from_str_radix(hex, 16).ok()?
+                    }
+                    None if digits.bytes().all(|b| b.is_ascii_digit()) => digits.parse().ok()?,
+                    _ => return None,
+                };
+                out.push(char::from_u32(code).filter(|c| *c != ' ')?);
+            }
+        }
+        rest = &after[end + 1..];
+    }
+    out.push_str(rest);
+    Some(out)
 }
 
 /// Prefix bindings in scope, the innermost first for each prefix.

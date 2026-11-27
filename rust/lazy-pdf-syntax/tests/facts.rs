@@ -42,6 +42,10 @@ fn metadata_that_is_not_safe_or_well_formed_claims_nothing() {
         format!("<x:xmpmeta xmlns:x=\"a\"><d {ID}><pdfaid:part>2</d></x:xmpmeta>"),
         "<x:xmpmeta xmlns:x=\"a\"><d xmlns:pdfaid=\"http://other/\"><pdfaid:part>2</pdfaid:part></d></x:xmpmeta>".to_string(),
         format!("<x:xmpmeta xmlns:x=\"a\"><d {ID}><pdfaid:part>two</pdfaid:part></d></x:xmpmeta>"),
+        format!("<x:xmpmeta xmlns:x=\"a\"><d {ID}><pdfaid:part>2</pdfaid:part><dc:title>a&nbsp;b</dc:title></d></x:xmpmeta>"),
+        format!("<x:xmpmeta xmlns:x=\"a\"><d {ID} q:k=\"1\"><pdfaid:part>2</pdfaid:part></d></x:xmpmeta>"),
+        format!("<x:xmpmeta xmlns:x=\"a\"><d {ID}><pdfaid:part>2</pdfaid:part><t k=\"&bad;\"/></d></x:xmpmeta>"),
+        format!("<x:xmpmeta xmlns:x=\"a\"><d {ID}><pdfaid:part>&#x110000;</pdfaid:part></d></x:xmpmeta>"),
     ];
     for xmp in cases {
         let mut document = with_metadata(&xmp);
@@ -50,6 +54,16 @@ fn metadata_that_is_not_safe_or_well_formed_claims_nothing() {
     }
     let mut plain = open(TestPdf::simple(1));
     assert_eq!(plain.pdfa_part(), None);
+}
+
+#[test]
+fn character_references_and_the_five_entities_are_decoded() {
+    let xmp = format!(
+        "<x:xmpmeta xmlns:x=\"a\"><d {ID} pdfaid:conformance=\"&#66;\"><pdfaid:part>&#x32;</pdfaid:part><t>&lt;&amp;&gt;&quot;&apos;</t></d></x:xmpmeta>"
+    );
+    let mut document = with_metadata(&xmp);
+    assert_eq!(document.pdfa_part(), Some(2));
+    assert_eq!(document.pdfa_conformance().as_deref(), Some("B"));
 }
 
 #[test]
