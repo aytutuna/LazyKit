@@ -1,7 +1,9 @@
 use crate::error::{Problem, ReadError, latin1};
 use crate::object::{Dict, Name, Number, Object, PdfString, Ref, Stream};
 
-/// Deeper nesting than this is refused rather than risking the stack.
+/// Deeper nesting than this is refused rather than risking the stack. The limit is the reference's (the golden files
+/// pin it). Callers need a stack of 1 MB in a release build and 4 MB in a debug one for opening, walking pages and
+/// saving; hostile.rs runs them on a 4 MB thread.
 const MAX_DEPTH: usize = 200;
 
 pub fn is_white_space(b: i32) -> bool {

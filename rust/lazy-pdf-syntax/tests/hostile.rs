@@ -612,5 +612,157 @@ fn members_after_a_skipped_header_pair_keep_their_place_in_the_object_stream() {
         .filter(|row| row[..3] == [2, 0, 5])
         .map(|row| u16::from_be_bytes([row[3], row[4]]))
         .collect();
-    assert!(indexes.ends_with(&[1, 2]), "{indexes:?}");
+    assert_eq!(indexes, [1, 2]);
+    assert!(!document.object_numbers().contains(&0));
+    assert!(document.entry(0).is_none());
+}
+
+#[test]
+fn a_rebuild_never_lists_object_zero() {
+    let header = "0 0 1 0 2 32 ";
+    let body = "<</Type /Catalog /Pages 2 0 R>>
+<</Type /Pages /Kids [] /Count 0>>
+";
+    let mut pdf = TestPdf::with_header(
+        "%PDF-1.5
+",
+    );
+    pdf.stream_with(
+        5,
+        &format!("/Type /ObjStm /N 3 /First {}", header.len()),
+        &latin(&format!("{header}{body}")),
+        None,
+        true,
+    );
+    let file = [
+        pdf.finish_without_xref(),
+        latin(
+            "trailer
+<</Root 1 0 R>>
+",
+        ),
+    ]
+    .concat();
+    let document = open(file);
+    assert!(!document.object_numbers().contains(&0));
+    assert!(document.entry(0).is_none());
+}
+
+#[test]
+fn a_catalog_that_replaces_a_plain_object_in_an_object_stream_is_found() {
+    let header = "7 0 ";
+    let mut pdf = TestPdf::with_header(
+        "%PDF-1.5
+",
+    );
+    pdf.obj(7, "<</Type /Other>>")
+        .obj(2, "<</Type /Pages /Kids [] /Count 0>>");
+    pdf.stream_with(
+        5,
+        &format!("/Type /ObjStm /N 1 /First {}", header.len()),
+        &latin(&format!("{header}<</Type /Catalog /Pages 2 0 R>>")),
+        None,
+        true,
+    );
+    let file = [
+        pdf.finish_without_xref(),
+        latin(
+            "trailer
+<</Root 99 0 R>>
+",
+        ),
+    ]
+    .concat();
+    let document = open(file);
+    let root = document.trailer().get("Root").cloned();
+    let Some(Object::Ref(root)) = root else {
+        panic!("no root");
+    };
+    assert_eq!(root.number, 7);
+}
+
+#[test]
+fn jbig2_globals_are_not_inflated_again_for_each_image() {
+    let bomb = deflate(&vec![0u8; 32 << 20]);
+    let images = 30u32;
+    let mut pdf = TestPdf::with_header(
+        "%PDF-1.5
+",
+    );
+    pdf.obj(1, "<</Type /Catalog /Pages 2 0 R>>")
+        .obj(2, "<</Type /Pages /Kids [] /Count 0>>");
+    pdf.stream_with(3, "/Filter /FlateDecode", &bomb, None, true);
+    for k in 0..images {
+        pdf.stream_with(
+            10 + k,
+            "/Width 8 /Height 8 /Filter /JBIG2Decode /DecodeParms <</JBIG2Globals 3 0 R>>",
+            b"x",
+            None,
+            true,
+        );
+    }
+    let file = [
+        pdf.finish_without_xref(),
+        latin(
+            "trailer
+<</Root 1 0 R>>
+",
+        ),
+    ]
+    .concat();
+    let mut document = open(file);
+    let started = Instant::now();
+    for k in 0..images {
+        let image = document.get(10 + k).unwrap();
+        let Object::Stream(stream) = &*image else {
+            panic!("not a stream");
+        };
+        let _ = document.stream_data(stream);
+    }
+    must_finish_within(Duration::from_secs(12), started);
+}
+
+#[test]
+fn the_deepest_allowed_nesting_fits_the_documented_stack() {
+    std::thread::Builder::new()
+        .stack_size(4 << 20)
+        .spawn(|| {
+            let nested = format!("{}{}", "[".repeat(190), "]".repeat(190));
+            let mut pdf = TestPdf::with_header(
+                "%PDF-1.5
+",
+            );
+            pdf.obj(1, &format!("<</Type /Catalog /Pages 2 0 R /A {nested}>>"));
+            let mut parent = 2;
+            for k in 0..60u32 {
+                let kid = 3 + k;
+                pdf.obj(
+                    parent,
+                    &format!("<</Type /Pages /Kids [{kid} 0 R] /Count 1 /B {nested}>>"),
+                );
+                parent = kid;
+            }
+            pdf.obj(
+                parent,
+                &format!("<</Type /Page /Parent 2 0 R /C {nested}>>"),
+            );
+            let file = [
+                pdf.finish_without_xref(),
+                latin(
+                    "trailer
+<</Root 1 0 R>>
+",
+                ),
+            ]
+            .concat();
+            let mut document = open(file);
+            let _ = document.pages();
+            let _ = document.save_rewrite(&lazy_pdf_syntax::SaveOptions {
+                use_object_streams: false,
+                document_id: None,
+            });
+        })
+        .unwrap()
+        .join()
+        .unwrap();
 }

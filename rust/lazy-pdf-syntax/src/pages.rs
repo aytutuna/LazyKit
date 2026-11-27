@@ -7,7 +7,7 @@ use std::sync::Arc;
 use crate::document::Document;
 use crate::object::{Dict, Object, Ref};
 
-const MAX_TREE_DEPTH: usize = 256;
+const MAX_TREE_DEPTH: usize = 64;
 
 /// Nodes one walk looks at, direct dictionaries included: a /Kids array shared by its own children has no end.
 const MAX_TREE_NODES: usize = 1 << 20;
