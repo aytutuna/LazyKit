@@ -68,6 +68,8 @@ pub(crate) struct Slot {
 pub(crate) struct ObjectStream {
     pub data: Arc<Vec<u8>>,
     pub offsets: HashMap<u32, usize>,
+    /// The distinct places members start, ascending.
+    pub starts: Vec<usize>,
     pub numbers: Vec<u32>,
     pub number_index: Option<HashMap<u32, usize>>,
 }
@@ -136,6 +138,8 @@ pub struct Document {
     pub(crate) last_endobj: Cell<i64>,
     pub(crate) endobj_spans: std::cell::RefCell<std::collections::BTreeMap<usize, usize>>,
     pub(crate) length_repaired: HashSet<usize>,
+    /// Bytes read by object parses that failed, over the document's life.
+    pub(crate) failed_parse_bytes: Cell<usize>,
 
     pub(crate) pages: Option<Arc<Vec<Page>>>,
     pub(crate) pages_walked: bool,
@@ -183,6 +187,7 @@ impl Document {
             last_endobj: Cell::new(-2),
             endobj_spans: Default::default(),
             length_repaired: HashSet::new(),
+            failed_parse_bytes: Cell::new(0),
             pages: None,
             pages_walked: false,
             linearized: None,
