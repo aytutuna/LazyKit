@@ -6,7 +6,7 @@ use common::fixtures::make_save_fixture;
 use common::open;
 use common::pdf::{TestPdf, deflate};
 use common::{TestFilters, latin};
-use lazy_pdf_syntax::{Document, Object, PdfString, Problem};
+use lazy_pdf_syntax::{DecodeError, Document, Filters, Object, Parm, PdfString, Problem};
 
 // What a hostile file may cost. The time limits are the C# engine's, loosened for a build with no optimizing.
 
@@ -297,6 +297,30 @@ startxref
     assert!(held < 400 << 20, "{held} bytes held");
 }
 
+/// Flate, then the PNG predictor undone for rows that carry the tag byte none, five bytes wide.
+struct UpFilters;
+
+impl Filters for UpFilters {
+    fn decode(
+        &self,
+        filter: &[u8],
+        parms: &[(Vec<u8>, Parm)],
+        data: &[u8],
+        max_size: usize,
+        strict: bool,
+    ) -> Result<Vec<u8>, DecodeError> {
+        let plain = TestFilters.decode(filter, parms, data, max_size, strict)?;
+        Ok(plain
+            .chunks(6)
+            .flat_map(|r| r[1..].iter().copied())
+            .collect())
+    }
+
+    fn flate(&self, data: &[u8]) -> Vec<u8> {
+        TestFilters.flate(data)
+    }
+}
+
 #[test]
 fn a_large_cross_reference_stream_with_a_png_predictor_is_not_refused() {
     let last = 100_000u32;
@@ -331,7 +355,7 @@ fn a_large_cross_reference_stream_with_a_png_predictor_is_not_refused() {
         latin(&format!("startxref\n{at}\n%%EOF\n")),
     ]
     .concat();
-    let mut document = open(file);
+    let mut document = Document::open(file, Box::new(UpFilters)).unwrap();
     assert!(!document.xref_rebuilt());
     assert_eq!(document.pages().len(), 1);
 }
