@@ -13,7 +13,9 @@ const EXACT: [&str; 3] = ["table", "stream", "hybrid"];
 
 // A line whose file is one of the encrypted ones (aes128, aes256, aes256objects).
 fn encrypted(line: &str) -> bool {
-    line.split(' ').nth(1).is_some_and(|name| name.starts_with("aes"))
+    line.split(' ')
+        .nth(1)
+        .is_some_and(|name| name.starts_with("aes"))
 }
 
 fn run(input: &str) -> String {

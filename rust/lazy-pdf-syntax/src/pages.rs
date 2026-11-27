@@ -246,7 +246,14 @@ impl Page {
             Some(other) => vec![other.clone()],
             None => Vec::new(),
         };
+        let mut failed: HashSet<u32> = HashSet::new();
         for item in &streams {
+            // The same stream named again fails the same way.
+            if let Object::Ref(r) = item
+                && failed.contains(&r.number)
+            {
+                continue;
+            }
             let Some(found) = document.resolve(item).map(|v| v.into_shared()) else {
                 continue;
             };
@@ -265,6 +272,9 @@ impl Page {
                     parts.push(part);
                 }
                 Err(e) => {
+                    if let Object::Ref(r) = item {
+                        failed.insert(r.number);
+                    }
                     document.add_repair(format!(
                         "Page {}: a content stream could not be read ({})",
                         self.index + 1,
