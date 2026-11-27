@@ -67,6 +67,7 @@ impl Document {
         }
         // The slot has to be the only owner, or make_mut copies the whole object.
         drop(value);
+        self.globals.clear();
         self.changed.insert(number);
         let slot = self.objects.get_mut(&number)?;
         Some(Arc::make_mut(&mut slot.value))
@@ -185,6 +186,7 @@ impl Document {
                 generation,
             },
         );
+        self.globals.clear();
         self.changed.insert(number);
         self.originals.remove(&number);
         self.deleted.remove(&number);
@@ -201,6 +203,7 @@ impl Document {
         if entry.kind == EntryKind::Free {
             return;
         }
+        self.globals.clear();
         self.objects.remove(&number);
         self.changed.remove(&number);
         self.originals.remove(&number);
@@ -423,7 +426,10 @@ impl Document {
                 return None;
             }
         };
-        self.object_stream_bytes += data.len();
+        // Only a decode of a stream already decoded once counts, so one pass over a big file never reaches the cap.
+        if !self.decoded_object_streams.insert(number) {
+            self.object_stream_bytes += data.len();
+        }
         let mut header = Lexer::new(&data, 0);
         let mut offsets = HashMap::new();
         let mut numbers = Vec::new();
