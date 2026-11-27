@@ -1,9 +1,7 @@
 use crate::error::{Problem, ReadError, latin1};
 use crate::object::{Dict, Name, Number, Object, PdfString, Ref, Stream};
 
-/// Deeper nesting than this is refused rather than risking the stack. The limit is the reference's (the golden files
-/// pin it). Callers need a stack of 1 MB in a release build and 4 MB in a debug one for opening, walking pages and
-/// saving; hostile.rs runs them on a 4 MB thread.
+/// Deeper nesting than this is refused. The limit is the reference's (the golden files pin it).
 const MAX_DEPTH: usize = 200;
 
 pub fn is_white_space(b: i32) -> bool {
@@ -109,18 +107,123 @@ impl<'a> Lexer<'a> {
     }
 
     /// One object; a dictionary followed by "stream" becomes a stream whose data starts after the keyword's end
-    /// of line.
+    /// of line. Arrays and dictionaries are read with a stack of their own, so nesting costs no call stack.
     pub fn read_object(&mut self, allow_stream: bool) -> Result<Object, ReadError> {
-        self.read_at(0, allow_stream)
+        let mut open: Vec<Open> = Vec::new();
+        loop {
+            let stream_ok = allow_stream && open.len() == 1;
+            let finished = match open.last_mut() {
+                Some(Open::Array(items)) => self.step_array(items)?,
+                Some(Open::Dict(dict, pending)) if matches!(pending, Pending::Nothing) => {
+                    match self.step_dict(dict, pending, stream_ok)? {
+                        Step::Value(value) => Some(value),
+                        Step::Read => None,
+                        Step::Again => continue,
+                    }
+                }
+                _ => None,
+            };
+            let value = match finished {
+                Some(value) => {
+                    open.pop();
+                    value
+                }
+                None => {
+                    if open.len() > MAX_DEPTH {
+                        return Err(ReadError::new(
+                            Problem::Unsupported,
+                            "Objects are nested too deeply.",
+                        ));
+                    }
+                    self.skip_white_space();
+                    match self.peek(0) {
+                        0x5B => {
+                            self.pos += 1;
+                            open.push(Open::Array(Vec::new()));
+                            continue;
+                        }
+                        0x3C if self.peek(1) == b'<' as i32 => {
+                            self.pos += 2;
+                            open.push(Open::Dict(Dict::new(), Pending::Nothing));
+                            continue;
+                        }
+                        _ => self.read_simple()?,
+                    }
+                }
+            };
+            match open.last_mut() {
+                None => return Ok(value),
+                Some(Open::Array(items)) => items.push(value),
+                Some(Open::Dict(dict, pending)) => {
+                    if let Pending::Key(key) = std::mem::replace(pending, Pending::Nothing) {
+                        dict.add(Name(key), value);
+                    }
+                }
+            }
+        }
     }
 
-    fn read_at(&mut self, depth: usize, allow_stream: bool) -> Result<Object, ReadError> {
-        if depth > MAX_DEPTH {
-            return Err(ReadError::new(
-                Problem::Unsupported,
-                "Objects are nested too deeply.",
-            ));
+    // None: the next element starts here.
+    fn step_array(&mut self, items: &mut Vec<Object>) -> Result<Option<Object>, ReadError> {
+        self.skip_white_space();
+        // A missing ] is made up for.
+        if self.peek(0) == b']' as i32 {
+            self.pos += 1;
+        } else if self.peek(0) == -1 {
+            return Err(ReadError::damaged("An array is not closed."));
+        } else if !self.at_object_end() {
+            return Ok(None);
         }
+        Ok(Some(Object::Array(std::mem::take(items))))
+    }
+
+    fn step_dict(
+        &mut self,
+        dict: &mut Dict,
+        pending: &mut Pending,
+        stream_ok: bool,
+    ) -> Result<Step, ReadError> {
+        self.skip_white_space();
+        let closed = self.peek(0) == b'>' as i32 && self.peek(1) == b'>' as i32;
+        if closed {
+            self.pos += 2;
+        }
+        // So is a missing >>.
+        if closed || self.at_object_end() {
+            let dict = std::mem::replace(dict, Dict::new());
+            if stream_ok && let Some(data_offset) = self.at_stream_keyword() {
+                return Ok(Step::Value(Object::Stream(Stream {
+                    dict,
+                    data_offset: Some(data_offset),
+                    data: None,
+                    number: 0,
+                    generation: 0,
+                })));
+            }
+            return Ok(Step::Value(Object::Dict(dict)));
+        }
+        if self.peek(0) == -1 {
+            return Err(ReadError::damaged("A dictionary is not closed."));
+        }
+        if self.peek(0) != b'/' as i32 {
+            // Something that is not a key (seen in the wild): read past it.
+            *pending = Pending::Junk;
+            return Ok(Step::Read);
+        }
+        self.pos += 1;
+        let key = self.read_name_body();
+        self.skip_white_space();
+        // A key without a value before the end (seen in the wild) reads as null.
+        if self.peek(0) == b'>' as i32 && self.peek(1) == b'>' as i32 {
+            dict.add(Name(key), Object::Null);
+            return Ok(Step::Again);
+        }
+        *pending = Pending::Key(key);
+        Ok(Step::Read)
+    }
+
+    /// An object that holds no others: a name, string, number, reference or keyword.
+    fn read_simple(&mut self) -> Result<Object, ReadError> {
         self.skip_white_space();
         let b = self.peek(0);
         match b {
@@ -135,67 +238,6 @@ impl<'a> Lexer<'a> {
                     bytes: self.read_literal_body()?,
                     hex: false,
                 }));
-            }
-            0x5B => {
-                self.pos += 1;
-                let mut items = Vec::new();
-                loop {
-                    self.skip_white_space();
-                    if self.peek(0) == b']' as i32 {
-                        self.pos += 1;
-                        break;
-                    }
-                    if self.peek(0) == -1 {
-                        return Err(ReadError::damaged("An array is not closed."));
-                    }
-                    if self.at_object_end() {
-                        break; // a missing ] is made up for
-                    }
-                    items.push(self.read_at(depth + 1, false)?);
-                }
-                return Ok(Object::Array(items));
-            }
-            0x3C if self.peek(1) == b'<' as i32 => {
-                self.pos += 2;
-                let mut dict = Dict::new();
-                loop {
-                    self.skip_white_space();
-                    if self.peek(0) == b'>' as i32 && self.peek(1) == b'>' as i32 {
-                        self.pos += 2;
-                        break;
-                    }
-                    if self.at_object_end() {
-                        break; // so is a missing >>
-                    }
-                    if self.peek(0) == -1 {
-                        return Err(ReadError::damaged("A dictionary is not closed."));
-                    }
-                    if self.peek(0) != b'/' as i32 {
-                        // Something that is not a key (seen in the wild): read past it.
-                        self.read_at(depth + 1, false)?;
-                        continue;
-                    }
-                    self.pos += 1;
-                    let key = self.read_name_body();
-                    self.skip_white_space();
-                    // A key without a value before the end (seen in the wild) reads as null.
-                    let value = if self.peek(0) == b'>' as i32 && self.peek(1) == b'>' as i32 {
-                        Object::Null
-                    } else {
-                        self.read_at(depth + 1, false)?
-                    };
-                    dict.add(Name(key), value);
-                }
-                if allow_stream && let Some(data_offset) = self.at_stream_keyword() {
-                    return Ok(Object::Stream(Stream {
-                        dict,
-                        data_offset: Some(data_offset),
-                        data: None,
-                        number: 0,
-                        generation: 0,
-                    }));
-                }
-                return Ok(Object::Dict(dict));
             }
             0x3C => {
                 self.pos += 1;
@@ -392,6 +434,23 @@ impl<'a> Lexer<'a> {
         }
         Ok(bytes)
     }
+}
+
+enum Pending {
+    Nothing,
+    Key(Vec<u8>),
+    Junk,
+}
+
+enum Open {
+    Array(Vec<Object>),
+    Dict(Dict, Pending),
+}
+
+enum Step {
+    Value(Object),
+    Read,
+    Again,
 }
 
 fn hex_value(c: i32) -> Option<i32> {

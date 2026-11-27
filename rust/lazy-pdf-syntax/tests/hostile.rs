@@ -725,16 +725,16 @@ fn jbig2_globals_are_not_inflated_again_for_each_image() {
 #[test]
 fn the_deepest_allowed_nesting_fits_the_documented_stack() {
     std::thread::Builder::new()
-        .stack_size(4 << 20)
+        .stack_size(1 << 20)
         .spawn(|| {
-            let nested = format!("{}{}", "[".repeat(190), "]".repeat(190));
+            let nested = format!("{}{}", "[".repeat(199), "]".repeat(199));
             let mut pdf = TestPdf::with_header(
                 "%PDF-1.5
 ",
             );
             pdf.obj(1, &format!("<</Type /Catalog /Pages 2 0 R /A {nested}>>"));
             let mut parent = 2;
-            for k in 0..60u32 {
+            for k in 0..250u32 {
                 let kid = 3 + k;
                 pdf.obj(
                     parent,
