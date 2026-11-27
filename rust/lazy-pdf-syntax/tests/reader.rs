@@ -272,3 +272,47 @@ fn a_root_that_names_another_reference_is_still_a_file_that_saves_and_reopens() 
         assert_eq!(reopened.pages().len(), 1, "packed {packed}");
     }
 }
+
+#[test]
+fn a_root_behind_two_references_keeps_what_its_catalog_holds() {
+    let mut pdf = TestPdf::new();
+    pdf.obj(9, "8 0 R")
+        .obj(8, "1 0 R")
+        .obj(
+            1,
+            "<</Type /Catalog /Pages 99 0 R /AcroForm <</Fields []>> /Names <<>>>>",
+        )
+        .obj(2, "<</Type /Pages /Kids [3 0 R] /Count 1>>")
+        .obj(3, "<</Type /Page /Parent 2 0 R>>");
+    let mut document = open(pdf.finish_with("/Root 9 0 R", 0, "99999999"));
+    assert_eq!(document.pages().len(), 1);
+    let catalog = document.catalog().unwrap();
+    let Object::Dict(catalog) = &*catalog else {
+        panic!("{catalog}")
+    };
+    assert!(catalog.contains_key("AcroForm"));
+    assert!(catalog.contains_key("Names"));
+}
+
+#[test]
+fn catalogs_in_an_object_stream_are_tried_in_the_order_they_are_listed() {
+    let bodies = [
+        "<</Type /Catalog /Pages 20 0 R>>",
+        "<</Type /Catalog /Pages 21 0 R>>",
+    ];
+    let header = format!("12 0 3 {} ", bodies[0].len() + 1);
+    let body = format!("{}\n{}\n", bodies[0], bodies[1]);
+    let mut pdf = TestPdf::with_header("%PDF-1.5\n");
+    pdf.obj(20, "<</Type /Pages /Kids [22 0 R] /Count 1>>")
+        .obj(21, "<</Type /Pages /Kids [23 0 R 24 0 R] /Count 2>>")
+        .obj(22, "<</Type /Page /Parent 20 0 R>>")
+        .obj(23, "<</Type /Page /Parent 21 0 R>>")
+        .obj(24, "<</Type /Page /Parent 21 0 R>>")
+        .stream(
+            10,
+            &format!("/Type /ObjStm /N 2 /First {}", header.len()),
+            &format!("{header}{body}"),
+        );
+    let mut document = open(pdf.finish_without_xref());
+    assert_eq!(document.pages().len(), 2);
+}

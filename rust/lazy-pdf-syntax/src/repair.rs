@@ -2,13 +2,15 @@
 //! built from what is there, the newest definition of an object winning. One pass over the bytes; a stream is skipped
 //! by its length or its "endstream", so nothing is looked at twice.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
 use crate::document::{Document, Entry, MAX_OBJECT_NUMBER};
 use crate::error::ReadError;
 use crate::lexer::{Lexer, is_regular, is_white_space};
 use crate::object::{Dict, Object, Ref};
+
+const MAX_ROOT_HOPS: usize = 32;
 
 /// What a scan of the whole file found.
 #[derive(Default)]
@@ -211,6 +213,9 @@ impl Document {
             (scan.highest as i64 + 1).max(size.min(MAX_OBJECT_NUMBER as i64)) as u32;
 
         self.check_not_encrypted()?;
+        // Members of object streams in the order met, for the catalog search.
+        let mut stored: Vec<u32> = Vec::new();
+        let mut met: HashSet<u32> = scan.objects.keys().copied().collect();
         for &stream_number in &scan.object_streams {
             let Some(members) = self
                 .load_object_stream(stream_number)
@@ -226,12 +231,15 @@ impl Document {
                 self.entries
                     .insert(number, Entry::compressed(stream_number));
                 written.insert(number, at);
+                if met.insert(number) {
+                    stored.push(number);
+                }
                 self.next_object_number = self.next_object_number.max(number + 1);
             }
         }
 
         if !self.catalog_usable() {
-            self.find_catalog(&scan)?;
+            self.find_catalog(&scan, &stored)?;
         }
         let size = self.next_object_number as i64;
         self.trailer.insert("Size", Object::int(size));
@@ -239,16 +247,11 @@ impl Document {
     }
 
     /// A catalog the trailer did not name, or failing that one made from the page tree that is there.
-    fn find_catalog(&mut self, scan: &Scan) -> Result<(), ReadError> {
+    fn find_catalog(&mut self, scan: &Scan, stored: &[u32]) -> Result<(), ReadError> {
         let mut candidates = scan.catalogs.clone();
         // A catalog in an object stream is not in the scan: look at the stored ones if no plain one will do.
         if !candidates.iter().any(|n| self.has_pages(*n)) {
-            candidates.extend(
-                self.entries
-                    .iter()
-                    .filter(|(_, e)| e.kind == crate::document::EntryKind::Compressed)
-                    .map(|(n, _)| *n),
-            );
+            candidates.extend_from_slice(stored);
         }
         for &number in candidates.iter().rev() {
             let is_catalog = match self.get(number).as_deref() {
@@ -304,26 +307,36 @@ impl Document {
             return Err(ReadError::damaged("The file has no catalog and no pages."));
         };
 
-        // A catalog is amended only where it is itself a dictionary; a /Root that is a reference to a reference
-        // would take the page tree nowhere that is read back.
-        let root = self.trailer.get("Root").cloned();
-        match root {
-            Some(Object::Ref(r))
-                if matches!(self.get(r.number).as_deref(), Some(Object::Dict(_))) =>
-            {
-                if let Some(Object::Dict(existing)) = self.get_mut(r.number) {
-                    existing.insert("Pages", Object::Ref(tree));
+        // The catalog is where the /Root chain ends; it is amended only if that is a dictionary other than the tree.
+        let mut root = self.trailer.get("Root").cloned();
+        if let Some(Object::Ref(r)) = &root {
+            let mut number = r.number;
+            for _ in 0..MAX_ROOT_HOPS {
+                match self.get(number).as_deref() {
+                    Some(Object::Ref(next)) => number = next.number,
+                    _ => break,
                 }
+            }
+            let amend = match self.get(number).as_deref() {
+                Some(Object::Dict(d)) => {
+                    number != tree.number
+                        || d.get("Type")
+                            .is_some_and(|t| t.as_name().is_some_and(|n| n.is("Catalog")))
+                }
+                _ => false,
+            };
+            if amend && let Some(Object::Dict(existing)) = self.get_mut(number) {
+                existing.insert("Pages", Object::Ref(tree));
                 self.add_repair("The catalog had no page tree; set it to the one found.".into());
                 return Ok(());
             }
-            Some(Object::Dict(mut direct)) => {
-                direct.insert("Pages", Object::Ref(tree));
-                self.trailer.insert("Root", Object::Dict(direct));
-                self.add_repair("The catalog had no page tree; set it to the one found.".into());
-                return Ok(());
-            }
-            _ => {}
+            root = None;
+        }
+        if let Some(Object::Dict(mut direct)) = root {
+            direct.insert("Pages", Object::Ref(tree));
+            self.trailer.insert("Root", Object::Dict(direct));
+            self.add_repair("The catalog had no page tree; set it to the one found.".into());
+            return Ok(());
         }
         let mut made = Dict::new();
         made.add(crate::object::Name::new("Type"), Object::name("Catalog"));
