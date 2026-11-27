@@ -1,7 +1,8 @@
 #![no_main]
 
-use lazy_pdf_syntax::{DecodeError, Document, Filters, Object, Parm, SaveOptions};
+use lazy_pdf_syntax::{DecodeError, Document, EntryKind, Filters, Object, Parm, SaveOptions};
 use libfuzzer_sys::fuzz_target;
+use std::collections::HashSet;
 
 /// Flate and nothing else, with output capped far below the library's own limit so a bomb costs little.
 struct Flate;
@@ -27,6 +28,37 @@ impl Filters for Flate {
     fn flate(&self, data: &[u8]) -> Vec<u8> {
         miniz_oxide::deflate::compress_to_vec_zlib(data, 1)
     }
+}
+
+fn reachable_from_trailer(document: &mut Document) -> HashSet<u32> {
+    fn refs(object: &Object, found: &mut Vec<u32>) {
+        match object {
+            Object::Ref(r) => found.push(r.number),
+            Object::Array(items) => items.iter().for_each(|i| refs(i, found)),
+            Object::Dict(d) => d.entries().iter().for_each(|(_, v)| refs(v, found)),
+            Object::Stream(s) => s.dict.entries().iter().for_each(|(_, v)| refs(v, found)),
+            _ => {}
+        }
+    }
+    let mut todo = Vec::new();
+    for (_, value) in document.trailer().entries() {
+        refs(value, &mut todo);
+    }
+    let mut seen = HashSet::new();
+    while let Some(number) = todo.pop() {
+        if seen.len() < 100_000
+            && seen.insert(number)
+            && let Some(object) = document.get(number)
+        {
+            refs(&object, &mut todo);
+            if let Some(entry) = document.entry(number)
+                && entry.kind == EntryKind::Compressed
+            {
+                todo.push(entry.stream_number);
+            }
+        }
+    }
+    seen
 }
 
 fuzz_target!(|data: &[u8]| {
@@ -67,10 +99,13 @@ fuzz_target!(|data: &[u8]| {
         _ => false,
     });
     let added = document.add(Object::int(42)).ok();
+    // Only an object nothing reachable names is freed: losing the page tree, or an object stream with members in
+    // it, is a change the file does not survive.
+    let reachable = reachable_from_trailer(&mut document);
     let freed = document
         .object_numbers()
         .into_iter()
-        .find(|n| Some(*n) != root && Some(*n) != added.map(|r| r.number));
+        .find(|n| !reachable.contains(n) && Some(*n) != added.map(|r| r.number));
     if let Some(number) = freed {
         document.delete(number);
     }
