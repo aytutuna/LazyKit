@@ -207,3 +207,39 @@ async fn a_reply_still_arrives_after_the_request_is_shut_down() {
     assert_eq!(reply, b"reply");
     assert_eq!(server.await.unwrap(), b"request");
 }
+
+#[tokio::test(flavor = "multi_thread")]
+#[ignore = "needs the relay on RELAY_URL"]
+async fn a_host_that_writes_and_drops_still_delivers_everything() {
+    let (a, b, room) = pair();
+    let mut host = a.host(&room).await.unwrap();
+    let body = pattern(WINDOW_FRAMES * MAX_FRAME + 256 * 1024 + 100_000, 3);
+    let want = Sha256::digest(&body);
+    let len = body.len();
+    let server = tokio::spawn(async move {
+        let mut s = host.accept().await.unwrap();
+        s.write_all(&body).await.unwrap();
+        s.shutdown().await.unwrap();
+    });
+    let mut s = b.connect(&room).await.unwrap();
+    server.await.unwrap();
+    // The host is gone; a slow reader still gets every byte and a normal end.
+    let mut got = Vec::new();
+    let mut buf = vec![0u8; 16 * 1024];
+    loop {
+        let n = timeout(Duration::from_secs(20), s.read(&mut buf))
+            .await
+            .unwrap()
+            .unwrap();
+        if n == 0 {
+            break;
+        }
+        got.extend_from_slice(&buf[..n]);
+        if got.len() % (64 * 1024) < n {
+            tokio::time::sleep(Duration::from_millis(2)).await;
+        }
+    }
+    assert_eq!(got.len(), len);
+    assert_eq!(Sha256::digest(&got), want);
+    assert_eq!(s.close_code(), Some(1000));
+}
