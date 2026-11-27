@@ -5,6 +5,7 @@ on:
     branches: [main, 'ci/**']
     paths:
       - rust/Cargo.toml
+      - rust/Cargo.lock
       - rust/lazy-pdf-filters/**
       - testdata/pdf-filters/**
       - .github/workflows/pdf-filters-fuzz.yml
