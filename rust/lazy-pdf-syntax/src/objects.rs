@@ -310,13 +310,10 @@ impl Document {
         let at = self
             .load_object_stream(entry.stream_number)
             .and_then(|objects| {
-                objects
-                    .offsets
-                    .get(&number)
-                    .map(|at| {
-                        let next = objects.starts.partition_point(|s| s <= at);
-                        (objects.data.clone(), *at, objects.starts.get(next).copied())
-                    })
+                objects.offsets.get(&number).map(|at| {
+                    let next = objects.starts.partition_point(|s| s <= at);
+                    (objects.data.clone(), *at, objects.starts.get(next).copied())
+                })
             });
         let Some((data, at, next)) = at else {
             self.add_repair(format!(

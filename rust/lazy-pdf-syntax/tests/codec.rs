@@ -108,6 +108,14 @@ fn the_stages_of_a_chain_share_one_output_budget() {
     let file = image_file(&format!("/Filter [{names}]"), &vec![0xFF; 100_000]);
     let mut document = lazy_pdf_syntax::Document::open(file, Box::new(Same)).unwrap();
     let stream = stream_20(&mut document);
-    assert!(document.stream_data_limited(&stream, 200_000, false).is_err());
-    assert!(document.stream_data_limited(&stream, 1_000_000, false).is_ok());
+    assert!(
+        document
+            .stream_data_limited(&stream, 200_000, false)
+            .is_err()
+    );
+    assert!(
+        document
+            .stream_data_limited(&stream, 1_000_000, false)
+            .is_ok()
+    );
 }

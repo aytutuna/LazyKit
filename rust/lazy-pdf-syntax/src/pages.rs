@@ -105,8 +105,13 @@ struct Walk {
 
 /// How much a copy of the value costs: one for each object in it.
 fn weight(object: &Object) -> usize {
-    let dict_weight =
-        |dict: &Dict| 1 + dict.entries().iter().map(|(_, v)| 1 + weight(v)).sum::<usize>();
+    let dict_weight = |dict: &Dict| {
+        1 + dict
+            .entries()
+            .iter()
+            .map(|(_, v)| 1 + weight(v))
+            .sum::<usize>()
+    };
     match object {
         Object::Array(items) => 1 + items.iter().map(weight).sum::<usize>(),
         Object::Dict(dict) => dict_weight(dict),

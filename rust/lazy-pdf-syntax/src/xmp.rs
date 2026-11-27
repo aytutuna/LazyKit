@@ -136,9 +136,10 @@ fn parse(xml: &str) -> Option<(Option<String>, Option<String>)> {
                     && bound(&bindings, prefix).is_none()
             };
             if unbound(name.split_once(':').map_or("", |(prefix, _)| prefix))
-                || attributes
-                    .iter()
-                    .any(|(key, _)| key.split_once(':').is_some_and(|(prefix, _)| unbound(prefix)))
+                || attributes.iter().any(|(key, _)| {
+                    key.split_once(':')
+                        .is_some_and(|(prefix, _)| unbound(prefix))
+                })
             {
                 return None;
             }

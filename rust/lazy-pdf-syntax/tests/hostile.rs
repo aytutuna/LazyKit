@@ -521,14 +521,21 @@ fn many_listed_objects_that_run_to_the_end_of_the_data_are_not_each_parsed_to_it
         use_object_streams: false,
         document_id: None,
     });
-    assert_eq!(open(saved.bytes).pages().len(), 1, "{:?}", document.repairs().iter().take(3).collect::<Vec<_>>());
+    assert_eq!(
+        open(saved.bytes).pages().len(),
+        1,
+        "{:?}",
+        document.repairs().iter().take(3).collect::<Vec<_>>()
+    );
     must_finish_within(Duration::from_secs(20), started);
 }
 
 #[test]
 fn many_members_that_run_to_the_end_of_their_object_stream_are_not_each_parsed_to_it() {
     let count = 20_000;
-    let header: String = (0..count).map(|i| format!("{} {} ", 10 + i, i * 100)).collect();
+    let header: String = (0..count)
+        .map(|i| format!("{} {} ", 10 + i, i * 100))
+        .collect();
     let body = "(".repeat(count * 100 + 1000);
     let refs: String = (10..10 + count).map(|n| format!("{n} 0 R ")).collect();
     let mut pdf = TestPdf::with_header("%PDF-1.5\n");

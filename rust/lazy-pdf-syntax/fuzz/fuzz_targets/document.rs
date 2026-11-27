@@ -80,7 +80,10 @@ fuzz_target!(|data: &[u8]| {
     assert!(saved.len() >= data.len().min(document.length()));
     let mut reopened = Document::open(saved, Box::new(Flate)).expect("an update reopens");
     if let Some(added) = added {
-        assert_eq!(reopened.get(added.number).as_deref(), Some(&Object::int(42)));
+        assert_eq!(
+            reopened.get(added.number).as_deref(),
+            Some(&Object::int(42))
+        );
     }
     if marked && let Some(Object::Dict(catalog)) = reopened.catalog().as_deref() {
         assert_eq!(catalog.get("FuzzMark"), Some(&Object::int(7)));
