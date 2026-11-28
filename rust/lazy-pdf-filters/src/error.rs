@@ -4,6 +4,8 @@ use std::fmt;
 pub enum Problem {
     Damaged,
     Unsupported,
+    /// The output or a table would pass the limit the caller gave.
+    TooBig,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -30,7 +32,10 @@ impl FilterError {
     }
 
     pub fn too_big() -> Self {
-        Self::unsupported("A stream expands past the size limit.")
+        Self {
+            problem: Problem::TooBig,
+            message: "A stream expands past the size limit.".into(),
+        }
     }
 }
 

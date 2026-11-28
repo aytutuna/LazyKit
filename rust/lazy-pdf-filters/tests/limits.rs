@@ -6,7 +6,7 @@ fn one(name: &str) -> [Filter; 1] {
 
 fn too_big(result: lazy_pdf_filters::Result<Vec<u8>>) {
     let e = result.unwrap_err();
-    assert_eq!(e.problem, Problem::Unsupported);
+    assert_eq!(e.problem, Problem::TooBig);
     assert_eq!(e.message, "A stream expands past the size limit.");
 }
 
@@ -158,7 +158,7 @@ fn jbig2_many_custom_tables_are_charged_to_the_budget() {
         data.extend(segment(number, 53, &body));
     }
     let e = jbig2(&data, 0, 0).unwrap_err();
-    assert_eq!(e.problem, Problem::Unsupported);
+    assert_eq!(e.problem, Problem::TooBig);
 }
 
 #[test]

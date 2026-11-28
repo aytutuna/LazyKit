@@ -26,6 +26,15 @@ pub enum DecodeError {
     TooLarge(String),
 }
 
+/// What the document layer needs from the filter layer, as an adapter over lazy-pdf-filters makes it:
+///
+/// - `lazy_pdf_filters::Problem::Damaged` is `DecodeError::Damaged`.
+/// - `Problem::TooBig` (the output or a table would pass the limit) is `DecodeError::TooLarge`. The budgets in
+///   this crate rely on it: a decode that hits its limit is charged in full.
+/// - `Problem::Unsupported` (an unknown filter, an image codec in the chain) is `DecodeError::Unsupported`.
+///
+/// `max_size` is passed through as the filter layer's limit. The document layer charges a failed decode for the
+/// bytes the earlier stages of the chain produced, so a failure costs the same whatever its kind.
 pub trait Filters: Send + Sync {
     /// One stage of a filter chain: `filter` as the file names it (abbreviations included), the stage's
     /// `/DecodeParms` entries, the data in. The result may not pass `max_size` bytes. With `strict` a Flate

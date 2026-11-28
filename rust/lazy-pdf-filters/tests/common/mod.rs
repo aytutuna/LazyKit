@@ -58,7 +58,7 @@ pub fn show(data: &[u8]) -> String {
 pub fn show_error(e: &FilterError) -> String {
     let problem = match e.problem {
         Problem::Damaged => "damaged",
-        Problem::Unsupported => "unsupported",
+        Problem::Unsupported | Problem::TooBig => "unsupported",
     };
     format!("error {problem}: {}", e.message)
 }
