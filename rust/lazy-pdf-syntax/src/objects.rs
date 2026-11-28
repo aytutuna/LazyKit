@@ -318,16 +318,25 @@ impl Document {
     fn next_object_start(&self, offset: u64) -> u64 {
         let mut cache = self.object_starts.borrow_mut();
         let starts = cache.get_or_insert_with(|| {
-            // Once a scan exists its offsets are real headers; the listed ones may be wrong.
-            let mut starts: Vec<u64> = match &self.scan {
-                Some(scan) => scan.objects.values().map(|o| o.0 as u64).collect(),
-                None => self
-                    .entries
-                    .values()
-                    .filter(|e| e.kind == EntryKind::InUse)
-                    .map(|e| e.offset)
-                    .collect(),
-            };
+            // Listed offsets count only where the header there is the listed object's own; a wrong one would
+            // cut a neighbour short. The scan's offsets are real headers.
+            let mut starts: Vec<u64> = self
+                .entries
+                .iter()
+                .filter(|(number, e)| {
+                    e.kind == EntryKind::InUse
+                        && (e.offset as usize) < self.data.len()
+                        && Lexer::new(&self.data, e.offset as usize)
+                            .read_object_header()
+                            .is_ok_and(|(found, _)| found == **number)
+                })
+                .map(|(_, e)| e.offset)
+                .chain(
+                    self.scan
+                        .iter()
+                        .flat_map(|s| s.objects.values().map(|o| o.0 as u64)),
+                )
+                .collect();
             starts.sort_unstable();
             starts.dedup();
             starts
@@ -437,9 +446,8 @@ impl Document {
         let data = match self.stream_data_limited(stream, cap, false) {
             Ok(data) => data,
             Err(e) => {
-                // A decode cut short by the shared budget did its work: charge it, or a scan finding many
-                // streams pays the whole remainder for each of them.
-                if fresh && cap < MAX_OBJECT_STREAM_SIZE {
+                // A decode that ran into its size limit did that much work; other failures stop early.
+                if fresh && e.too_large {
                     self.first_object_stream_bytes += cap;
                 }
                 self.bad_object_streams.insert(number);

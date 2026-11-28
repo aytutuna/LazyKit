@@ -121,14 +121,14 @@ impl Document {
             && let Some((_, length)) = self.raw_span(stream)
             && length > max_size
         {
-            return Err(ReadError::damaged("The stream is longer than the limit."));
+            return Err(ReadError::too_large("The stream is longer than the limit."));
         }
         let mut data = self.raw_data(stream);
         let mut output = 0usize;
         for stage in stages {
             if stop_at_codec && is_codec(&stage.filter) {
                 if data.len() > max_size {
-                    return Err(ReadError::damaged("The stream is longer than the limit."));
+                    return Err(ReadError::too_large("The stream is longer than the limit."));
                 }
                 let mut codec = stage;
                 if codec.filter == b"DCT" {
@@ -157,18 +157,19 @@ impl Document {
                 .decode(&stage.filter, &stage.parms, &data, max_size, strict)
                 .map_err(|e| match e {
                     DecodeError::Damaged(detail) => ReadError::damaged(detail),
+                    DecodeError::TooLarge(detail) => ReadError::too_large(detail),
                     DecodeError::Unsupported(detail) => {
                         ReadError::new(Problem::Unsupported, detail)
                     }
                 })?;
             output = output.saturating_add(data.len());
             if output > max_size.saturating_mul(CHAIN_OUTPUT_FACTOR) {
-                return Err(ReadError::damaged("The filters produce too much data."));
+                return Err(ReadError::too_large("The filters produce too much data."));
             }
         }
         // A stream with no filter, or only /Identity, is not held to the limit by any filter.
         if data.len() > max_size {
-            return Err(ReadError::damaged("The stream is longer than the limit."));
+            return Err(ReadError::too_large("The stream is longer than the limit."));
         }
         Ok(Decoded { data, codec: None })
     }
@@ -268,13 +269,14 @@ impl Document {
                 .decode(&stage.filter, &stage.parms, &data, limit, false)
                 .map_err(|e| match e {
                     DecodeError::Damaged(detail) => ReadError::damaged(detail),
+                    DecodeError::TooLarge(detail) => ReadError::too_large(detail),
                     DecodeError::Unsupported(detail) => {
                         ReadError::new(Problem::Unsupported, detail)
                     }
                 })?;
         }
         if data.len() > limit {
-            return Err(ReadError::damaged("A JBIG2 globals stream is too large."));
+            return Err(ReadError::too_large("A JBIG2 globals stream is too large."));
         }
         if globals.number != 0 {
             let held: usize = self.globals.values().map(|d| d.len()).sum();

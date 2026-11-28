@@ -11,6 +11,8 @@ pub enum Problem {
     Encrypted,
     /// The file uses something this reader does not handle.
     Unsupported,
+    /// A stream or its output passes the size limit it was read under.
+    TooLarge,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -18,6 +20,8 @@ pub struct ReadError {
     pub problem: Problem,
     /// Technical, one char per byte where it quotes the file.
     pub detail: String,
+    /// The stream or its output passed the size limit it was read under. The problem is still `Damaged`.
+    pub too_large: bool,
 }
 
 impl ReadError {
@@ -25,6 +29,14 @@ impl ReadError {
         Self {
             problem,
             detail: detail.into(),
+            too_large: false,
+        }
+    }
+
+    pub fn too_large(detail: impl Into<String>) -> Self {
+        Self {
+            too_large: true,
+            ..Self::damaged(detail)
         }
     }
 
@@ -40,6 +52,7 @@ impl fmt::Display for Problem {
             Problem::Damaged => "Damaged",
             Problem::Encrypted => "Encrypted",
             Problem::Unsupported => "Unsupported",
+            Problem::TooLarge => "TooLarge",
         })
     }
 }

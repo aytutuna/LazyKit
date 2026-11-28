@@ -22,6 +22,8 @@ pub enum DecodeError {
     Damaged(String),
     /// The filter is not supported, or is an image codec.
     Unsupported(String),
+    /// The output would pass `max_size`.
+    TooLarge(String),
 }
 
 pub trait Filters: Send + Sync {

@@ -1102,3 +1102,49 @@ fn objects_listed_late_are_found_once_the_parse_budget_is_spent() {
     let (found, _) = misplaced(10_000, 1);
     assert_eq!(found, 10_000);
 }
+
+#[test]
+fn object_streams_that_run_into_the_size_limit_are_charged_for_the_work() {
+    let mut data = b"900 0 ".to_vec();
+    data.resize((64 << 20) + 4096, b' ');
+    let packed = deflate(&data);
+    let mut pdf = TestPdf::with_pages(1);
+    for n in 20..40 {
+        pdf.stream_with(
+            n,
+            "/Type /ObjStm /N 1 /First 6 /Filter /FlateDecode",
+            &packed,
+            None,
+            true,
+        );
+    }
+    let started = Instant::now();
+    let document = open(pdf.finish_without_xref());
+    let refused = document
+        .repairs()
+        .iter()
+        .filter(|r| r.contains("decode to too much"))
+        .count();
+    assert!(refused > 0, "{:?}", document.repairs().len());
+    must_finish_within(Duration::from_secs(20), started);
+}
+
+#[test]
+fn one_object_stream_that_does_not_decode_does_not_refuse_the_next() {
+    let mut big = b"900 0 ".to_vec();
+    big.resize(40 << 20, b' ');
+    let mut pdf = TestPdf::with_pages(1);
+    let header = "/Type /ObjStm /N 1 /First 6 /Filter /FlateDecode";
+    pdf.stream_with(20, header, &deflate(&big), None, true);
+    pdf.stream_with(21, header, b"not zlib", None, true);
+    pdf.stream_with(22, header, &deflate(b"901 0 null"), None, true);
+    let document = open(pdf.finish_without_xref());
+    assert!(
+        !document
+            .repairs()
+            .iter()
+            .any(|r| r.contains("decode to too much")),
+        "{:?}",
+        document.repairs()
+    );
+}

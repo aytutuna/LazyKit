@@ -73,10 +73,15 @@ impl Filters for TestFilters {
         _strict: bool,
     ) -> Result<Vec<u8>, DecodeError> {
         match filter {
-            b"FlateDecode" | b"Fl" => {
-                miniz_oxide::inflate::decompress_to_vec_zlib_with_limit(data, max_size)
-                    .map_err(|e| DecodeError::Damaged(format!("{:?}", e.status)))
-            }
+            b"FlateDecode" | b"Fl" => miniz_oxide::inflate::decompress_to_vec_zlib_with_limit(
+                data, max_size,
+            )
+            .map_err(|e| match e.status {
+                miniz_oxide::inflate::TINFLStatus::HasMoreOutput => {
+                    DecodeError::TooLarge("The data passes the size limit.".into())
+                }
+                status => DecodeError::Damaged(format!("{status:?}")),
+            }),
             other => Err(DecodeError::Unsupported(format!(
                 "The /{} filter is not supported.",
                 String::from_utf8_lossy(other)
