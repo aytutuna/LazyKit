@@ -73,18 +73,20 @@ const reauth = (r: "ok" | "bad" | "locked" | "need-fresh") =>
 
 // Requests that make the service send mail come from a person's app or browser: a Turnstile token,
 // or an App Attest or Play Integrity proof made for a nonce this server issued.
-async function botCheck(env: Cloudflare.Env, svc: AccountService, body: Record<string, unknown>, ip: string | null): Promise<Response | undefined> {
+async function botCheck(env: Cloudflare.Env, svc: AccountService, body: Record<string, unknown>, ip: string | null, action: string): Promise<Response | undefined> {
   try {
     const proof = body.attest;
     if (proof && typeof proof === "object") {
       const p = proof as Record<string, unknown>;
       const parsed = parseAttestation(p);
-      if (!parsed || !(await svc.spendNonce(p.nonce))) return fail("bot check failed", 403);
+      if (!parsed || !(await svc.nonceValid(p.nonce))) return fail("bot check failed", 403);
       const out = await verifyAttestation(env, p.nonce as string, parsed);
-      return out === "ok" ? undefined : out === "not-configured" ? fail("not configured", 501) : fail("bot check failed", 403);
+      if (out === "not-configured") return fail("not configured", 501);
+      // The nonce is spent only by a proof that checks out, so a bad one does not use up a good one.
+      return out === "ok" && (await svc.spendNonce(p.nonce)) ? undefined : fail("bot check failed", 403);
     }
     if (typeof body.turnstile !== "string" || body.turnstile === "") return fail("bot check needed", 403);
-    return (await (services().turnstile ?? cloudflareTurnstile(env)).verify(body.turnstile, ip)) ? undefined : fail("bot check failed", 403);
+    return (await (services().turnstile ?? cloudflareTurnstile(env)).verify(body.turnstile, ip, action)) ? undefined : fail("bot check failed", 403);
   } catch (e) {
     if (e instanceof NotConfiguredError) return fail("not configured", 501);
     throw e;
@@ -137,7 +139,7 @@ export async function accountApi(req: Request, env: Cloudflare.Env, path: string
     if (route === "POST email") {
       const slow = limited(startLimit);
       if (slow) return slow;
-      const bot = await botCheck(env, svc, body, ip);
+      const bot = await botCheck(env, svc, body, ip, route.slice(5));
       if (bot) return bot;
       const r = await svc.changeEmail(s, body.email, body.password);
       return r === "need-fresh" ? fail("sign in again first", 403) : r === "bad" ? fail("wrong password", 401) : r === "locked" ? fail("too many tries, try again later", 429, { "Retry-After": "900" }) : sentStatus(r);
@@ -151,7 +153,7 @@ export async function accountApi(req: Request, env: Cloudflare.Env, path: string
     if (route === "POST password/code") {
       const slow = limited(startLimit);
       if (slow) return slow;
-      const bot = await botCheck(env, svc, body, ip);
+      const bot = await botCheck(env, svc, body, ip, route.slice(5));
       if (bot) return bot;
       const r = await svc.passwordCode(s);
       return r === "bad" ? fail("the account already has a password", 400) : sentStatus(r);
@@ -170,7 +172,7 @@ export async function accountApi(req: Request, env: Cloudflare.Env, path: string
   if (route === "POST signup" || route === "POST code") {
     const slow = limited(startLimit);
     if (slow) return slow;
-    const bot = await botCheck(env, svc, body, ip);
+    const bot = await botCheck(env, svc, body, ip, route.slice(5));
     if (bot) return bot;
     return sentStatus(route === "POST signup" ? await svc.signup(body.email) : await svc.code(body.email));
   }

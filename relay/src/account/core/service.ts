@@ -162,6 +162,11 @@ export class AccountService {
     return `${body}.${await hmac(this.cfg.nonceKey, `lazy nonce v1\0${body}`)}`;
   }
 
+  // Whether a nonce is one this server issued and has not let lapse; nothing is spent.
+  async nonceValid(nonce: unknown): Promise<boolean> {
+    return typeof nonce === "string" && this.nonceGood(nonce);
+  }
+
   // True once for a nonce this server issued and has not seen spent; for bot checks that ask for a proof bound to one.
   async spendNonce(nonce: unknown): Promise<boolean> {
     if (typeof nonce !== "string" || !(await this.nonceGood(nonce))) return false;

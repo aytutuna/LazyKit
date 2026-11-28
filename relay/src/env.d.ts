@@ -23,6 +23,7 @@ declare namespace Cloudflare {
     ID_KEY?: string;
     MAIL_DAILY_CAP?: string;
     TURNSTILE_SECRET?: string;
+    TURNSTILE_HOSTNAMES?: string;
     RESEND_API_KEY?: string;
     MAIL_FROM?: string;
   }

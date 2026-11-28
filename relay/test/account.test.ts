@@ -161,6 +161,29 @@ describe("bot check over HTTP", () => {
     expect((await account("signup", "POST", { email: EMAIL })).status).toBe(501);
   });
 
+  it("asks for the action of the request it guards", async () => {
+    const seen: string[] = [];
+    tweak({ turnstile: { verify: async (_t, _ip, action) => (seen.push(action), true) } });
+    const token = await signUp(EMAIL, PASSWORD);
+    await account("code", "POST", { email: EMAIL });
+    await account("email", "POST", { email: who.other, password: PASSWORD }, token);
+    const t2 = await body(await account("signin", "POST", { email: EMAIL, password: PASSWORD, ...LOGIN, device: DEV_B }));
+    await account("password/code", "POST", {}, t2.token);
+    expect(seen).toEqual(["signup", "code", "email", "password/code"]);
+  });
+
+  it("does not spend a nonce on a proof that fails, so the right proof can still use it", async () => {
+    const make = (nonce: string) => ({ requestDetails: { requestPackageName: "com.lazysend.lazysend", nonce, timestampMillis: String(Date.now()) }, appIntegrity: { appRecognitionVerdict: "PLAY_RECOGNIZED", packageName: "com.lazysend.lazysend" }, deviceIntegrity: { deviceRecognitionVerdict: ["MEETS_DEVICE_INTEGRITY"] } });
+    const nonce = await newNonce();
+    let good = false;
+    tweak({ integrity: { decode: async () => (good ? make(nonce) : make("another")) } });
+    const go = () => exports.default.fetch("https://alazy.app/account/v1/signup", { method: "POST", body: JSON.stringify({ email: EMAIL, attest: { nonce, platform: "google", token: "tok" } }), headers: ipHeader });
+    expect((await go()).status).toBe(403);
+    good = true;
+    expect((await go()).status).toBe(202);
+    expect((await go()).status).toBe(403);
+  });
+
   it("takes an App Attest or Play Integrity proof for a nonce the server issued, once, instead of a token", async () => {
     const make = (nonce: string) => ({ requestDetails: { requestPackageName: "com.lazysend.lazysend", nonce, timestampMillis: String(Date.now()) }, appIntegrity: { appRecognitionVerdict: "PLAY_RECOGNIZED", packageName: "com.lazysend.lazysend" }, deviceIntegrity: { deviceRecognitionVerdict: ["MEETS_DEVICE_INTEGRITY"] } });
     tweak({ integrity: { decode: async () => make(current) } });
