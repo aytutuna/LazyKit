@@ -1,14 +1,11 @@
 import { DurableObject } from "cloudflare:workers";
 import { toBase64Url } from "./appattest";
-import { NotConfiguredError, ReceiptRejectedError, TokenGoneError, services, type Platform, type Store } from "./services";
-import { purchaseKey } from "./purchase";
-import { weekOf } from "./week";
+import { TokenGoneError, services, type Platform } from "./services";
 
-export const WEEKLY_CAP = 5_000_000_000;
+export { WEEKLY_CAP } from "./quota";
 export const MAX_DEVICES = 32;
 export const MAX_TOKEN = 4096;
 const CHALLENGE_BYTES = 32;
-const KEEP_WEEKS = 8;
 const WAKE_GAP_MS = 10_000;
 const DEVICE_KEEP_MS = 90 * 86_400_000;
 const VERIFIED_KEEP_MS = 90 * 86_400_000;
@@ -23,60 +20,75 @@ interface Device {
   seen: number;
 }
 
-export interface GroupStatus {
-  week: string;
-  used: number;
-  cap: number;
-  paidUntil: number;
-  paid: boolean;
-  capped: boolean;
-}
-
-// What the relay knows about one person's paired devices: this week's bytes,
-// the time a purchase lifts the cap until, and a push token per device. The
-// group is a random key the devices made when they first paired; it carries
-// no name or address.
+// One set of a person's paired devices, tied to the account that made it: a push token per device
+// and whether the app check has passed. The group is a random key the devices made when they first
+// paired; the weekly count and the paid time belong to the account, not to the group.
 export class Group extends DurableObject<Cloudflare.Env> {
-  private usage: Record<string, number> = {};
-  private paidUntil = 0;
+  private account?: string;
+  private id = "";
+  private appCheck = false;
   private devices: Record<string, Device> = {};
   private woken = new Map<string, number>();
   private verifiedAt = 0;
+  private seenAt = 0;
   // Kept in memory only: a group nobody has verified writes nothing, and a lost challenge costs one retry.
   private challenges = new Map<string, number>();
 
   constructor(ctx: DurableObjectState, env: Cloudflare.Env) {
     super(ctx, env);
     ctx.blockConcurrencyWhile(async () => {
-      const kept = await ctx.storage.get(["usage", "paidUntil", "devices", "verifiedAt"]);
-      this.verifiedAt = (kept.get("verifiedAt") as number | undefined) ?? 0;
-      this.usage = (kept.get("usage") as Record<string, number> | undefined) ?? {};
-      this.paidUntil = (kept.get("paidUntil") as number | undefined) ?? 0;
+      const kept = await ctx.storage.get(["account", "id", "appCheck", "devices", "verifiedAt", "seenAt"]);
+      this.account = kept.get("account") as string | undefined;
+      this.id = (kept.get("id") as string | undefined) ?? "";
+      this.appCheck = (kept.get("appCheck") as boolean | undefined) ?? false;
       this.devices = (kept.get("devices") as Record<string, Device> | undefined) ?? {};
+      this.verifiedAt = (kept.get("verifiedAt") as number | undefined) ?? 0;
+      this.seenAt = (kept.get("seenAt") as number | undefined) ?? 0;
     });
   }
 
-  // Adds forwarded bytes to the week they were sent in. Returns false once
-  // the group is over its cap, so the room can close its streams.
-  async record(bytes: number, now = Date.now()): Promise<boolean> {
-    const week = weekOf(now);
-    this.usage[week] = (this.usage[week] ?? 0) + bytes;
-    this.pruneUsage(now);
-    await this.ctx.storage.put("usage", this.usage);
-    await this.sweepSoon();
-    return !this.status(now).capped;
+  private quota() {
+    return this.env.QUOTAS.get(this.env.QUOTAS.idFromName(this.account!));
   }
 
-  private pruneUsage(now: number): boolean {
-    const oldest = weekOf(now - KEEP_WEEKS * 7 * 86_400_000);
-    let dropped = false;
-    for (const w of Object.keys(this.usage)) {
-      if (w < oldest) {
-        delete this.usage[w];
-        dropped = true;
-      }
+  // A group belongs to the first account that claims it. Apps that can prove themselves to the
+  // platform (iPhone, iPad, Android) say so, and then the group also needs the app check.
+  async claim(id: string, account: string, platform: "apple" | "google" | "desktop", now = Date.now()): Promise<"ok" | "other" | "limit"> {
+    if (this.account !== undefined && this.account !== account) return "other";
+    if (!(await this.env.QUOTAS.get(this.env.QUOTAS.idFromName(account)).addGroup(id))) return "limit";
+    this.account = account;
+    this.id = id;
+    this.appCheck ||= platform !== "desktop";
+    this.seenAt = now;
+    await this.ctx.storage.put({ account, id, appCheck: this.appCheck, seenAt: now });
+    await this.sweepSoon();
+    return "ok";
+  }
+
+  owner(): string | undefined {
+    return this.account;
+  }
+
+  // Passing the app check is only asked of groups made by the phone apps; a group that keeps asking
+  // stays known, so one that moves no bytes and has no push token is not forgotten by the sweep.
+  async admit(now = Date.now()): Promise<"ok" | "attest"> {
+    if (now - this.seenAt >= SEEN_REFRESH_MS) {
+      this.seenAt = now;
+      await this.ctx.storage.put("seenAt", now);
     }
-    return dropped;
+    return !this.appCheck || now - this.verifiedAt < VERIFIED_KEEP_MS ? "ok" : "attest";
+  }
+
+  // Adds forwarded bytes to the account's week. Returns false once the account is over its cap,
+  // so the room can close its streams.
+  async record(bytes: number, now = Date.now()): Promise<boolean> {
+    if (!this.account) return false;
+    return this.quota().record(bytes, now);
+  }
+
+  async status(now = Date.now()) {
+    if (!this.account) return { week: "", used: 0, cap: 0, paidUntil: 0, paid: false, capped: true, accountToken: "" };
+    return this.quota().status(now);
   }
 
   // A device that has not registered or connected for a long time is gone, so its token is
@@ -96,33 +108,19 @@ export class Group extends DurableObject<Cloudflare.Env> {
     if ((await this.ctx.storage.getAlarm()) === null) await this.ctx.storage.setAlarm(Date.now() + SWEEP_MS);
   }
 
-  // Forgets old weeks and devices; a group with nothing left to remember is deleted.
+  // Forgets old devices; a group nobody has used for a long time is deleted and the account lets go of it.
   async alarm(): Promise<void> {
     const now = Date.now();
-    if (this.pruneUsage(now)) await this.ctx.storage.put("usage", this.usage);
     await this.pruneDevices(now);
-    if (Object.keys(this.devices).length === 0 && Object.keys(this.usage).length === 0 && this.paidUntil <= now && !this.isFresh(now)) {
+    if (Object.keys(this.devices).length === 0 && now - this.seenAt >= VERIFIED_KEEP_MS) {
+      if (this.account) await this.quota().removeGroup(this.id);
       await this.ctx.storage.deleteAll();
-      this.paidUntil = 0;
+      this.account = undefined;
+      this.appCheck = false;
       this.verifiedAt = 0;
       return;
     }
     await this.ctx.storage.setAlarm(now + SWEEP_MS);
-  }
-
-  private isFresh(now: number): boolean {
-    return now - this.verifiedAt < VERIFIED_KEEP_MS;
-  }
-
-  // A group that keeps asking stays verified: a computer that moves no bytes and has no push
-  // token would otherwise be forgotten by the sweep and have to prove itself again.
-  async isVerified(now = Date.now()): Promise<boolean> {
-    if (!this.isFresh(now)) return false;
-    if (now - this.verifiedAt >= SEEN_REFRESH_MS) {
-      this.verifiedAt = now;
-      await this.ctx.storage.put("verifiedAt", now);
-    }
-    return true;
   }
 
   // A one-time string the app has to bind its proof to; a few may be outstanding at once, for
@@ -154,34 +152,6 @@ export class Group extends DurableObject<Cloudflare.Env> {
     if (!d || now - d.seen < SEEN_REFRESH_MS) return;
     d.seen = now;
     await this.ctx.storage.put("devices", this.devices);
-  }
-
-  status(now = Date.now()): GroupStatus {
-    const week = weekOf(now);
-    const used = this.usage[week] ?? 0;
-    const paid = this.paidUntil > now;
-    return { week, used, cap: WEEKLY_CAP, paidUntil: this.paidUntil, paid, capped: !paid && used >= WEEKLY_CAP };
-  }
-
-  // Rejections come back as values: an error thrown inside a Durable Object
-  // is reported as uncaught as well as reaching the caller.
-  // A purchase pays for one group only; the first group to present it keeps it.
-  async buy(store: Store, receipt: string, group: string): Promise<"ok" | "not-configured" | "rejected" | "bound"> {
-    try {
-      const { until, purchase } = await services().verifier.verify(store, receipt, group);
-      const owner = this.env.PURCHASES.get(this.env.PURCHASES.idFromName(await purchaseKey(store, purchase)));
-      if (!(await owner.bind(group, until))) return "bound";
-      if (until > this.paidUntil) {
-        this.paidUntil = until;
-        await this.ctx.storage.put("paidUntil", until);
-        await this.sweepSoon();
-      }
-      return "ok";
-    } catch (e) {
-      if (e instanceof NotConfiguredError) return "not-configured";
-      if (e instanceof ReceiptRejectedError) return "rejected";
-      throw e;
-    }
   }
 
   async setPush(device: string, platform: Platform, token: string, now = Date.now()): Promise<boolean> {
@@ -220,5 +190,22 @@ export class Group extends DurableObject<Cloudflare.Env> {
       sent = true;
     }
     return sent;
+  }
+
+  export(id: string) {
+    return { id, appCheck: this.appCheck, devices: Object.entries(this.devices).map(([device, d]) => ({ device, platform: d.platform, token: d.token, seen: d.seen })) };
+  }
+
+  // Returns how many push tokens went with it.
+  async erase(): Promise<number> {
+    const tokens = Object.keys(this.devices).length;
+    await this.ctx.storage.deleteAlarm();
+    await this.ctx.storage.deleteAll();
+    this.account = undefined;
+    this.devices = {};
+    this.appCheck = false;
+    this.verifiedAt = 0;
+    this.seenAt = 0;
+    return tokens;
   }
 }

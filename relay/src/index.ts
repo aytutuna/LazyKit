@@ -1,27 +1,29 @@
+import { accountApi, sessionOf } from "./account/api";
 import { MAX_TOKEN } from "./group";
 import { parseAttestation, verifyAttestation } from "./attest";
+import { readJson, text } from "./http";
 import { RateLimiter } from "./ratelimit";
+import { relayData } from "./relay-data";
 import type { Platform, Store } from "./services";
 
 export { Room } from "./room";
 export { Group } from "./group";
+export { Quota } from "./quota";
 export { Purchase } from "./purchase";
-export { Install } from "./install";
+export { Account } from "./account/account";
+export { Identity } from "./account/identity";
 
 const ROOM_ID = /^[0-9a-f]{64}$/;
 const ID = /^[0-9a-f]{32}$/;
 const ROOM_PATH = /^\/relay\/v1\/([^/]+)$/;
-const MAX_BODY = 64 * 1024;
+const ACCOUNT_PATH = /^\/account\/v1\/(.+)$/;
 
 const limiter = new RateLimiter(1200, 60_000);
-// A computer proves itself with a key it made, so a modified client can make as many as it likes;
-// what is counted here is how many fresh installs one network may start in an hour.
-const installs = new RateLimiter(10, 3_600_000);
-
-const text = (body: string, status: number) => new Response(body, { status });
 
 // 403 is also "wrong group", so the reason travels in a header the client reads.
-const unverified = () => new Response("attestation required", { status: 403, headers: { "x-relay-reason": "attestation-required" } });
+const refused = (message: string, reason: string, status = 403) => new Response(message, { status, headers: { "x-relay-reason": reason } });
+const unverified = () => refused("attestation required", "attestation-required");
+const signIn = () => refused("sign in", "sign-in", 401);
 
 export default {
   async fetch(req: Request, env: Cloudflare.Env): Promise<Response> {
@@ -36,8 +38,11 @@ export default {
       return new Response("slow down", { status: 503, headers: { "Retry-After": "60" } });
     }
 
+    const a = ACCOUNT_PATH.exec(url.pathname);
+    if (a) return accountApi(req, env, a[1], ip, { relay: relayData });
+
     const g = /^\/relay\/v1\/group\/([^/]+)(?:\/(push|paid|challenge|attest)(?:\/([^/]+))?)?$/.exec(url.pathname);
-    if (g) return groupApi(req, env, g[1], g[2], g[3], ip);
+    if (g) return groupApi(req, env, g[1], g[2], g[3]);
 
     const m = ROOM_PATH.exec(url.pathname);
     if (!m) return text("not found", 404);
@@ -45,21 +50,45 @@ export default {
     const role = url.searchParams.get("role");
     if (role !== "host" && role !== "guest" && role !== "stream") return text("bad role", 400);
     if (role === "stream" && !ID.test(url.searchParams.get("id") ?? "")) return text("bad stream", 400);
-    if (role !== "stream" && !ID.test(url.searchParams.get("group") ?? "")) return text("bad group", 400);
-    if (role !== "stream" && !ID.test(url.searchParams.get("device") ?? "")) return text("bad device", 400);
+    const group = url.searchParams.get("group") ?? "";
+    const device = url.searchParams.get("device") ?? "";
+    if (role !== "stream" && !ID.test(group)) return text("bad group", 400);
+    if (role !== "stream" && !ID.test(device)) return text("bad device", 400);
     if (req.headers.get("Upgrade") !== "websocket") return text("websocket only", 426);
-    if (role !== "stream" && !(await env.GROUPS.get(env.GROUPS.idFromName(url.searchParams.get("group")!)).isVerified())) return unverified();
+    if (role !== "stream") {
+      const s = await sessionOf(req, env);
+      if (!s) return signIn();
+      const stub = env.GROUPS.get(env.GROUPS.idFromName(group));
+      if ((await stub.owner()) !== s.account) return refused("not your group", "wrong-account");
+      // A session is made for one device, so a stolen token does not speak for another.
+      if (s.device !== device) return refused("not this device's session", "wrong-device");
+      if ((await stub.admit()) !== "ok") return unverified();
+    }
     return env.ROOMS.get(env.ROOMS.idFromName(m[1])).fetch(req);
   },
 };
 
-async function groupApi(req: Request, env: Cloudflare.Env, group: string, what?: string, device?: string, ip?: string | null): Promise<Response> {
+async function groupApi(req: Request, env: Cloudflare.Env, group: string, what?: string, device?: string): Promise<Response> {
   if (!ID.test(group)) return text("bad group", 400);
+  const s = await sessionOf(req, env);
+  if (!s) return signIn();
   const stub = env.GROUPS.get(env.GROUPS.idFromName(group));
+  const quota = env.QUOTAS.get(env.QUOTAS.idFromName(s.account));
+
+  if (!what && req.method === "PUT") {
+    const body = await readJson(req);
+    if (body?.platform !== "apple" && body?.platform !== "google" && body?.platform !== "desktop") return text("bad platform", 400);
+    const r = await stub.claim(group, s.account, body.platform);
+    if (r === "other") return refused("group belongs to another account", "wrong-account");
+    if (r === "limit") return text("too many groups", 409);
+    return Response.json(await quota.status());
+  }
+
+  if ((await stub.owner()) !== s.account) return refused("not your group", "wrong-account");
 
   if (!what) {
     if (req.method !== "GET") return text("method not allowed", 405);
-    return Response.json(await stub.status());
+    return Response.json(await quota.status());
   }
 
   if (what === "push" && req.method === "DELETE" && device) {
@@ -76,58 +105,31 @@ async function groupApi(req: Request, env: Cloudflare.Env, group: string, what?:
   if (what === "attest") {
     const a = parseAttestation(body);
     if (!a || typeof body.challenge !== "string") return text("bad attestation", 400);
-    if (a.platform === "desktop" && ip && !installs.allow(ip)) return new Response("slow down", { status: 503, headers: { "Retry-After": "3600" } });
     if (!(await stub.takeChallenge(body.challenge))) return text("no such challenge", 400);
-    const outcome = await verifyAttestation(env, group, body.challenge, a, !(await stub.isVerified()));
+    const outcome = await verifyAttestation(env, body.challenge, a);
     if (outcome === "not-configured") return text("not configured", 501);
     if (outcome === "rejected") return text("attestation rejected", 422);
-    if (outcome === "limit") return text("too many new groups for this install", 429);
     await stub.setVerified();
     return new Response(null, { status: 204 });
   }
 
   if (what === "push") {
-    const { device, platform, token } = body;
-    if (typeof device !== "string" || !ID.test(device)) return text("bad device", 400);
+    const { platform, token } = body;
+    // A session speaks for its own device only.
+    if (body.device !== s.device) return refused("not this device's session", "wrong-device");
     if (platform !== "apns" && platform !== "fcm") return text("bad platform", 400);
     if (typeof token !== "string" || token.length === 0 || token.length > MAX_TOKEN) return text("bad token", 400);
-    if (!(await stub.isVerified())) return unverified();
-    if (!(await stub.setPush(device, platform as Platform, token))) return text("too many devices", 409);
+    if ((await stub.admit()) !== "ok") return unverified();
+    if (!(await stub.setPush(s.device, platform as Platform, token))) return text("too many devices", 409);
     return new Response(null, { status: 204 });
   }
 
   const { store, receipt } = body;
   if (store !== "apple" && store !== "google" && store !== "microsoft") return text("bad store", 400);
   if (typeof receipt !== "string" || receipt.length === 0) return text("bad receipt", 400);
-  const result = await stub.buy(store as Store, receipt, group);
+  const result = await quota.buy(store as Store, receipt, s.account);
   if (result === "not-configured") return text("not configured", 501);
   if (result === "rejected") return text("receipt rejected", 422);
-  if (result === "bound") return text("purchase belongs to another group", 409);
-  return Response.json(await stub.status());
-}
-
-async function readJson(req: Request): Promise<Record<string, unknown> | undefined> {
-  const declared = Number(req.headers.get("Content-Length") ?? 0);
-  if (declared > MAX_BODY || !req.body) return undefined;
-  // The length may be missing or wrong, so the count is on what arrives.
-  const reader = req.body.getReader();
-  const chunks: Uint8Array[] = [];
-  let size = 0;
-  for (;;) {
-    const { done, value } = await reader.read();
-    if (done) break;
-    size += value.byteLength;
-    if (size > MAX_BODY) {
-      await reader.cancel();
-      return undefined;
-    }
-    chunks.push(value);
-  }
-  const raw = new TextDecoder().decode(await new Blob(chunks as BlobPart[]).arrayBuffer());
-  try {
-    const v = JSON.parse(raw);
-    return v && typeof v === "object" && !Array.isArray(v) ? v : undefined;
-  } catch {
-    return undefined;
-  }
+  if (result === "bound") return text("purchase belongs to another account", 409);
+  return Response.json(await quota.status());
 }

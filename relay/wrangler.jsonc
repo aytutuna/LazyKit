@@ -2,7 +2,7 @@
   "name": "lazy-relay",
   "main": "src/index.ts",
   "compatibility_date": "2026-11-01",
-  "routes": [{ "pattern": "alazy.app/relay/*", "zone_name": "alazy.app" }],
+  "routes": [{ "pattern": "alazy.app/relay/*", "zone_name": "alazy.app" }, { "pattern": "alazy.app/account/*", "zone_name": "alazy.app" }],
   "workers_dev": false,
   "preview_urls": false,
   "observability": { "enabled": false, "logs": { "enabled": false, "invocation_logs": false } },
@@ -10,13 +10,19 @@
   "vars": {
     "APPLE_APP_IDS": "8XT2U634Z4.com.lazyscan.lazyscan,8XT2U634Z4.com.lazyprint.lazyprint,8XT2U634Z4.com.lazypdf.lazypdf,8XT2U634Z4.com.lazysend.lazysend,8XT2U634Z4.com.lazymail.lazymail",
     "APPLE_ATTEST_ENV": "production",
-    "PLAY_PACKAGES": "com.lazyscan.lazyscan,com.lazyprint.lazyprint,com.lazypdf.lazypdf,com.lazysend.lazysend,com.lazymail.lazymail"
+    "PLAY_PACKAGES": "com.lazyscan.lazyscan,com.lazyprint.lazyprint,com.lazypdf.lazypdf,com.lazysend.lazysend,com.lazymail.lazymail",
+    // Apps that may start a session. Sign in with Apple takes bundle ids (and a Services id for the web); Google client ids are not set up yet.
+    "ACCOUNT_APPS": "lazyscan,lazyprint,lazypdf,lazysend,lazymail",
+    "APPLE_SIGNIN_IDS": "com.lazyscan.lazyscan,com.lazyprint.lazyprint,com.lazypdf.lazypdf,com.lazysend.lazysend,com.lazymail.lazymail",
+    "GOOGLE_CLIENT_IDS": "",
+    "MAIL_FROM": "Lazy <accounts@alazy.app>"
   },
-  "durable_objects": { "bindings": [{ "name": "ROOMS", "class_name": "Room" }, { "name": "GROUPS", "class_name": "Group" }, { "name": "PURCHASES", "class_name": "Purchase" }, { "name": "INSTALLS", "class_name": "Install" }] },
+  "durable_objects": { "bindings": [{ "name": "ROOMS", "class_name": "Room" }, { "name": "GROUPS", "class_name": "Group" }, { "name": "PURCHASES", "class_name": "Purchase" }, { "name": "QUOTAS", "class_name": "Quota" }, { "name": "ACCOUNTS", "class_name": "Account" }, { "name": "IDENTITIES", "class_name": "Identity" }] },
   "migrations": [
     { "tag": "v1", "new_sqlite_classes": ["Room"] },
     { "tag": "v2", "new_sqlite_classes": ["Group"] },
     { "tag": "v3", "new_sqlite_classes": ["Purchase"] },
-    { "tag": "v4", "new_sqlite_classes": ["Install"] }
+    { "tag": "v4", "new_sqlite_classes": ["Install"] },
+    { "tag": "v5", "new_sqlite_classes": ["Quota", "Account", "Identity"], "deleted_classes": ["Install"] }
   ]
 }
