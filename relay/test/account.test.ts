@@ -147,6 +147,8 @@ describe("the day's mail budget", () => {
 describe("while the day's mail is spent", () => {
   it("answers 503 to every mail request, whether or not the address has an account", async () => {
     const token = await signUp(EMAIL, PASSWORD);
+    // Another account's address: a change to one's own is refused before any mail is thought of.
+    await signUp(who.other, PASSWORD, "lazysend", "b".repeat(32));
     const spent = env.BUDGET.get(env.BUDGET.idFromName("mail"));
     await runInDurableObject(spent, async (_o, state) => {
       await state.storage.put("s", { day: new Date().toISOString().slice(0, 10), count: 1000 });
@@ -158,7 +160,7 @@ describe("while the day's mail is spent", () => {
         (await account("code", "POST", { email })).status,
         (await account("email", "POST", { email, password: PASSWORD }, token)).status,
       ];
-      expect(await asked(EMAIL)).toEqual([503, 503, 503]);
+      expect(await asked(who.other)).toEqual([503, 503, 503]);
       expect(await asked(ghost)).toEqual([503, 503, 503]);
       const r = await account("code", "POST", { email: ghost });
       expect(r.headers.get("Retry-After")).toBe("3600");
