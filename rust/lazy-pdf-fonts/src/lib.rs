@@ -5,6 +5,7 @@ mod bytes;
 mod cff;
 mod cff_interp;
 mod cmap;
+mod color;
 mod content_parser;
 mod content_writer;
 mod data;
@@ -12,6 +13,9 @@ mod embedded;
 mod encodings;
 mod filters;
 mod font;
+mod function;
+mod interpreter;
+mod matrix;
 mod names;
 mod outline;
 mod program;
@@ -24,6 +28,7 @@ mod type1_interp;
 
 pub use cff::CffFont;
 pub use cmap::CMap;
+pub use color::{ColorSpaceInfo, PdfColor, RgbColor};
 pub use content_parser::{
     ContentOperation, InlineImage, TooManyOperations, parse as parse_content,
     parse_limited as parse_content_limited,
@@ -38,6 +43,12 @@ pub use encodings::{
 };
 pub use filters::StandardFilters;
 pub use font::{FontChar, PdfFont};
+pub use function::{Function, FunctionError};
+pub use interpreter::{
+    ContentContext, ContentInterpreter, ContentVisitor, FormInfo, GlyphInfo, GraphicsState,
+    ImageInfo, MarkedContent, PathInfo, PathSegment, PathSegmentKind, ShadingInfo,
+};
+pub use matrix::Matrix;
 pub use names::{cff_strings, mac_glyphs, standard_encoding, standard_encoding_sids};
 pub use outline::{Bounds, Outline, OutlineOp, Segment};
 pub use standard14::{FontBox, Standard14};

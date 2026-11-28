@@ -45,7 +45,7 @@ impl std::fmt::Display for ContentOperation {
 }
 
 /// Finds a colour space by its resource name.
-pub type ColorSpaceLookup = dyn Fn(&str) -> Option<Object>;
+pub type ColorSpaceLookup<'a> = dyn Fn(&str) -> Option<Object> + 'a;
 
 /// The dictionary and data of a `BI ... ID ... EI` image (8.9.7). The dictionary keeps the abbreviations it was
 /// written with; `data` is the bytes between ID and EI, filters still applied.
@@ -58,7 +58,7 @@ pub struct InlineImage {
 impl InlineImage {
     /// The dictionary with full key names, the form the filters and image decoder read. Colour space names that are
     /// not device spaces are looked up with `color_space`; the other abbreviations are left to those readers.
-    pub fn expanded(&self, color_space: Option<&ColorSpaceLookup>) -> Dict {
+    pub fn expanded(&self, color_space: Option<&ColorSpaceLookup<'_>>) -> Dict {
         let mut result = Dict::new();
         for (key, value) in self.dictionary.entries() {
             let full = match key.text().as_str() {
