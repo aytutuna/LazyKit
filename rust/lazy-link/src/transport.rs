@@ -1,13 +1,11 @@
-//! How the relay client reaches the network: the app opens the encrypted connection with its
-//! system's own TLS and Rust runs the protocol over the bytes. The same traits will carry the
-//! pinned phone link, where [`open`] also checks the certificate's fingerprint.
+//! How the relay client reaches the network: a [`Transport`] opens a connection and Rust runs the
+//! protocol over its bytes. The real one is [`crate::tls::TlsTransport`]; tests bring plain or
+//! canned ones.
 //! Required Notice: Copyright (c) 2026 Alazy Inc. (https://alazy.app)
 
-use crate::spki_fingerprint;
 use async_trait::async_trait;
 use std::fmt;
 use std::sync::Arc;
-use subtle::ConstantTimeEq;
 use tokio::io::{AsyncReadExt, AsyncWriteExt, DuplexStream};
 
 const CHUNK: usize = 16 * 1024;
@@ -23,12 +21,7 @@ impl fmt::Display for TransportError {
 
 impl std::error::Error for TransportError {}
 
-/// Opens connections with the system's TLS: SChannel on Windows, Network.framework on Apple
-/// systems, Android's own sockets, the browser on the web. `server_name` is what the certificate
-/// must be valid for; the system checks it against its trust store. With `pinned` set the peer
-/// is a device with a self-made certificate: the system must not judge the chain (it would
-/// refuse it) and [`open`] checks the public key against the pin instead. The relay never
-/// asks for a pinned connection.
+/// Opens connections. `server_name` is what the certificate must be valid for.
 ///
 /// The caller may give up on a `connect` (a timeout) without cancelling it: the call still runs
 /// to its end and the connection it returns is closed on the caller's side. A transport should
@@ -40,7 +33,6 @@ pub trait Transport: Send + Sync {
         host: &str,
         port: u16,
         server_name: &str,
-        pinned: bool,
     ) -> Result<Arc<dyn Connection>, TransportError>;
 }
 
@@ -52,44 +44,16 @@ pub trait Connection: Send + Sync {
     /// Sends all of `data`.
     async fn write(&self, data: &[u8]) -> Result<(), TransportError>;
     async fn close(&self);
-    /// The server certificate's SubjectPublicKeyInfo in DER, when the system gives it out. It is
-    /// what a pin is checked against.
-    fn peer_spki(&self) -> Option<Vec<u8>>;
 }
 
-/// Connects and returns the connection as a byte stream. With `pin`, the connection is dropped
-/// unless the server's public key hashes to it.
+/// Connects and returns the connection as a byte stream.
 pub async fn open(
     transport: &dyn Transport,
     host: &str,
     port: u16,
     server_name: &str,
-    pin: Option<&[u8]>,
 ) -> Result<DuplexStream, TransportError> {
-    let conn = transport
-        .connect(host, port, server_name, pin.is_some())
-        .await?;
-    if let Some(pin) = pin
-        && let Err(e) = check_pin(conn.peer_spki().as_deref(), pin)
-    {
-        conn.close().await;
-        return Err(e);
-    }
-    Ok(pump(conn))
-}
-
-/// Fails unless `spki`, a certificate's public key in DER, hashes to `pin`.
-pub fn check_pin(spki: Option<&[u8]>, pin: &[u8]) -> Result<(), TransportError> {
-    let spki = spki.ok_or_else(|| {
-        TransportError("the system gave no certificate to check the pin against".into())
-    })?;
-    if bool::from(spki_fingerprint(spki).as_slice().ct_eq(pin)) {
-        Ok(())
-    } else {
-        Err(TransportError(
-            "the server's certificate is not the pinned one".into(),
-        ))
-    }
+    Ok(pump(transport.connect(host, port, server_name).await?))
 }
 
 // TODO: the phone link needs half-close (a request body ends with a write shutdown while the

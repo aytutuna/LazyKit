@@ -1,6 +1,6 @@
 <Project Sdk="Microsoft.NET.Sdk">
 
-  <!-- Runs the relay client through SslStream, the transport the Windows apps use. Built by scripts/link-cs.sh, which
+  <!-- Runs the relay client, TLS and all, from C#. Built by scripts/link-cs.sh, which
        generates the bindings and the native library first and passes RustLinkDir. -->
   <PropertyGroup>
     <TargetFramework>net10.0</TargetFramework>

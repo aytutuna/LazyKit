@@ -3,6 +3,8 @@
 
 use std::sync::Arc;
 
+#[cfg(target_os = "android")]
+mod android;
 mod proof;
 mod relay;
 

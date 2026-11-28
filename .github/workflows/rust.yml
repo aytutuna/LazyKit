@@ -22,6 +22,12 @@ env:
   CARGO_NDK: 4.1.2
   CARGO_DENY: 0.22.1
   NDK_VERSION: 27.3.13750724
+  AWS_LC_SYS_CMAKE_BUILDER: 0
+  AWS_LC_SYS_PREBUILT_NASM: 1
+  AWS_LC_SYS_USE_SYSTEM: 0
+  # aws-lc is compiled by cc and linked by rustc: both have to agree on the oldest system, or iOS fails on missing symbols
+  IPHONEOS_DEPLOYMENT_TARGET: "18.0"
+  MACOSX_DEPLOYMENT_TARGET: "14.0"
 
 defaults:
   run:

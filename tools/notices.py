@@ -60,11 +60,26 @@ def native_text(pins_text):
     )
 
 
+def used_packages(metadata):
+    """The packages a workspace crate ships with: reached through normal and build dependencies, not test-only ones. The lock
+    file also lists the optional dependencies nothing turns on."""
+    nodes = {n["id"]: n for n in (metadata.get("resolve") or {}).get("nodes", [])}
+    if not nodes:
+        return metadata["packages"]
+    reached, todo = set(), list(metadata["workspace_members"])
+    while todo:
+        id = todo.pop()
+        if id not in reached:
+            reached.add(id)
+            todo += [d["pkg"] for d in nodes.get(id, {}).get("deps", []) if any(k["kind"] != "dev" for k in d["dep_kinds"])]
+    return [p for p in metadata["packages"] if p["id"] in reached]
+
+
 def crate_rows(metadata):
     members = set(metadata["workspace_members"])
     rows = {
         (p["name"], p["version"], p.get("license") or "see source", p.get("repository") or "https://crates.io/crates/" + p["name"])
-        for p in metadata["packages"]
+        for p in used_packages(metadata)
         if p["id"] not in members
     }
     return sorted(rows)
@@ -91,7 +106,7 @@ def licence_texts(metadata, fallback=FALLBACK):
     a crate with neither is an error."""
     members = set(metadata["workspace_members"])
     found, missing = {}, []
-    for p in metadata["packages"]:
+    for p in used_packages(metadata):
         if p["id"] in members:
             continue
         files = read_files(Path(p["manifest_path"]).parent, lambda n: LICENCE_FILE.match(n))

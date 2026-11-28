@@ -1,45 +1,14 @@
-//! The relay client for Swift, Kotlin and C#. The app brings the encrypted connection (a
-//! [`SecureTransport`] built on the system's TLS) and, once, the proof that it is the real app
-//! (an [`AppAttester`]); everything else runs in Rust.
+//! The relay client for Swift, Kotlin and C#. Rust does everything, TLS included; the app only
+//! brings, once, the proof that it is the real app (an [`AppAttester`]).
 //! Required Notice: Copyright (c) 2026 Alazy Inc. (https://alazy.app)
 
 use crate::LinkError;
 use async_trait::async_trait;
 use lazy_link::relay::{self, Attestation};
-use lazy_link::transport::{self, Connection, Transport, TransportError};
 use std::sync::{Arc, OnceLock};
 use std::time::Duration;
 use tokio::io::{AsyncReadExt, AsyncWriteExt, ReadHalf, WriteHalf};
 use tokio::sync::{Mutex, Notify};
-
-/// Opens connections with the system's TLS and checks the certificate against its trust store
-/// for `server_name`, except when `pinned` is set: then the peer has a self-made certificate,
-/// the trust store must not judge it and Rust checks the public key against the pin. (The relay
-/// never asks for a pinned connection.) Each connection is named by a number the transport makes up. A read and
-/// a write on one connection may be in flight together. (UniFFI cannot yet hand a foreign
-/// object back from a foreign async call, so the connections stay on the app's side.)
-///
-/// A `connect` the caller has given up on (a timeout) is not cancelled: it returns its number as
-/// usual and Rust then calls `close` on it. Bound the connect time in the transport itself.
-#[uniffi::export(with_foreign)]
-#[async_trait]
-pub trait SecureTransport: Send + Sync {
-    async fn connect(
-        &self,
-        host: String,
-        port: u16,
-        server_name: String,
-        pinned: bool,
-    ) -> Result<u64, LinkError>;
-    /// Up to `max` bytes; an empty answer means the other end closed.
-    async fn read(&self, connection: u64, max: u32) -> Result<Vec<u8>, LinkError>;
-    /// Sends all of `data`.
-    async fn write(&self, connection: u64, data: Vec<u8>) -> Result<(), LinkError>;
-    /// Closes the connection and forgets its number.
-    async fn close(&self, connection: u64);
-    /// The server certificate's SubjectPublicKeyInfo in DER, if the system gives it out.
-    fn peer_spki(&self, connection: u64) -> Option<Vec<u8>>;
-}
 
 /// What the app proves to the relay about itself.
 #[derive(Debug, Clone, uniffi::Enum)]
@@ -68,62 +37,7 @@ pub trait AppAttester: Send + Sync {
     async fn attest(&self, group: String, challenge: String) -> Result<AppProof, LinkError>;
 }
 
-struct Foreign(Arc<dyn SecureTransport>);
-struct ForeignConnection {
-    transport: Arc<dyn SecureTransport>,
-    id: u64,
-}
 struct ForeignAttester(Arc<dyn AppAttester>);
-
-fn failed(e: LinkError) -> TransportError {
-    TransportError(e.to_string())
-}
-
-#[async_trait]
-impl Transport for Foreign {
-    async fn connect(
-        &self,
-        host: &str,
-        port: u16,
-        server_name: &str,
-        pinned: bool,
-    ) -> Result<Arc<dyn Connection>, TransportError> {
-        let id = self
-            .0
-            .connect(host.into(), port, server_name.into(), pinned)
-            .await
-            .map_err(failed)?;
-        Ok(Arc::new(ForeignConnection {
-            transport: self.0.clone(),
-            id,
-        }))
-    }
-}
-
-#[async_trait]
-impl Connection for ForeignConnection {
-    async fn read(&self, max: usize) -> Result<Vec<u8>, TransportError> {
-        self.transport
-            .read(self.id, max.try_into().unwrap_or(u32::MAX))
-            .await
-            .map_err(failed)
-    }
-
-    async fn write(&self, data: &[u8]) -> Result<(), TransportError> {
-        self.transport
-            .write(self.id, data.to_vec())
-            .await
-            .map_err(failed)
-    }
-
-    async fn close(&self) {
-        self.transport.close(self.id).await;
-    }
-
-    fn peer_spki(&self) -> Option<Vec<u8>> {
-        self.transport.peer_spki(self.id)
-    }
-}
 
 #[async_trait]
 impl relay::Attester for ForeignAttester {
@@ -253,14 +167,13 @@ impl Relay {
         base: String,
         group: String,
         device: String,
-        transport: Arc<dyn SecureTransport>,
         attester: Option<Arc<dyn AppAttester>>,
-    ) -> Arc<Self> {
-        let mut inner = relay::Relay::new(&base, &group, &device, Arc::new(Foreign(transport)));
+    ) -> Result<Arc<Self>, RelayFailure> {
+        let mut inner = relay::Relay::system(&base, &group, &device)?;
         if let Some(attester) = attester {
             inner = inner.with_attester(Arc::new(ForeignAttester(attester)));
         }
-        Arc::new(Self { inner })
+        Ok(Arc::new(Self { inner }))
     }
 
     pub async fn status(&self) -> Result<GroupStatus, RelayFailure> {
@@ -409,33 +322,4 @@ impl RelayConnection {
     pub fn close_code(&self) -> Result<Option<u16>, LinkError> {
         Ok(self.code.get().copied())
     }
-}
-
-/// Connects through `transport`, checks the certificate against `pin` (the SHA-256 of its public
-/// key) when one is given, and returns the key's SHA-256 as the Rust side computes it. It lets
-/// each platform's transport prove that it hands over the right certificate.
-#[uniffi::export(async_runtime = "tokio")]
-pub async fn probe_connection(
-    transport: Arc<dyn SecureTransport>,
-    host: String,
-    port: u16,
-    server_name: String,
-    pin: Option<Vec<u8>>,
-) -> Result<Vec<u8>, LinkError> {
-    let id = transport
-        .connect(host, port, server_name, pin.is_some())
-        .await?;
-    let spki = transport.peer_spki(id);
-    let checked = match &pin {
-        Some(pin) => transport::check_pin(spki.as_deref(), pin).map_err(|e| LinkError::Invalid {
-            reason: e.to_string(),
-        }),
-        None => Ok(()),
-    };
-    transport.close(id).await;
-    checked?;
-    let spki = spki.ok_or(LinkError::Invalid {
-        reason: "the system gave no certificate".into(),
-    })?;
-    Ok(lazy_link::spki_fingerprint(&spki).to_vec())
 }

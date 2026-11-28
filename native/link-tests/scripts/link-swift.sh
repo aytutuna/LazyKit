@@ -1,5 +1,5 @@
 #!/bin/bash
-# Builds lazy-link-ffi, generates its Swift bindings and runs apple/main.swift (Network.framework transport) against a
+# Builds lazy-link-ffi, generates its Swift bindings and runs apple/main.swift (the relay client, TLS in Rust) against a
 # development relay that is already listening with TLS (relay/scripts/dev-tls.sh). Needs a Mac with cargo and swiftc.
 #   RELAY_URL=https://127.0.0.1:8788/relay/v1 link-swift.sh
 set -euo pipefail
