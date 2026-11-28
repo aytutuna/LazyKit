@@ -805,7 +805,6 @@ impl<'a> ContentInterpreter<'a> {
             self.context.state.font = Some(font);
             self.context.state.font_size = size;
         }
-        let doc = &mut *self.doc;
         if g.contains_key("SMask") {
             let id = Arc::as_ptr(&entry) as usize;
             let mask = match g.get("SMask") {
