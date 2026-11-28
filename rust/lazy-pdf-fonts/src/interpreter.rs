@@ -115,6 +115,8 @@ pub struct MarkedContent {
     pub optional_content: Option<Dict>,
     /// What a layer check needs of `optional_content`, with the object numbers that identify the groups.
     pub layer: Option<OptionalContent>,
+    /// The bytes of the /ActualText string of the properties, resolved.
+    pub actual_text: Option<Vec<u8>>,
     overflow: bool,
 }
 
@@ -1450,6 +1452,7 @@ impl<'a> ContentInterpreter<'a> {
                 mcid: None,
                 optional_content: None,
                 layer: None,
+                actual_text: None,
                 overflow: true,
             }));
             return;
@@ -1493,12 +1496,20 @@ impl<'a> ContentInterpreter<'a> {
             Some((dict, layer)) => (Some(dict), Some(layer)),
             None => (None, None),
         };
+        let actual_text = properties
+            .as_ref()
+            .and_then(|p| p.get("ActualText"))
+            .and_then(|v| match self.doc.resolve(v).as_deref() {
+                Some(Object::String(s)) => Some(s.bytes.clone()),
+                _ => None,
+            });
         let marked = Arc::new(MarkedContent {
             tag,
             properties,
             mcid,
             optional_content,
             layer,
+            actual_text,
             overflow: false,
         });
         self.context.marked.push(marked.clone());
