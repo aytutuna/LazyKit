@@ -363,8 +363,7 @@ fn crowded(fonts_in_resources: &[usize], shared: bool) -> Vec<u8> {
         );
     }
     let mut font_objects = Vec::new();
-    for r in 0..resource_count {
-        let count = fonts_in_resources[r];
+    for &count in fonts_in_resources.iter().take(resource_count) {
         let names: Vec<String> = (0..count)
             .map(|f| format!("/F{f} {} 0 R", next_font + f))
             .collect();
