@@ -101,7 +101,9 @@ export class AddressCore {
     this.s.sends = this.s.sends.filter((t) => now - t < DAY);
     if (this.s.sends.length >= SENDS_PER_DAY || this.s.sends.filter((t) => now - t < CODE_MS).length >= SENDS_PER_WINDOW) return "limited";
     this.s.sends.push(now);
-    if (mails && this.deps.mailBudget && !(await this.deps.mailBudget())) {
+    // A request that will send nothing (an address without an account) makes the same call without
+    // charging, so how long it takes does not tell whether the address has an account.
+    if (this.deps.mailBudget && !(await this.deps.mailBudget(mails)) && mails) {
       this.s.sends.splice(this.s.sends.indexOf(now), 1);
       return "busy";
     }
@@ -189,7 +191,11 @@ export class AddressCore {
     if (!this.ready()) return "not-configured";
     await this.repair();
     if (this.deps.mailBudgetOpen && !(await this.deps.mailBudgetOpen())) return "busy";
-    if (this.s.account) return "sent";
+    // An address with an account of its own is never written to, but takes the same budget call.
+    if (this.s.account) {
+      await this.deps.mailBudget?.(false);
+      return "sent";
+    }
     if (this.deps.mailBudget && !(await this.deps.mailBudget())) return "busy";
     const pending = Object.keys(this.s.codes).filter((k) => k.startsWith("email:"));
     if (pending.length >= MAX_PENDING_EMAIL && !pending.includes(`email:${account}`)) {

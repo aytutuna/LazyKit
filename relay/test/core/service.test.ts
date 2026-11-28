@@ -114,6 +114,18 @@ describe("sign-up", () => {
 });
 
 describe("mail", () => {
+  it("asks the day's budget the same way for an address with an account and one without", async () => {
+    await signUp();
+    rig.clock.now += 11 * MIN;
+    const calls = async (to: string, ask: (e: string) => Promise<unknown>) => {
+      const before = rig.budget.calls;
+      await ask(to);
+      return rig.budget.calls - before;
+    };
+    expect(await calls(email, (e) => rig.service.code(e))).toBe(await calls(`nobody${n}@example.com`, (e) => rig.service.code(e)));
+    expect(rig.budget.left).toBe(Infinity);
+  });
+
   it("passes the same window for every address, so a refusal tells nothing", async () => {
     await signUp();
     rig.clock.now += 11 * MIN;

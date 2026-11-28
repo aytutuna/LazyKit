@@ -50,12 +50,12 @@ export function memoryService(over: Options = {}) {
       mail.push(m);
     },
   };
-  const deps: Deps = { codeKey: () => ("codeKey" in over ? over.codeKey : "test-key"), mailer: () => sender, defer: (p) => void pending.push(p), stages: () => 1, mailBudget: async () => budget.left-- > 0, mailBudgetOpen: async () => budget.left > 0, accountExists: async (id) => accounts.get(id)?.store.value !== undefined, now: () => clock.now };
+  const deps: Deps = { codeKey: () => ("codeKey" in over ? over.codeKey : "test-key"), mailer: () => sender, defer: (p) => void pending.push(p), stages: () => 1, mailBudget: async (charge = true) => (budget.calls++, charge ? budget.left-- > 0 : budget.left > 0), mailBudgetOpen: async () => budget.left > 0, accountExists: async (id) => accounts.get(id)?.store.value !== undefined, now: () => clock.now };
   const addresses = new Map<string, { core: AddressCore; store: MemoryStore<AddressState> }>();
   const accounts = new Map<string, { core: AccountCore; store: MemoryStore<AccountState> }>();
   const identities = new Map<string, { core: IdentityCore; store: MemoryStore<any> }>();
   const spent = new Set<string>();
-  const budget = { left: Infinity };
+  const budget = { left: Infinity, calls: 0 };
   const dir: Directory = {
     once: (name) => ({ take: async () => (spent.has(name) ? false : (spent.add(name), true)) }),
     address(name) {

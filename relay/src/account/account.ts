@@ -172,10 +172,15 @@ export class Address extends DurableObject<Cloudflare.Env> {
 // Counts the mails the service has sent today (UTC). The count is wiped at the end of its day, never
 // in the middle of one, and the log gets a line at 80% and at the cap so someone can act.
 export class Budget extends DurableObject<Cloudflare.Env> {
-  async take(limit: number, now = Date.now()): Promise<boolean> {
+  async take(limit: number, now = Date.now(), charge = true): Promise<boolean> {
     const day = new Date(now).toISOString().slice(0, 10);
     const kept = await this.ctx.storage.get<{ day: string; count: number; refused?: boolean }>("s");
     const today = kept?.day === day ? kept : { day, count: 0 };
+    if (!charge) {
+      // The same read and write as a charge, so callers cannot tell which one was made.
+      await this.ctx.storage.put("s", today);
+      return today.count < limit;
+    }
     if (today.count >= limit) {
       if (!today.refused) {
         console.warn(`[alert:mail-cap] daily mail cap of ${limit} reached; mail is refused until ${day} ends`);

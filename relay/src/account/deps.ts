@@ -11,7 +11,7 @@ export const depsOf = (ctx: DurableObjectState, env: Cloudflare.Env): Deps => ({
   codeKey: () => env.ACCOUNT_KEY,
   mailer: () => services().mailer ?? (env.DEV_MAIL_URL ? devMailer(env.DEV_MAIL_URL) : resendMailer(env)),
   defer: (task) => ctx.waitUntil(task),
-  mailBudget: () => env.BUDGET.get(env.BUDGET.idFromName("mail")).take(Number(env.MAIL_DAILY_CAP) || 1000),
+  mailBudget: (charge = true) => env.BUDGET.get(env.BUDGET.idFromName("mail")).take(Number(env.MAIL_DAILY_CAP) || 1000, Date.now(), charge),
   mailBudgetOpen: () => env.BUDGET.get(env.BUDGET.idFromName("mail")).open(Number(env.MAIL_DAILY_CAP) || 1000),
   accountExists: (id) => env.ACCOUNTS.get(env.ACCOUNTS.idFromName(id)).exists(),
   stages: () => stagesOf(env),
