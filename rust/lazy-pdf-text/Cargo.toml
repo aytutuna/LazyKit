@@ -1,0 +1,17 @@
+[package]
+name = "lazy-pdf-text"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license-file.workspace = true
+publish.workspace = true
+
+[dependencies]
+regex = "1"
+unicode-general-category = "1"
+unicode-normalization = "0.1"
+lazy-pdf-fonts = { path = "../lazy-pdf-fonts" }
+lazy-pdf-syntax = { path = "../lazy-pdf-syntax" }
+
+[dev-dependencies]
+lazy-pdf-filters = { path = "../lazy-pdf-filters" }
