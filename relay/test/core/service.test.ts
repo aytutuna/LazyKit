@@ -373,9 +373,40 @@ describe("sessions and re-checks", () => {
     rig.clock.now += 20 * DAY;
     const s = (await rig.service.session(header(r)))!;
     expect(s.fresh).toBe(false);
-    expect(await rig.service.setPassword(s, "attacker password", undefined)).toBe("need-fresh");
+    expect(await rig.service.setPassword(s, "attacker password", undefined)).toBe("bad");
     expect(await rig.service.delete(s)).toEqual({ ok: false, why: "need-fresh" });
     expect(await rig.service.session(header(r))).toBeTruthy();
+  });
+
+  it("makes a first password on an account without one wait for a code from the current address", async () => {
+    const r = await social("apple");
+    rig.clock.now += 20 * DAY;
+    const s = (await rig.service.session(header(r)))!;
+    expect(s.fresh).toBe(false);
+    expect(await rig.service.setPassword(s, "attacker password", undefined, "123456")).toBe("bad");
+    const before = rig.mail.length;
+    expect(await rig.service.passwordCode(s)).toBe("sent");
+    await rig.flush();
+    expect(rig.mail[rig.mail.length - 1].to).toBe(email);
+    expect(rig.mail.length).toBe(before + 1);
+    const code = codeIn(lastMail());
+    expect(await rig.service.setPassword(s, "attacker password", undefined, code === "000000" ? "000001" : "000000")).toBe("bad");
+    expect(await rig.service.setPassword(s, "short", undefined, code)).toBe("bad-password");
+    expect(await rig.service.setPassword(s, "my own new password", undefined, code)).toBe("ok");
+    expect((await rig.service.signinPassword(email, "my own new password", OTHER)).ok).toBe(true);
+    expect(await rig.service.setPassword(s, "another new password", undefined, code)).toBe("bad");
+  });
+
+  it("asks for a password code at most three times a day, and not of an account that has a password", async () => {
+    const a = await signUp();
+    expect(await rig.service.passwordCode((await rig.service.session(header(a)))!)).toBe("bad");
+    const r = await social("google", { sub: `other-${n}`, email: `g${n}@example.com` });
+    const s = (await rig.service.session(header(r)))!;
+    for (let i = 0; i < 3; i++) {
+      expect(await rig.service.passwordCode(s)).toBe("sent");
+      rig.clock.now += 11 * MIN;
+    }
+    expect(await rig.service.passwordCode(s)).toBe("limited");
   });
 
   it("makes an old session show the password before deleting", async () => {

@@ -247,10 +247,32 @@ export class AccountService {
   revoke = (s: Checked, id: string) => this.dir.account(s.account).revoke(id);
   signout = (s: Checked) => this.dir.account(s.account).revoke(s.session);
 
-  async setPassword(s: Checked, password: unknown, current: unknown): Promise<Reauth | "bad-password"> {
+  // A first password, on an account that has none, needs a code from the current address, whatever
+  // the age of the session; a change needs the old password or a new session.
+  async setPassword(s: Checked, password: unknown, current: unknown, code?: unknown, caller = ""): Promise<Reauth | "bad-password"> {
     if (!passwordOk(password)) return "bad-password";
-    const record = await hashPassword(password, this.cfg.stages);
-    return this.dir.account(s.account).setPassword(record, typeof current === "string" ? current : undefined, s.fresh, s.session);
+    const account = this.dir.account(s.account);
+    let fresh = s.fresh;
+    if (!(await account.me())?.password) {
+      const email = await account.mailAddress();
+      const a = email ? await this.address(email) : undefined;
+      const taken = a ? await a.port.takeCode("setpw", code, a.canonical, caller) : undefined;
+      if (!taken?.ok || taken.extra !== s.account) return "bad";
+      fresh = true;
+    }
+    return account.setPassword(await hashPassword(password, this.cfg.stages), typeof current === "string" ? current : undefined, fresh, s.session);
+  }
+
+  // Mails that code to the current address of an account without a password.
+  async passwordCode(s: Checked): Promise<Sent | "bad"> {
+    const account = this.dir.account(s.account);
+    if ((await account.me())?.password) return "bad";
+    if (!(await account.ask("password"))) return "limited";
+    const email = await account.mailAddress();
+    const a = email ? await this.address(email) : undefined;
+    if (!a) return "bad";
+    const r = await a.port.requestOldCheck(a.canonical, s.account, "setpw");
+    return r === "none" ? "bad" : r;
   }
 
   // The email is the way back into the account, so a change takes a new session, the password if

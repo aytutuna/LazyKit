@@ -220,6 +220,19 @@ describe("sessions over HTTP", () => {
     expect((await account("me", "PUT", {})).status).toBe(405);
   });
 
+  it("sets a first password only with a code from the current address", async () => {
+    const r = await apple();
+    const token = (await body(r)).token as string;
+    expect((await account("password", "POST", { password: "my own new password" }, token)).status).toBe(401);
+    expect((await account("password/code", "POST", { turnstile: "" }, token)).status).toBe(403);
+    expect((await account("password/code", "POST", {}, token)).status).toBe(202);
+    await mailed(1);
+    expect((await account("password", "POST", { password: "my own new password", code: "000000" }, token)).status).toBe(401);
+    expect((await account("password", "POST", { password: "my own new password", code: codeIn(sent[0]) }, token)).status).toBe(204);
+    expect((await account("password/code", "POST", {}, token)).status).toBe(400);
+    expect((await account("signin", "POST", { email: EMAIL, password: "my own new password", ...LOGIN, device: DEV_B })).status).toBe(200);
+  });
+
   it("changes the password from a new session and ends the other sessions", async () => {
     const t1 = await signUp(EMAIL, PASSWORD);
     const t2 = (await body(await account("signin", "POST", { email: EMAIL, password: PASSWORD, ...LOGIN, device: DEV_B }))).token as string;

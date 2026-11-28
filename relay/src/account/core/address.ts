@@ -17,7 +17,7 @@ const PASSWORD_SLOW_AFTER = 40;
 const PASSWORD_FAILS_TOTAL = 400;
 
 // A new-email code is kept per account that asked, so one account cannot crowd out another at an address.
-export type Purpose = "signup" | "signin" | "link" | "emailold" | `email:${string}`;
+export type Purpose = "signup" | "signin" | "link" | "emailold" | "setpw" | `email:${string}`;
 const MAX_PENDING_EMAIL = 5;
 export type Sent = "sent" | "limited" | "busy" | "not-configured";
 
@@ -125,6 +125,7 @@ export class AddressCore {
       : purpose === "signup" ? `Your Lazy code is ${digits}. It confirms your new account and works for 10 minutes. If you did not ask for it, ignore this email.`
       : purpose === "signin" ? `Your Lazy sign-in code is ${digits}. It works for 10 minutes. If you did not ask for it, ignore this email and nobody gets in.`
       : purpose === "link" ? `Your Lazy code is ${digits}. Entering it adds Apple or Google as a way to sign in to your Lazy account, and that sign-in will open the account. It works for 10 minutes. If that was not you, ignore this email and nothing is added.`
+      : purpose === "setpw" ? `Your Lazy code is ${digits}. Setting a first password on your Lazy account needs it, and it works for 10 minutes. If you did not ask for that, ignore this email and nothing changes.`
       : purpose === "emailold" ? `Your Lazy code is ${digits}. A change of the email of your Lazy account needs it, and it works for 10 minutes. If you did not ask for that, ignore this email and nothing changes.`
       : `Your Lazy code is ${digits}. It confirms this address as the new email of a Lazy account and works for 10 minutes. If you did not ask for it, ignore this email.`;
     this.later(mailTo, `Your Lazy code: ${digits}`, body, () => {
@@ -193,12 +194,12 @@ export class AddressCore {
   }
 
   // The current address of an account is asked as well before its email changes.
-  async requestOldCheck(canonical: string, account: string, now = this.clock()): Promise<Sent | "none"> {
+  async requestOldCheck(canonical: string, account: string, purpose: "emailold" | "setpw" = "emailold", now = this.clock()): Promise<Sent | "none"> {
     if (this.s.account !== account || !this.s.mailTo) return "none";
     if (!this.ready()) return "not-configured";
     const slot = await this.reserveSend(now);
     if (slot !== "ok") return slot;
-    await this.issue("emailold", canonical, this.s.mailTo, now, account);
+    await this.issue(purpose, canonical, this.s.mailTo, now, account);
     await this.save();
     return "sent";
   }

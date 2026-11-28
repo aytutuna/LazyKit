@@ -118,7 +118,7 @@ export async function accountApi(req: Request, env: Cloudflare.Env, path: string
   }
   if (req.method !== "POST") return fail("method not allowed", 405);
 
-  const withSession = ["POST signout", "POST password", "POST email", "POST email/confirm"];
+  const withSession = ["POST signout", "POST password", "POST password/code", "POST email", "POST email/confirm"];
   if (!FORM.includes(route) && !withSession.includes(route)) return fail("not found", 404);
 
   if (route === "POST signout") {
@@ -148,7 +148,15 @@ export async function accountApi(req: Request, env: Cloudflare.Env, path: string
       const r = await svc.confirmEmail(s, body.email, body.code, caller, body.oldCode);
       return r === "ok" ? new Response(null, { status: 204 }) : r === "need-fresh" ? fail("sign in again first", 403) : r === "mail-failed" ? fail("the notice could not be sent, try again", 503, { "Retry-After": "60" }) : fail(r === "bad" ? "wrong code" : r, r === "bad" ? 401 : 400);
     }
-    const r = await svc.setPassword(s, body.password, body.current);
+    if (route === "POST password/code") {
+      const slow = limited(startLimit);
+      if (slow) return slow;
+      const bot = await botCheck(env, svc, body, ip);
+      if (bot) return bot;
+      const r = await svc.passwordCode(s);
+      return r === "bad" ? fail("the account already has a password", 400) : sentStatus(r);
+    }
+    const r = await svc.setPassword(s, body.password, body.current, body.code, caller);
     return r === "bad-password" ? fail("bad password", 400) : reauth(r);
   }
 
