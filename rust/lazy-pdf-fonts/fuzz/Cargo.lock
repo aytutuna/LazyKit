@@ -108,9 +108,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "lazy-pdf-filters"
+version = "0.1.0"
+dependencies = [
+ "zlib-rs",
+]
+
+[[package]]
 name = "lazy-pdf-fonts"
 version = "0.1.0"
 dependencies = [
+ "lazy-pdf-filters",
  "lazy-pdf-syntax",
  "miniz_oxide",
  "sha2",
@@ -190,3 +198,9 @@ name = "version_check"
 version = "0.9.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "0b928f33d975fc6ad9f86c8f283853ad26bdd5b10b7f1542aa2fa15e2289105a"
+
+[[package]]
+name = "zlib-rs"
+version = "0.6.9"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "aa76918995d776d9dd34d371030be228d021137449771493d56e29f77e4148ac"

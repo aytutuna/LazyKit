@@ -8,8 +8,11 @@ mod cmap;
 mod data;
 mod embedded;
 mod encodings;
+mod filters;
+mod font;
 mod names;
 mod outline;
+mod program;
 mod standard14;
 mod subset;
 mod tounicode;
@@ -26,6 +29,8 @@ pub use encodings::{
     Encoding, code_of, encoding_by_name, glyph_name_of, mac_expert, mac_roman, pdf_doc, standard,
     symbol, unicode_of_glyph_name, win_ansi, zapf_dingbats, zapf_name_of,
 };
+pub use filters::StandardFilters;
+pub use font::{FontChar, PdfFont};
 pub use names::{cff_strings, mac_glyphs, standard_encoding, standard_encoding_sids};
 pub use outline::{Bounds, Outline, OutlineOp, Segment};
 pub use standard14::{FontBox, Standard14};
