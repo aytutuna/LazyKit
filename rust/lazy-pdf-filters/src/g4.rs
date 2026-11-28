@@ -82,8 +82,9 @@ pub fn encode_g4(packed: &[u8], width: usize, height: usize) -> Result<Vec<u8>> 
     let mut bits = Bits::new((needed / 8).max(64));
     // The changing elements of the reference and the coding row: where a pixel differs from the one before it
     // (white before the first). Even entries start black runs, odd ones white runs.
-    let mut reference = vec![0usize; width + 1];
-    let mut coding = vec![0usize; width + 1];
+    let columns = width.checked_add(1).ok_or_else(FilterError::too_big)?;
+    let mut reference = vec![0usize; columns];
+    let mut coding = vec![0usize; columns];
     let mut reference_count = 0;
     for y in 0..height {
         let coding_count = changing_elements(&packed[y * row_bytes..], width, &mut coding);

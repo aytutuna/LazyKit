@@ -419,3 +419,11 @@ fn an_unset_date_and_id_are_filled_in() {
     assert_ne!(first, second, "the identifier is random");
     assert!(first.windows(6).any(|w| w == b"/ID [<"));
 }
+
+#[test]
+fn the_producer_is_escaped_in_the_xmp() {
+    let date = Date::now().unwrap();
+    let xmp = String::from_utf8(pdfa::xmp(None, &date, "A & B <c>")).unwrap();
+    assert!(xmp.contains("<pdf:Producer>A &amp; B &lt;c&gt;</pdf:Producer>"));
+    assert!(xmp.contains("<xmp:CreatorTool>A &amp; B &lt;c&gt;</xmp:CreatorTool>"));
+}

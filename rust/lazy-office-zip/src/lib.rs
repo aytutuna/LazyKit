@@ -25,6 +25,8 @@ impl Entry {
 pub enum Error {
     TooManyEntries,
     TooLarge,
+    /// A name past the 65,535 bytes a zip records for it.
+    NameTooLong,
     Io(io::Error),
 }
 
@@ -33,6 +35,7 @@ impl std::fmt::Display for Error {
         match self {
             Error::TooManyEntries => f.write_str("Too many entries for a zip without zip64."),
             Error::TooLarge => f.write_str("The package is too large for a zip without zip64."),
+            Error::NameTooLong => f.write_str("An entry name is longer than a zip can record."),
             Error::Io(e) => e.fmt(f),
         }
     }
@@ -125,10 +128,14 @@ impl<W: Write> Writer<W> {
     }
 
     pub fn add(&mut self, name: &str, data: &[u8]) -> Result<(), Error> {
-        if self.count == u16::MAX as usize {
+        // The largest values of the fields are the markers of zip64, so a package stops one below them.
+        if self.count + 1 >= u16::MAX as usize {
             return Err(Error::TooManyEntries);
         }
-        if self.offset > u32::MAX as u64 || data.len() as u64 > u32::MAX as u64 {
+        if name.len() > u16::MAX as usize {
+            return Err(Error::NameTooLong);
+        }
+        if self.offset >= u32::MAX as u64 || data.len() as u64 >= u32::MAX as u64 {
             return Err(Error::TooLarge);
         }
         let flags: u16 = if name.is_ascii() { 0 } else { 0x0800 };
@@ -179,7 +186,7 @@ impl<W: Write> Writer<W> {
 
     /// Writes the central directory and the end record and hands the output back. Call once, after the last entry.
     pub fn finish(mut self) -> Result<W, Error> {
-        if self.offset + self.central.len() as u64 > u32::MAX as u64 {
+        if self.offset + self.central.len() as u64 >= u32::MAX as u64 {
             return Err(Error::TooLarge);
         }
         self.output.write_all(&self.central)?;

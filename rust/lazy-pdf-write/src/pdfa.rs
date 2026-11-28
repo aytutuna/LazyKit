@@ -151,6 +151,7 @@ fn escape_xml(text: &str) -> String {
 /// information dictionary.
 pub fn xmp(title: Option<&str>, date: &Date, producer: &str) -> Vec<u8> {
     let xmp_date = date.xmp();
+    let producer = escape_xml(producer);
     let mut out = String::new();
     out.push_str("<?xpacket begin=\"\u{FEFF}\" id=\"W5M0MpCehiHzreSzNTczkc9d\"?>\n");
     out.push_str("<x:xmpmeta xmlns:x=\"adobe:ns:meta/\">\n");

@@ -13,13 +13,14 @@ pub fn add_rgb_image(
     rgb: &[u8],
     alpha: Option<&[u8]>,
 ) -> usize {
+    let pixels = width.checked_mul(height).expect("image size is too large");
     assert_eq!(
         rgb.len(),
-        width * height * 3,
+        pixels.checked_mul(3).expect("image size is too large"),
         "pixels do not match the size"
     );
     let mask = alpha.map(|alpha| {
-        assert_eq!(alpha.len(), width * height, "alpha does not match the size");
+        assert_eq!(alpha.len(), pixels, "alpha does not match the size");
         let number = out.alloc();
         out.set_stream(
             number,

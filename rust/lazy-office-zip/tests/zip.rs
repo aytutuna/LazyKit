@@ -130,8 +130,18 @@ fn the_writer_writes_the_bytes_make_returns() {
 #[test]
 fn too_many_entries_are_refused() {
     let mut writer = Writer::new(Vec::new());
-    for i in 0..65_535 {
+    for i in 0..65_534 {
         writer.add(&i.to_string(), b"").unwrap();
     }
     assert!(writer.add("one more", b"").is_err());
+}
+
+#[test]
+fn a_name_the_zip_cannot_record_is_refused() {
+    let mut writer = Writer::new(Vec::new());
+    assert!(writer.add(&"n".repeat(65_535), b"").is_ok());
+    assert!(matches!(
+        writer.add(&"n".repeat(65_536), b""),
+        Err(lazy_office_zip::Error::NameTooLong)
+    ));
 }
