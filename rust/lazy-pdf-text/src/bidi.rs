@@ -241,8 +241,24 @@ impl BidiParagraph {
         p
     }
 
-    /// The levels of units `start` to `end` of one line, after L1.
+    // A line that starts or ends between the halves of a surrogate pair takes the whole pair.
+    fn line_bounds(&self, start: usize, end: usize) -> (usize, usize) {
+        let units = self.cp_of_unit.len() - 1;
+        let mut end = end.min(units);
+        let mut start = start.min(end);
+        if end > 0 && end < units && self.cp_of_unit[end] == self.cp_of_unit[end - 1] {
+            end += 1;
+        }
+        if start > 0 && start < units && self.cp_of_unit[start] == self.cp_of_unit[start - 1] {
+            start -= 1;
+        }
+        (start, end)
+    }
+
+    /// The levels of units `start` to `end` of one line, after L1. A line cut inside a surrogate pair takes the pair,
+    /// and the units are those of the line as taken.
     pub fn line_levels(&self, start: usize, end: usize) -> Vec<i32> {
+        let (start, end) = self.line_bounds(start, end);
         let c0 = self.cp_of_unit[start];
         let line = self.line_levels_by_code(c0, self.cp_of_unit[end]);
         (start..end)
@@ -252,6 +268,7 @@ impl BidiParagraph {
 
     /// Unit indices of one line in display order, left to right (L2). Removed characters are left out.
     pub fn visual_order(&self, start: usize, end: usize) -> Vec<usize> {
+        let (start, end) = self.line_bounds(start, end);
         let c0 = self.cp_of_unit[start];
         let c1 = self.cp_of_unit[end];
         let line = self.line_levels_by_code(c0, c1);

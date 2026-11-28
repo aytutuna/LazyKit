@@ -186,3 +186,14 @@ fn the_first_strong_letter_sets_the_direction() {
         assert_eq!(is_right_to_left(text), expected, "{text}");
     }
 }
+
+#[test]
+fn a_line_cut_inside_a_surrogate_pair_takes_the_pair() {
+    let text = "a \u{10800}\u{10801}";
+    let para = BidiParagraph::new(text, None);
+    // Unit 3 is the second half of U+10800 and unit 5 the second half of U+10801.
+    assert_eq!(para.line_levels(0, 3), para.line_levels(0, 4));
+    assert_eq!(para.visual_order(3, 6), para.visual_order(2, 6));
+    assert_eq!(para.line_levels(0, 100).len(), 6);
+    let _ = para.visual_order(9, 3);
+}
