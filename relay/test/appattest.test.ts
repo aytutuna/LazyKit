@@ -21,6 +21,21 @@ describe("App Attest", () => {
     expect(await verifyAppAttest(config(pki), c, keyId, attestation)).toEqual({ appId: APP_ID });
   });
 
+  it("refuses certificates with missing fields instead of throwing a type error", async () => {
+    const pki = await makePki();
+    const enc = new TextEncoder();
+    const bad = [
+      new Uint8Array([0x30, 0x06, 0x30, 0x00, 0x30, 0x00, 0x03, 0x00]),
+      new Uint8Array([0x30, 0x03, 0x30, 0x00, 0x30, 0x00]),
+      new Uint8Array([0x30, 0x00]),
+    ];
+    for (const cert of bad) {
+      const item = (b: Uint8Array) => [0x40 + b.length, ...b];
+      const parts = [0xa3, 0x63, ...enc.encode("fmt"), 0x6f, ...enc.encode("apple-appattest"), 0x67, ...enc.encode("attStmt"), 0xa1, 0x63, ...enc.encode("x5c"), 0x82, ...item(cert), ...item(cert), 0x68, ...enc.encode("authData"), 0x40];
+      await expect(verifyAppAttest(config(pki), new Uint8Array(1), new Uint8Array(32), new Uint8Array(parts))).rejects.toBeInstanceOf(AttestationError);
+    }
+  });
+
   type Made = { keyId: Uint8Array; attestation: Uint8Array };
   const refused = async (reason: RegExp, make: (pki: Pki, c: Uint8Array) => Promise<Made>, over?: (pki: Pki) => Partial<AppAttestConfig>, asked?: Uint8Array) => {
     const pki = await makePki();

@@ -77,14 +77,17 @@ export function parseCert(der: Uint8Array): Cert {
   const [tbs, alg, sig] = children(readTlv(der).body);
   if (!tbs || !alg || !sig || sig.tag !== 0x03) throw new DecodeError("not a certificate");
   const f = children(tbs.body);
-  let i = f[0].tag === 0xa0 ? 1 : 0;
+  let i = f[0]?.tag === 0xa0 ? 1 : 0;
   i++; // serial
   i++; // signature algorithm, repeated
   const issuer = f[i++];
-  const validity = children(f[i++].body);
+  const validityField = f[i++];
   const subject = f[i++];
   const spki = f[i++];
-  if (!spki || validity.length !== 2) throw new DecodeError("not a certificate");
+  const sigOid = children(alg.body)[0];
+  if (!issuer || !validityField || !subject || !spki || !sigOid || sig.body.length === 0) throw new DecodeError("not a certificate");
+  const validity = children(validityField.body);
+  if (validity.length !== 2) throw new DecodeError("not a certificate");
   const extensions = new Map<string, Uint8Array>();
   let ca = false;
   const ext = f.find((x) => x.tag === 0xa3);
@@ -101,7 +104,7 @@ export function parseCert(der: Uint8Array): Cert {
   }
   return {
     tbs: tbs.raw,
-    sigAlg: oid(children(alg.body)[0].body),
+    sigAlg: oid(sigOid.body),
     signature: sig.body.subarray(1),
     issuer: issuer.raw,
     subject: subject.raw,
@@ -130,7 +133,7 @@ const HASHES: Record<string, string> = { "1.2.840.10045.4.3.2": "SHA-256", "1.2.
 export async function verifyCertSignature(cert: Cert, issuerSpki: Uint8Array): Promise<boolean> {
   const hash = HASHES[cert.sigAlg];
   const params = children(readTlv(issuerSpki).body)[0];
-  const curve = CURVES[oid(children(params.body)[1]?.body ?? new Uint8Array())];
+  const curve = CURVES[oid(children(params?.body ?? new Uint8Array())[1]?.body ?? new Uint8Array())];
   if (!hash || !curve) return false;
   const [r, s] = children(readTlv(cert.signature).body);
   if (!r || !s) return false;
