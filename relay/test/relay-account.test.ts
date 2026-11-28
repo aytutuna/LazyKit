@@ -1,6 +1,6 @@
 import { env, exports } from "cloudflare:workers";
 import { runDurableObjectAlarm, runInDurableObject } from "cloudflare:test";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { WEEKLY_CAP } from "../src/group";
 import { purchaseKey } from "../src/purchase";
 import { useServices } from "../src/services";
@@ -150,6 +150,44 @@ describe("signing out closes open connections", () => {
     });
   };
   const sweep = (g: string) => runDurableObjectAlarm(env.ROOMS.get(env.ROOMS.idFromName(room(g))));
+
+  // A socket that reports the code it was closed with.
+  const watch = (ws: WebSocket) => {
+    ws.accept();
+    return new Promise<number>((done) =>
+      ws.addEventListener("close", (e) => {
+        ws.close(e.code === 1005 ? 1000 : e.code);
+        done(e.code);
+      }),
+    );
+  };
+
+  it("closes the streams of a host whose session was revoked, and the guest on the other end", async () => {
+    const a = await signUp(who.email, PASSWORD);
+    const b = await signIn(who.email, DEV_B);
+    const g = newGroup();
+    await claim(g, a);
+    const res = await host(g, DEVICE_A, a);
+    expect(res.status).toBe(101);
+    const control = res.webSocket!;
+    const streams: Promise<number>[] = [];
+    control.addEventListener("message", async (e) => {
+      if (typeof e.data !== "string" || !e.data.startsWith("open ")) return;
+      const s = await relay(`${room(g)}?role=stream&id=${e.data.slice(5)}&group=${g}`, { headers: { Upgrade: "websocket" } });
+      streams.push(watch(s.webSocket!));
+    });
+    const controlClosed = watch(control);
+    const guest = await relay(`${room(g)}?role=guest&group=${g}&device=${DEV_B}`, { headers: { Upgrade: "websocket" } }, b);
+    expect(guest.status).toBe(101);
+    const guestClosed = watch(guest.webSocket!);
+    await vi.waitFor(() => expect(streams).toHaveLength(1));
+
+    await account("signout", "POST", {}, a);
+    await sweep(g);
+    expect(await controlClosed).toBe(1008);
+    expect(await streams[0]).toBe(1008);
+    expect(await guestClosed).toBe(1008);
+  });
 
   it("closes a host whose session was revoked, and leaves the others", async () => {
     const a = await signUp(who.email, PASSWORD);
