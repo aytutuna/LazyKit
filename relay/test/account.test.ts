@@ -344,7 +344,7 @@ describe("sessions", () => {
   });
 
   it("slows one address that asks for too much", async () => {
-    const headers = { "CF-Connecting-IP": "203.0.113.9" };
+    const headers = { "CF-Connecting-IP": "203.0.113.50" };
     let last = 0;
     for (let i = 0; i < 12; i++) last = (await account("code", "POST", { email: `n${i}@example.com` }, undefined, headers)).status;
     expect(last).toBe(503);
