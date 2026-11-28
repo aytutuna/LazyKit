@@ -94,6 +94,9 @@ async function botCheck(env: Cloudflare.Env, svc: AccountService, body: Record<s
   }
 }
 
+// The widget action for a route: Turnstile takes letters, digits, underscore and hyphen only.
+const actionOf = (route: string) => route.slice(5).replaceAll("/", "-");
+
 const FORM = ["POST signup", "POST code", "POST nonce", "POST signup/confirm", "POST signin/code", "POST signin", "POST apple", "POST google", "POST link/confirm"];
 
 export async function accountApi(req: Request, env: Cloudflare.Env, path: string, ip: string | null): Promise<Response> {
@@ -140,7 +143,7 @@ export async function accountApi(req: Request, env: Cloudflare.Env, path: string
     if (route === "POST email") {
       const slow = limited(startLimit);
       if (slow) return slow;
-      const bot = await botCheck(env, svc, body, ip, route.slice(5));
+      const bot = await botCheck(env, svc, body, ip, actionOf(route));
       if (bot) return bot;
       const r = await svc.changeEmail(s, body.email, body.password);
       return r === "need-fresh" ? fail("sign in again first", 403) : r === "bad" ? fail("wrong password", 401) : r === "locked" ? fail("too many tries, try again later", 429, { "Retry-After": "900" }) : sentStatus(r);
@@ -154,7 +157,7 @@ export async function accountApi(req: Request, env: Cloudflare.Env, path: string
     if (route === "POST password/code") {
       const slow = limited(startLimit);
       if (slow) return slow;
-      const bot = await botCheck(env, svc, body, ip, route.slice(5));
+      const bot = await botCheck(env, svc, body, ip, actionOf(route));
       if (bot) return bot;
       const r = await svc.passwordCode(s);
       return r === "bad" ? fail("the account already has a password", 400) : sentStatus(r);
@@ -173,7 +176,7 @@ export async function accountApi(req: Request, env: Cloudflare.Env, path: string
   if (route === "POST signup" || route === "POST code") {
     const slow = limited(startLimit);
     if (slow) return slow;
-    const bot = await botCheck(env, svc, body, ip, route.slice(5));
+    const bot = await botCheck(env, svc, body, ip, actionOf(route));
     if (bot) return bot;
     return sentStatus(route === "POST signup" ? await svc.signup(body.email) : await svc.code(body.email));
   }

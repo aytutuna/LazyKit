@@ -193,7 +193,7 @@ describe("bot check over HTTP", () => {
     await account("email", "POST", { email: who.other, password: PASSWORD }, token);
     const t2 = await body(await account("signin", "POST", { email: EMAIL, password: PASSWORD, ...LOGIN, device: DEV_B }));
     await account("password/code", "POST", {}, t2.token);
-    expect(seen).toEqual(["signup", "code", "email", "password/code"]);
+    expect(seen).toEqual(["signup", "code", "email", "password-code"]);
   });
 
   it("does not spend a nonce on a proof that fails, so the right proof can still use it", async () => {
