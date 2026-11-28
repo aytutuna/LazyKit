@@ -22,6 +22,8 @@ const MAX_FILTER_STAGES: usize = 16;
 const CHAIN_OUTPUT_FACTOR: usize = 4;
 
 /// The most a JBIG2 globals stream may expand to; they hold symbols, not pictures.
+type Globals = Arc<Vec<u8>>;
+
 const MAX_GLOBALS: usize = 32 << 20;
 const MAX_CACHED_GLOBALS: usize = 64 << 20;
 
@@ -235,7 +237,7 @@ impl Document {
         stage: &Object,
         image: &Dict,
         max_size: usize,
-    ) -> Result<(Object, Option<Arc<Vec<u8>>>), ReadError> {
+    ) -> Result<(Object, Option<Globals>), ReadError> {
         let mut stage = match stage {
             Object::Dict(d) => d.clone(),
             _ => Dict::new(),
