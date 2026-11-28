@@ -82,10 +82,12 @@ export function useServices(s?: Partial<Services>): void {
 const KEY_URLS = { apple: "https://appleid.apple.com/auth/keys", google: "https://www.googleapis.com/oauth2/v3/certs" };
 const KEYS_KEEP_MS = 3_600_000;
 const KEYS_RETRY_MS = 300_000;
+const KEYS_FAILED_MS = 30_000;
 
 // Providers rotate keys now and then, so an unknown id triggers one fetch, at most every few minutes.
 function publishedKeys(): KeySource {
   const cache = new Map<string, { keys: PublishedKey[]; at: number }>();
+  const failed = new Map<string, number>();
   return {
     async get(provider, kid) {
       const now = Date.now();
@@ -93,11 +95,18 @@ function publishedKeys(): KeySource {
       const find = (keys: PublishedKey[]) => keys.find((k) => k.kid === kid);
       if (kept && now - kept.at < KEYS_KEEP_MS && find(kept.keys)) return find(kept.keys);
       if (kept && now - kept.at < KEYS_RETRY_MS) return undefined;
-      const res = await fetch(KEY_URLS[provider]);
-      if (!res.ok) throw new Error(`${provider} keys answered ${res.status}`);
-      const keys = ((await res.json()) as { keys: PublishedKey[] }).keys;
-      cache.set(provider, { keys, at: now });
-      return find(keys);
+      // A provider that is down is not asked again for a little while.
+      if (now - (failed.get(provider) ?? 0) < KEYS_FAILED_MS) throw new Error(`${provider} keys are unavailable`);
+      try {
+        const res = await fetch(KEY_URLS[provider]);
+        if (!res.ok) throw new Error(`${provider} keys answered ${res.status}`);
+        const keys = ((await res.json()) as { keys: PublishedKey[] }).keys;
+        cache.set(provider, { keys, at: now });
+        return find(keys);
+      } catch (e) {
+        failed.set(provider, now);
+        throw e;
+      }
     },
   };
 }

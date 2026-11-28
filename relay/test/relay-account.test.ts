@@ -1,7 +1,6 @@
 import { env, exports } from "cloudflare:workers";
 import { runInDurableObject } from "cloudflare:test";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { accountName } from "../src/account/core/account";
 import { WEEKLY_CAP } from "../src/group";
 import { purchaseKey } from "../src/purchase";
 import { useServices } from "../src/services";
@@ -19,7 +18,7 @@ const claim = (g: string, token: string, platform = "desktop") => relay(`group/$
 const host = (g: string, device: string, token?: string) => relay(`${room(g)}?role=host&group=${g}&device=${device}`, { headers: { Upgrade: "websocket" } }, token);
 const signIn = async (email: string, device: string) =>
   ((await (await account("signin", "POST", { email, password: PASSWORD, app: "lazysend", device })).json()) as { token: string }).token;
-const quotaOf = async (email: string) => env.QUOTAS.get(env.QUOTAS.idFromName(await accountName(email)));
+const quotaOf = (token: string) => env.QUOTAS.get(env.QUOTAS.idFromName(token.split(".")[0]));
 const empty = (stub: DurableObjectStub) => runInDurableObject(stub, async (_o, state) => expect([...(await state.storage.list())]).toEqual([]));
 
 beforeEach(() => fakes());
@@ -69,7 +68,7 @@ describe("relay use needs an account", () => {
     const [g1, g2] = [newGroup(), newGroup()];
     await claim(g1, a);
     await claim(g2, b);
-    await (await quotaOf(who.email)).record(WEEKLY_CAP);
+    await quotaOf(a).record(WEEKLY_CAP);
     const status = async (g: string, token: string) => (await (await relay(`group/${g}`, {}, token)).json()) as { capped: boolean; paid: boolean };
     expect((await status(g1, a)).capped).toBe(true);
     expect((await status(g2, b)).capped).toBe(true);
@@ -90,7 +89,7 @@ describe("deleting an account clears the relay", () => {
     await relay(`group/${g1}/push`, { method: "POST", body: JSON.stringify({ device: DEVICE_A, platform: "fcm", token: "push-token-1" }) }, token);
     await env.GROUPS.get(env.GROUPS.idFromName(g2)).setPush(DEV_B, "apns", "push-token-2");
     await relay(`group/${g1}/paid`, { method: "POST", body: JSON.stringify({ store: "apple", receipt: "r" }) }, token);
-    const quota = await quotaOf(who.email);
+    const quota = quotaOf(token);
     await quota.record(1234);
 
     const exported = (await (await account("export", "GET", undefined, token)).json()) as any;
@@ -105,7 +104,7 @@ describe("deleting an account clears the relay", () => {
     await empty(quota);
     await empty(env.GROUPS.get(env.GROUPS.idFromName(g1)));
     await empty(env.GROUPS.get(env.GROUPS.idFromName(g2)));
-    await empty(env.ACCOUNTS.get(env.ACCOUNTS.idFromName(await accountName(who.email))));
+    await empty(env.ACCOUNTS.get(env.ACCOUNTS.idFromName(token.split(".")[0])));
 
     // Only the purchase, as hashes, until the paid time ends.
     const owner = env.PURCHASES.get(env.PURCHASES.idFromName(await purchaseKey("apple", "kept-until-paid-time-ends")));

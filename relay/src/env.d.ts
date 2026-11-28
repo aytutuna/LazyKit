@@ -9,6 +9,7 @@ declare namespace Cloudflare {
     QUOTAS: DurableObjectNamespace<import("./quota").Quota>;
     ACCOUNTS: DurableObjectNamespace<import("./account/account").Account>;
     IDENTITIES: DurableObjectNamespace<import("./account/identity").Identity>;
+    ADDRESSES: DurableObjectNamespace<import("./account/account").Address>;
     APPLE_APP_IDS?: string;
     APPLE_ATTEST_ENV?: string;
     PLAY_PACKAGES?: string;
@@ -17,6 +18,7 @@ declare namespace Cloudflare {
     GOOGLE_CLIENT_IDS?: string;
     PASSWORD_STAGES?: string;
     ACCOUNT_KEY?: string;
+    ID_KEY?: string;
     RESEND_API_KEY?: string;
     MAIL_FROM?: string;
   }

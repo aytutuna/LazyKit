@@ -1,4 +1,4 @@
-import type { Store } from "./account";
+import type { Store } from "./store";
 
 interface State {
   account?: string;
@@ -10,7 +10,10 @@ interface State {
 export class IdentityCore {
   private s: State = { used: {} };
 
-  constructor(private store: Store<State>) {}
+  constructor(
+    private store: Store<State>,
+    private now: () => number = Date.now,
+  ) {}
 
   async load(): Promise<void> {
     this.s = (await this.store.get()) ?? { used: {} };
@@ -26,7 +29,7 @@ export class IdentityCore {
   }
 
   // True once for a token; the entry lives until the token would have expired anyway.
-  async use(tokenHash: string, exp: number, now = Date.now()): Promise<boolean> {
+  async use(tokenHash: string, exp: number, now = this.now()): Promise<boolean> {
     for (const [h, until] of Object.entries(this.s.used)) if (until <= now) delete this.s.used[h];
     if (this.s.used[tokenHash]) return false;
     this.s.used[tokenHash] = Math.max(exp * 1000 + 120_000, now + 120_000);

@@ -5,8 +5,7 @@ import { useServices } from "../src/services";
 import { WEEKLY_CAP } from "../src/group";
 import { CLOSE_CAPPED, MAX_BUFFERED, MAX_FRAME, MAX_STREAMS } from "../src/room";
 import { weekOf } from "../src/week";
-import { accountName } from "../src/account/core/account";
-import { groupSession } from "./helpers";
+import { accountIdOf, groupSession } from "./helpers";
 
 declare const __BIG__: boolean;
 
@@ -120,7 +119,7 @@ const bytes = (...v: number[]) => new Uint8Array(v);
 const stub = (room: string) => env.ROOMS.get(env.ROOMS.idFromName(room));
 const groupStub = (group: string) => env.GROUPS.get(env.GROUPS.idFromName(group));
 const used = async (group: string) => (await groupStub(group).status()).used;
-const quotaOf = async (group: string) => env.QUOTAS.get(env.QUOTAS.idFromName(await accountName(`${group}@test.local`)));
+const quotaOf = async (group: string) => env.QUOTAS.get(env.QUOTAS.idFromName(accountIdOf(`${group}@test.local`)));
 const stored = async (group: string) => runInDurableObject(await quotaOf(group), (_o, state) => state.storage.get<Record<string, number>>("usage"));
 
 describe("relay", () => {

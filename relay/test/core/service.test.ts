@@ -1,13 +1,14 @@
 import { beforeEach, describe, expect, it } from "vitest";
-import { accountName } from "../../src/account/core/account";
+import type { Entered } from "../../src/account/core/service";
+import { canonicalEmail } from "../../src/account/core/email";
 import { codeIn, kit, memoryService } from "./memory";
 
 const PASSWORD = "correct horse battery";
 const LOGIN = { app: "lazysend", device: "a".repeat(32), label: "laptop" };
 const OTHER = { ...LOGIN, device: "b".repeat(32) };
-const NONCE = "n".repeat(24);
 const MIN = 60_000;
 const DAY = 86_400_000;
+const sha = async (t: string) => Array.from(new Uint8Array(await crypto.subtle.digest("SHA-256", new TextEncoder().encode(t))), (b) => b.toString(16).padStart(2, "0")).join("");
 
 let n = 0;
 let email = "";
@@ -17,158 +18,327 @@ beforeEach(() => {
   rig = memoryService();
 });
 
-async function signUp(address = email, password = PASSWORD) {
-  const before = rig.mail.length;
-  expect(await rig.service.signup(address, password)).toBe("sent");
-  const r = await rig.service.confirm(address, codeIn(rig.mail[before]), LOGIN);
+const header = (r: Entered) => `Bearer ${(r as { token: string }).token}`;
+const lastMail = () => rig.mail[rig.mail.length - 1];
+
+async function signUp(address = email, password = PASSWORD, login = LOGIN) {
+  expect(await rig.service.signup(address)).toBe("sent");
+  await rig.flush();
+  const r = await rig.service.confirm(address, codeIn(lastMail()), password, login);
   if (!r.ok) throw new Error(`confirm ${r.why}`);
   return r;
 }
 
-const token = (provider: "apple" | "google", claims: Record<string, unknown> = {}, opts = {}) => {
+async function askCode(address = email) {
+  expect(await rig.service.code(address)).toBe("sent");
+  await rig.flush();
+  return codeIn(lastMail());
+}
+
+// A provider token for the nonce the server issued.
+async function token(provider: "apple" | "google", claims: Record<string, unknown> = {}, opts = {}, nonce?: string) {
+  const raw = nonce ?? (await rig.service.nonce())!;
   const now = Math.floor(Date.now() / 1000);
   const base =
     provider === "apple"
-      ? { iss: "https://appleid.apple.com", aud: "com.lazyscan.lazyscan", sub: `apple-${n}`, email, email_verified: "true" }
-      : { iss: "https://accounts.google.com", aud: "google-client", sub: `google-${n}`, email, email_verified: true };
-  return kit.sign({ ...base, nonce: NONCE, iat: now, exp: now + 600, ...claims }, opts);
-};
+      ? { iss: "https://appleid.apple.com", aud: "com.lazyscan.lazyscan", sub: `apple-${n}`, email, email_verified: "true", nonce: await sha(raw) }
+      : { iss: "https://accounts.google.com", aud: "google-client", sub: `google-${n}`, email, email_verified: true, nonce: raw };
+  return { raw, idToken: await kit.sign({ ...base, iat: now, exp: now + 600, ...claims }, opts) };
+}
 
-describe("sign-up and codes", () => {
-  it("makes an account once the code is entered, and a session that names its app and device", async () => {
+async function social(provider: "apple" | "google", claims: Record<string, unknown> = {}, opts = {}, login = LOGIN, caller = "") {
+  const t = await token(provider, claims, opts);
+  return rig.service.social(provider, t.idToken, t.raw, login, caller);
+}
+
+describe("sign-up", () => {
+  it("makes an account from a code and a password, with a random id and a session for its app and device", async () => {
     const r = await signUp();
-    const s = await rig.service.session(`Bearer ${r.token}`);
+    const s = await rig.service.session(header(r));
     expect(s).toMatchObject({ app: "lazysend", device: LOGIN.device });
+    expect(s!.account).toMatch(/^[0-9a-f]{32}$/);
+    expect(s!.account).not.toBe((await sha(email)).slice(0, 32));
     expect(await rig.service.me(s!)).toMatchObject({ email, password: true });
   });
 
-  it("sends nothing and says nothing different for an address that has an account", async () => {
+  it("takes the password with the code, so a later sign-up cannot swap it", async () => {
+    expect(await rig.service.signup(email)).toBe("sent");
+    expect(await rig.service.signup(email)).toBe("sent");
+    await rig.flush();
+    const r = await rig.service.confirm(email, codeIn(lastMail()), "victim password 1", LOGIN);
+    expect(r.ok).toBe(true);
+    for (const guess of ["attacker password", "victim password 2"]) expect((await rig.service.signinPassword(email, guess, OTHER)).ok).toBe(false);
+    expect((await rig.service.signinPassword(email, "victim password 1", OTHER)).ok).toBe(true);
+  });
+
+  it("does not spend the code on a bad password", async () => {
+    await rig.service.signup(email);
+    await rig.flush();
+    const code = codeIn(lastMail());
+    expect(await rig.service.confirm(email, code, "short", LOGIN)).toEqual({ ok: false, why: "bad-password" });
+    expect((await rig.service.confirm(email, code, PASSWORD, LOGIN)).ok).toBe(true);
+  });
+
+  it("tells an address that has an account so by mail, and sends no code", async () => {
     await signUp();
-    expect(await rig.service.signup(email, "another long password")).toBe("sent");
-    expect(rig.mail).toHaveLength(1);
-    expect(await rig.service.code("nobody@example.com")).toBe("sent");
+    const before = rig.mail.length;
+    expect(await rig.service.signup(email)).toBe("sent");
+    await rig.flush();
+    expect(rig.mail).toHaveLength(before + 1);
+    expect(lastMail().subject).toBe("You already have a Lazy account");
+    expect(lastMail().text).not.toMatch(/\d{6}/);
+  });
+
+  it("forgets a sign-up nobody confirmed, but not a newer one", async () => {
+    await rig.service.signup(email);
+    await rig.flush();
+    const [{ core, store }] = [...rig.addresses.values()];
+    rig.clock.now += 5 * MIN;
+    await rig.service.signup(email);
+    rig.clock.now += 6 * MIN;
+    await core.sweep();
+    expect(store.value?.codes.signup).toBeDefined();
+    rig.clock.now += 2 * 3_600_000;
+    await core.sweep();
+    expect(store.value).toBeUndefined();
+  });
+
+  it("refuses an address it cannot read and says plainly when it is not set up", async () => {
+    expect(await rig.service.signup("nope")).toBe("bad-email");
+    expect(await memoryService({ codeKey: undefined }).service.signup(email)).toBe("not-configured");
+    expect(await memoryService({ idKey: undefined }).service.signup(email)).toBe("not-configured");
+    const quiet = memoryService({ mailReady: false });
+    expect(await quiet.service.signup(email)).toBe("not-configured");
+    expect(await quiet.service.code(email)).toBe("not-configured");
+  });
+});
+
+describe("mail", () => {
+  it("passes the same window for every address, so a refusal tells nothing", async () => {
+    await signUp();
+    rig.clock.now += 11 * MIN;
+    const known: string[] = [];
+    const unknown: string[] = [];
+    for (let i = 0; i < 5; i++) known.push(await rig.service.code(email));
+    for (let i = 0; i < 5; i++) unknown.push(await rig.service.code(`nobody${n}@example.com`));
+    expect(known).toEqual(unknown);
+    expect(known[3]).toBe("limited");
+    rig.clock.now += 11 * MIN;
+    const a: string[] = [];
+    const b: string[] = [];
+    for (let i = 0; i < 5; i++) a.push(await rig.service.signup(email));
+    for (let i = 0; i < 5; i++) b.push(await rig.service.signup(`fresh${n}@example.com`));
+    expect(a).toEqual(b);
+  });
+
+  it("never sends more than three mails in a window, even for parallel requests", async () => {
+    await signUp();
+    rig.mail.length = 0;
+    rig.mailer.delay = 20;
+    await Promise.all(Array.from({ length: 30 }, () => rig.service.code(email)));
+    await rig.flush();
+    expect(rig.mail.length).toBeLessThanOrEqual(3);
+  });
+
+  it("takes back the code and the send when the mail is refused", async () => {
+    rig.mailer.fail = true;
+    expect(await rig.service.signup(email)).toBe("sent");
+    await rig.flush();
+    const [{ store }] = [...rig.addresses.values()];
+    expect(store.value!.codes.signup).toBeUndefined();
+    expect(store.value!.sends).toEqual([]);
+    rig.mailer.fail = false;
+    expect(await rig.service.signup(email)).toBe("sent");
+    await rig.flush();
     expect(rig.mail).toHaveLength(1);
   });
 
-  it("gives up on a code after three wrong tries and never on time alone", async () => {
+  it("answers before the mail service does", async () => {
+    rig.mailer.delay = 200;
+    const t0 = Date.now();
+    expect(await rig.service.signup(email)).toBe("sent");
+    expect(Date.now() - t0).toBeLessThan(150);
+    await rig.flush();
+  });
+
+  it("mails the registered address, whatever spelling asked, and counts spellings as one account", async () => {
+    await signUp(`Ada.Lovelace+one${n}@gmail.com`);
+    rig.mail.length = 0;
+    await rig.service.code(`adalovelace+two${n}@googlemail.com`);
+    await rig.flush();
+    expect(rig.mail[0].to).toBe(`ada.lovelace+one${n}@gmail.com`);
+    expect(rig.accounts.size).toBe(1);
+    expect(rig.addresses.size).toBe(1);
+    expect(canonicalEmail("a.b+c@gmail.com")).toBe("ab@gmail.com");
+    expect(canonicalEmail("a.b+c@example.com")).toBe("a.b@example.com");
+  });
+});
+
+describe("codes", () => {
+  it("signs in once with a code", async () => {
     await signUp();
-    await rig.service.code(email);
-    const code = codeIn(rig.mail[1]);
+    const code = await askCode();
+    expect((await rig.service.signinCode(email, code, OTHER)).ok).toBe(true);
+    expect((await rig.service.signinCode(email, code, OTHER)).ok).toBe(false);
+  });
+
+  it("answers an unknown address like a known one", async () => {
+    expect(await rig.service.code(`nobody${n}@example.com`)).toBe("sent");
+    expect(rig.mail).toHaveLength(0);
+    expect(await rig.service.signinCode(`nobody${n}@example.com`, "123456", LOGIN)).toEqual({ ok: false, why: "bad" });
+  });
+
+  it("gives each caller three tries per code and leaves the owner the rest", async () => {
+    await signUp();
+    const code = await askCode();
     const wrong = code === "000000" ? "000001" : "000000";
-    for (let i = 0; i < 3; i++) expect(await rig.service.signinCode(email, wrong, LOGIN)).toEqual({ ok: false, why: "bad" });
-    expect(await rig.service.signinCode(email, code, LOGIN)).toEqual({ ok: false, why: "bad" });
+    for (let i = 0; i < 10; i++) expect((await rig.service.signinCode(email, wrong, LOGIN, "stranger")).ok).toBe(false);
+    expect((await rig.service.signinCode(email, code, OTHER, "stranger")).ok).toBe(false);
+    expect((await rig.service.signinCode(email, code, OTHER, "owner")).ok).toBe(true);
   });
 
   it("counts parallel guesses before comparing", async () => {
     await signUp();
-    await rig.service.code(email);
-    const code = codeIn(rig.mail[1]);
-    const guesses = Array.from({ length: 20 }, (_, i) => String(100000 + i)).map((g) => (g === code ? "999999" : g));
-    const rs = await Promise.all(guesses.map((g) => rig.service.signinCode(email, g, LOGIN)));
+    const code = await askCode();
+    const guesses = Array.from({ length: 30 }, (_, i) => String(100000 + i)).map((g) => (g === code ? "999999" : g));
+    const rs = await Promise.all(guesses.map((g, i) => rig.service.signinCode(email, g, LOGIN, `c${i % 6}`)));
     expect(rs.every((r) => !r.ok)).toBe(true);
-    const state = rig.accounts.get(await accountName(email))!.store.value!;
-    expect(state.codes.signin!.tries).toBe(3);
+    const [{ store }] = [...rig.addresses.values()];
+    expect(store.value!.codes.signin!.tries).toBeLessThanOrEqual(10);
   });
 
-  it("expires a code after ten minutes and allows three codes in ten minutes", async () => {
+  it("stops a stranger after ten wrong codes in a day without closing the owner out, and everyone after a hundred", async () => {
     await signUp();
-    await rig.service.code(email);
-    rig.clock.now += 11 * MIN;
-    expect(await rig.service.signinCode(email, codeIn(rig.mail[1]), LOGIN)).toEqual({ ok: false, why: "bad" });
-    expect(await rig.service.code(email)).toBe("sent");
-    expect(await rig.service.code(email)).toBe("sent");
-    expect(await rig.service.code(email)).toBe("sent");
-    expect(await rig.service.code(email)).toBe("limited");
-  });
-
-  it("stops after ten wrong codes in a day and opens again the next day", async () => {
-    await signUp();
-    for (let round = 0; round < 4; round++) {
+    for (let round = 0; round < 5; round++) {
+      await askCode();
+      for (let i = 0; i < 3; i++) await rig.service.signinCode(email, "000000", LOGIN, "stranger");
       rig.clock.now += 11 * MIN;
-      await rig.service.code(email);
-      for (let i = 0; i < 3; i++) await rig.service.signinCode(email, "000000", LOGIN);
     }
+    const owner = await askCode();
+    expect((await rig.service.signinCode(email, owner, LOGIN, "owner")).ok).toBe(true);
     rig.clock.now += 11 * MIN;
-    await rig.service.code(email);
-    expect((await rig.service.signinCode(email, codeIn(rig.mail[rig.mail.length - 1]), LOGIN)).ok).toBe(false);
+    for (let i = 0; i < 40; i++) {
+      if (i % 2 === 0) await askCode();
+      for (let k = 0; k < 3; k++) await rig.service.signinCode(email, "000000", LOGIN, `bot${i}`);
+      if (i % 2 === 1) rig.clock.now += 11 * MIN;
+    }
+    const late = await askCode();
+    expect((await rig.service.signinCode(email, late, LOGIN, "owner")).ok).toBe(false);
     rig.clock.now += DAY;
-    await rig.service.code(email);
-    expect((await rig.service.signinCode(email, codeIn(rig.mail[rig.mail.length - 1]), LOGIN)).ok).toBe(true);
+    const next = await askCode();
+    expect((await rig.service.signinCode(email, next, LOGIN, "owner")).ok).toBe(true);
   });
 
-  it("keeps no code in the clear, and sends none without the secret", async () => {
+  it("expires a code after ten minutes", async () => {
     await signUp();
-    await rig.service.code(email);
-    const state = rig.accounts.get(await accountName(email))!.store.value!;
-    expect(JSON.stringify(state)).not.toContain(codeIn(rig.mail[1]));
-    const bare = memoryService({ codeKey: undefined });
-    expect(await bare.service.signup(email, PASSWORD)).toBe("not-configured");
-    expect(bare.mail).toHaveLength(0);
+    const code = await askCode();
+    rig.clock.now += 11 * MIN;
+    expect((await rig.service.signinCode(email, code, LOGIN)).ok).toBe(false);
   });
 
-  it("forgets a sign-up nobody confirmed", async () => {
-    await rig.service.signup(email, PASSWORD);
-    const { core, store } = rig.accounts.get(await accountName(email))!;
-    rig.clock.now += 2 * 3_600_000;
-    await core.sweep();
-    expect(store.value).toBeUndefined();
-    expect(store.alarm).toBeUndefined();
+  it("refuses a signup code where a sign-in code is wanted", async () => {
+    await rig.service.signup(email);
+    await rig.flush();
+    expect((await rig.service.signinCode(email, codeIn(lastMail()), LOGIN)).ok).toBe(false);
+  });
+
+  it("keeps no code in the clear", async () => {
+    await signUp();
+    const code = await askCode();
+    const [{ store }] = [...rig.addresses.values()];
+    expect(JSON.stringify(store.value)).not.toContain(code);
   });
 });
 
-describe("passwords and sessions", () => {
-  it("answers a wrong password and an unknown address alike, and locks after ten misses", async () => {
+describe("passwords", () => {
+  it("answers a wrong password and an unknown address alike, locked included", async () => {
     await signUp();
-    const wrong = await rig.service.signinPassword(email, "not the password", LOGIN);
-    expect(wrong).toEqual(await rig.service.signinPassword("nobody@example.com", PASSWORD, LOGIN));
-    for (let i = 0; i < 9; i++) await rig.service.signinPassword(email, `wrong password ${i}`, LOGIN);
-    expect(await rig.service.signinPassword(email, PASSWORD, LOGIN)).toEqual({ ok: false, why: "locked" });
+    const real: Entered[] = [];
+    const none: Entered[] = [];
+    for (let i = 0; i < 11; i++) real.push(await rig.service.signinPassword(email, "wrong password!", LOGIN, "stranger"));
+    for (let i = 0; i < 11; i++) none.push(await rig.service.signinPassword(`nobody${n}@example.com`, "wrong password!", LOGIN, "stranger"));
+    expect(real).toEqual(none);
+    expect(real[10]).toEqual({ ok: false, why: "locked" });
+  });
+
+  it("locks a stranger without locking the owner out", async () => {
+    await signUp();
+    for (let i = 0; i < 12; i++) await rig.service.signinPassword(email, `wrong password ${i}`, LOGIN, "stranger");
+    expect((await rig.service.signinPassword(email, PASSWORD, OTHER, "owner")).ok).toBe(true);
+    expect((await rig.service.signinPassword(email, PASSWORD, OTHER, "stranger")).ok).toBe(false);
     rig.clock.now += 16 * MIN;
-    expect((await rig.service.signinPassword(email, PASSWORD, LOGIN)).ok).toBe(true);
+    expect((await rig.service.signinPassword(email, PASSWORD, OTHER, "stranger")).ok).toBe(true);
   });
 
   it("stores a salted record and never the password", async () => {
-    await signUp();
-    const state = rig.accounts.get(await accountName(email))!.store.value!;
-    expect(state.password).toMatchObject({ v: 1, stages: 1 });
-    expect(JSON.stringify(state)).not.toContain(PASSWORD);
-  });
-
-  it("lets a session lapse after thirty idle days and refreshes an active one", async () => {
     const r = await signUp();
-    const header = `Bearer ${r.token}`;
+    const s = (await rig.service.session(header(r)))!;
+    const { store } = rig.accounts.get(s.account)!;
+    expect(store.value!.password).toMatchObject({ v: 1, stages: 1 });
+    expect(JSON.stringify(store.value)).not.toContain(PASSWORD);
+  });
+});
+
+describe("sessions and re-checks", () => {
+  it("lapses after thirty idle days, and at 180 days however busy", async () => {
+    const r = await signUp();
     rig.clock.now += 20 * DAY;
-    expect(await rig.service.session(header)).toBeTruthy();
+    expect(await rig.service.session(header(r))).toBeTruthy();
     rig.clock.now += 20 * DAY;
-    expect(await rig.service.session(header)).toBeTruthy();
-    rig.clock.now += 40 * DAY;
-    expect(await rig.service.session(header)).toBeUndefined();
+    expect(await rig.service.session(header(r))).toBeTruthy();
+    for (let i = 0; i < 6; i++) {
+      rig.clock.now += 25 * DAY;
+      await rig.service.session(header(r));
+    }
+    expect(await rig.service.session(header(r))).toBeUndefined();
   });
 
   it("refuses forged and cross-account tokens", async () => {
     const a = await signUp();
     const b = await signUp(`grace${n}@example.com`);
-    const [name, secret] = a.token.split(".");
-    const [otherName, otherSecret] = b.token.split(".");
-    for (const bad of [null, "", a.token, `Bearer ${name}`, `Bearer ${name}.${otherSecret}`, `Bearer ${otherName}.${secret}`, `Bearer ${"0".repeat(64)}.${secret}`, `Bearer ${name}.${secret}.x`]) {
+    const [name, secret] = (a as { token: string }).token.split(".");
+    const [otherName, otherSecret] = (b as { token: string }).token.split(".");
+    for (const bad of [null, "", header(a).slice(7), `Bearer ${name}`, `Bearer ${name}.${otherSecret}`, `Bearer ${otherName}.${secret}`, `Bearer ${"0".repeat(32)}.${secret}`, `Bearer ${name}.${secret}.x`]) {
       expect(await rig.service.session(bad), String(bad)).toBeUndefined();
     }
   });
 
-  it("changes a password with the old one or right after signing in, and ends other sessions", async () => {
+  it("lets a new session change the password and ends the others; the old password is needed later", async () => {
     const a = await signUp();
     const b = await rig.service.signinPassword(email, PASSWORD, OTHER);
-    if (!b.ok) throw new Error("no");
-    const s = (await rig.service.session(`Bearer ${b.token}`))!;
+    const s = (await rig.service.session(header(b)))!;
     expect(await rig.service.setPassword(s, "short", undefined)).toBe("bad-password");
     expect(await rig.service.setPassword(s, "a brand new password", undefined)).toBe("ok");
-    expect(await rig.service.session(`Bearer ${a.token}`)).toBeUndefined();
+    expect(await rig.service.session(header(a))).toBeUndefined();
     rig.clock.now += 11 * MIN;
-    const old = (await rig.service.session(`Bearer ${b.token}`))!;
+    const old = (await rig.service.session(header(b)))!;
     expect(old.fresh).toBe(false);
     expect(await rig.service.setPassword(old, "yet another password", undefined)).toBe("bad");
     expect(await rig.service.setPassword(old, "yet another password", "wrong")).toBe("bad");
     expect(await rig.service.setPassword(old, "yet another password", "a brand new password")).toBe("ok");
+    await rig.flush();
+    expect(rig.mail.filter((m) => m.subject === "Your Lazy password was changed")).toHaveLength(2);
+  });
+
+  it("will not let an old session of an Apple-only account set a password or delete it", async () => {
+    const r = await social("apple");
+    rig.clock.now += 20 * DAY;
+    const s = (await rig.service.session(header(r)))!;
+    expect(s.fresh).toBe(false);
+    expect(await rig.service.setPassword(s, "attacker password", undefined)).toBe("need-fresh");
+    expect(await rig.service.delete(s)).toEqual({ ok: false, why: "need-fresh" });
+    expect(await rig.service.session(header(r))).toBeTruthy();
+  });
+
+  it("makes an old session show the password before deleting", async () => {
+    const r = await signUp();
+    rig.clock.now += 20 * DAY;
+    const s = (await rig.service.session(header(r)))!;
+    expect(await rig.service.delete(s)).toEqual({ ok: false, why: "bad" });
+    expect(await rig.service.delete(s, "wrong password!")).toEqual({ ok: false, why: "bad" });
+    expect((await rig.service.signinPassword(email, PASSWORD, OTHER)).ok).toBe(true);
+    expect((await rig.service.delete(s, PASSWORD)).ok).toBe(true);
+    expect((await rig.service.signinPassword(email, PASSWORD, OTHER)).ok).toBe(false);
   });
 
   it("limits sessions to twenty and replaces a device's own", async () => {
@@ -188,87 +358,195 @@ describe("passwords and sessions", () => {
 });
 
 describe("Apple and Google", () => {
-  it("makes one account from either provider and links them by email", async () => {
-    const a = await rig.service.social("apple", await token("apple"), NONCE, LOGIN);
-    const g = await rig.service.social("google", await token("google"), NONCE, OTHER);
-    expect(a.ok && g.ok).toBe(true);
-    if (g.ok) expect(g.account).toMatchObject({ email, providers: ["apple", "google"], sessions: 2 });
+  it("makes an account from a verified token for a nonce the server issued", async () => {
+    const r = await social("apple");
+    expect(r).toMatchObject({ ok: true, account: { email, providers: ["apple"], password: false } });
   });
 
-  it("finds the account by subject when the token has no email, and counts a private relay address", async () => {
-    await rig.service.social("apple", await token("apple"), NONCE, LOGIN);
-    const again = await rig.service.social("apple", await token("apple", { email: undefined, email_verified: undefined, iat: Math.floor(Date.now() / 1000) - 1 }), NONCE, OTHER);
-    expect(again.ok).toBe(true);
-    const relay = await rig.service.social("apple", await token("apple", { email: "x1@privaterelay.appleid.com", sub: "relay-sub" }), NONCE, LOGIN);
-    if (relay.ok) expect(relay.account).toMatchObject({ email: "x1@privaterelay.appleid.com" });
+  it("does not take a nonce read out of the token, or one the server did not issue", async () => {
+    const t = await token("apple");
+    const claim = JSON.parse(atob(t.idToken.split(".")[1].replace(/-/g, "+").replace(/_/g, "/"))).nonce as string;
+    expect((await rig.service.social("apple", t.idToken, claim, LOGIN)).ok).toBe(false);
+    const own = "r".repeat(24);
+    const made = await token("apple", {}, {}, own);
+    expect((await rig.service.social("apple", made.idToken, own, LOGIN)).ok).toBe(false);
+    const forged = `${"x".repeat(24)}.${Date.now() + 60_000}.${"0".repeat(64)}`;
+    const f = await token("google", {}, {}, forged);
+    expect((await rig.service.social("google", f.idToken, forged, LOGIN)).ok).toBe(false);
+    expect((await rig.service.social("apple", t.idToken, t.raw, LOGIN)).ok).toBe(true);
+  });
+
+  it("lets a nonce expire and be used once", async () => {
+    const stale = await token("google");
+    rig.clock.now += 11 * MIN;
+    expect(await rig.service.social("google", stale.idToken, stale.raw, LOGIN)).toEqual({ ok: false, why: "refused" });
+    rig.clock.now -= 11 * MIN;
+    const a = await token("apple");
+    const again = await token("apple", { sub: `other-${n}`, email: `x${n}@example.com` }, {}, a.raw);
+    expect((await rig.service.social("apple", a.idToken, a.raw, LOGIN)).ok).toBe(true);
+    expect((await rig.service.social("apple", again.idToken, a.raw, LOGIN)).ok).toBe(true);
+    const sameSubject = await token("apple", { iat: Math.floor(Date.now() / 1000) - 1 }, {}, a.raw);
+    expect((await rig.service.social("apple", sameSubject.idToken, a.raw, LOGIN)).ok).toBe(false);
   });
 
   it("takes a token once", async () => {
     const t = await token("apple");
-    expect((await rig.service.social("apple", t, NONCE, LOGIN)).ok).toBe(true);
-    expect(await rig.service.social("apple", t, NONCE, LOGIN)).toEqual({ ok: false, why: "refused" });
+    expect((await rig.service.social("apple", t.idToken, t.raw, LOGIN)).ok).toBe(true);
+    expect(await rig.service.social("apple", t.idToken, t.raw, LOGIN)).toEqual({ ok: false, why: "refused" });
+  });
+
+  it("signs a known subject in without an email, and counts a private relay address", async () => {
+    await social("apple");
+    const again = await social("apple", { email: undefined, email_verified: undefined }, {}, OTHER);
+    expect(again.ok).toBe(true);
+    const relay = await social("apple", { email: `x1${n}@privaterelay.appleid.com`, sub: `relay-${n}` });
+    expect(relay).toMatchObject({ ok: true, account: { email: `x1${n}@privaterelay.appleid.com` } });
   });
 
   it("checks issuer, audience, expiry, nonce, signature and algorithm", async () => {
     const now = Math.floor(Date.now() / 1000);
-    const bad: [string, Promise<string>][] = [
-      ["issuer", token("apple", { iss: "https://evil.example" })],
-      ["audience", token("apple", { aud: "com.other.app" })],
-      ["audience list", token("apple", { aud: ["a", "b"] })],
-      ["expired", token("apple", { exp: now - 3600 })],
-      ["no expiry", token("apple", { exp: undefined })],
-      ["future", token("apple", { iat: now + 3600 })],
-      ["nonce", token("apple", { nonce: "m".repeat(24) })],
-      ["no subject", token("apple", { sub: "" })],
-      ["signature", token("apple", {}, { wrongKey: true })],
-      ["key id", token("apple", {}, { kid: "zzz" })],
-      ["alg none", token("apple", {}, { alg: "none" })],
-      ["alg HS256", token("apple", {}, { alg: "HS256" })],
+    const bad: [string, Entered][] = [
+      ["issuer", await social("apple", { iss: "https://evil.example" })],
+      ["audience", await social("apple", { aud: "com.other.app" })],
+      ["audience list", await social("apple", { aud: ["a", "b"] })],
+      ["expired", await social("apple", { exp: now - 3600 })],
+      ["no expiry", await social("apple", { exp: undefined })],
+      ["future", await social("apple", { iat: now + 3600 })],
+      ["nonce claim", await social("apple", { nonce: "m".repeat(24) })],
+      ["no subject", await social("apple", { sub: "" })],
+      ["signature", await social("apple", {}, { wrongKey: true })],
+      ["key id", await social("apple", {}, { kid: "zzz" })],
+      ["alg none", await social("apple", {}, { alg: "none" })],
+      ["alg HS256", await social("apple", {}, { alg: "HS256" })],
+      ["google token on apple", await rig.service.social("apple", (await token("google")).idToken, (await token("google")).raw, LOGIN)],
     ];
-    for (const [name, t] of bad) expect(await rig.service.social("apple", await t, NONCE, LOGIN), name).toEqual({ ok: false, why: "refused" });
-    expect(await rig.service.social("apple", await token("google"), NONCE, LOGIN)).toEqual({ ok: false, why: "refused" });
-    expect(await rig.service.social("google", await token("apple"), NONCE, LOGIN)).toEqual({ ok: false, why: "refused" });
-    expect(await rig.service.social("google", await token("google", { email_verified: false }), NONCE, LOGIN)).toEqual({ ok: false, why: "no-email" });
-    expect(await rig.service.social("apple", "garbage", NONCE, LOGIN)).toEqual({ ok: false, why: "refused" });
-    expect(await rig.service.social("apple", 7, NONCE, LOGIN)).toEqual({ ok: false, why: "bad-input" });
+    for (const [name, r] of bad) expect(r, name).toEqual({ ok: false, why: "refused" });
+    expect(await social("google", { email_verified: false })).toEqual({ ok: false, why: "no-email" });
+    expect(await rig.service.social("apple", "garbage", (await rig.service.nonce())!, LOGIN)).toEqual({ ok: false, why: "refused" });
+    expect(await rig.service.social("apple", 7, "x", LOGIN)).toEqual({ ok: false, why: "bad-input" });
   });
 
-  it("throws away an unconfirmed password sign-up for an address a provider vouches for", async () => {
-    await rig.service.signup(email, "attacker chosen password");
-    const attackerCode = codeIn(rig.mail[0]);
-    expect((await rig.service.social("google", await token("google"), NONCE, LOGIN)).ok).toBe(true);
-    expect((await rig.service.signinPassword(email, "attacker chosen password", OTHER)).ok).toBe(false);
-    expect((await rig.service.confirm(email, attackerCode, OTHER)).ok).toBe(false);
+  it("says the provider is unreachable instead of failing", async () => {
+    const t = await token("apple");
+    const down = memoryService();
+    (down.service as any).cfg.keys = { get: async () => { throw new Error("offline"); } };
+    const nonce = (await down.service.nonce())!;
+    const u = await token("apple", {}, {}, nonce);
+    expect(await down.service.social("apple", u.idToken, nonce, LOGIN)).toEqual({ ok: false, why: "unavailable" });
+    expect(t.raw).toBeTruthy();
+  });
+
+  it("asks the owner of an existing account for a code before linking, and mails a notice after", async () => {
+    const a = await signUp();
+    const before = rig.mail.length;
+    const first = await social("google");
+    expect(first).toEqual({ ok: false, why: "link-code" });
+    await rig.flush();
+    expect(rig.mail).toHaveLength(before + 1);
+    expect(lastMail().to).toBe(email);
+    const s = (await rig.service.session(header(a)))!;
+    expect((await rig.service.me(s))).toMatchObject({ providers: [] });
+
+    expect((await rig.service.confirmLink(email, "000000", OTHER, "stranger")).ok).toBe(false);
+    const linked = await rig.service.confirmLink(email, codeIn(lastMail()), OTHER);
+    expect(linked).toMatchObject({ ok: true, account: { providers: ["google"], password: true } });
+    await rig.flush();
+    expect(lastMail().subject).toBe("A sign-in method was added to your Lazy account");
+    const again = await social("google", {}, {}, { ...OTHER, device: "c".repeat(32) });
+    expect(again.ok).toBe(true);
+  });
+
+  it("does not link when the code is for another purpose or is guessed", async () => {
+    await signUp();
+    await social("google");
+    await rig.flush();
+    for (let i = 0; i < 4; i++) expect((await rig.service.confirmLink(email, "123456", OTHER, "stranger")).ok).toBe(false);
+    const code = codeIn(lastMail());
+    expect((await rig.service.signinCode(email, code, OTHER)).ok).toBe(false);
+  });
+
+  it("drops a pending link when the account is deleted before the code is used", async () => {
+    const a = await signUp();
+    await social("google");
+    await rig.flush();
+    const code = codeIn(lastMail());
+    expect((await rig.service.delete((await rig.service.session(header(a)))!, PASSWORD)).ok).toBe(true);
+    expect((await rig.service.confirmLink(email, code, OTHER)).ok).toBe(false);
+    expect([...rig.identities.values()].every((i) => i.store.value?.account === undefined)).toBe(true);
   });
 
   it("keeps only hashes of the subject and the token", async () => {
     const t = await token("apple");
-    await rig.service.social("apple", t, NONCE, LOGIN);
+    await rig.service.social("apple", t.idToken, t.raw, LOGIN);
     const all = JSON.stringify([...rig.identities.values()].map((i) => i.store.value));
     expect(all).not.toContain(`apple-${n}`);
-    expect(all).not.toContain(t.split(".")[2]);
+    expect(all).not.toContain(t.idToken.split(".")[2]);
+  });
+});
+
+describe("changing the email", () => {
+  it("moves the account to a new address once that address has answered", async () => {
+    const a = await signUp();
+    const s = (await rig.service.session(header(a)))!;
+    const next = `grace${n}@example.com`;
+    expect(await rig.service.changeEmail(s, next)).toBe("sent");
+    await rig.flush();
+    expect(lastMail().to).toBe(next);
+    expect(await rig.service.confirmEmail(s, next, "000000", "stranger")).toBe("bad");
+    expect(await rig.service.confirmEmail(s, next, codeIn(lastMail()))).toBe("ok");
+    expect((await rig.service.signinPassword(next, PASSWORD, OTHER)).ok).toBe(true);
+    expect((await rig.service.signinPassword(email, PASSWORD, OTHER)).ok).toBe(false);
+    expect(await rig.service.me(s)).toMatchObject({ email: next });
+    expect(rig.accounts.size).toBe(1);
+    expect(await rig.service.signup(email)).toBe("sent");
+    await rig.flush();
+    expect(lastMail().text).toMatch(/\d{6}/);
+  });
+
+  it("is refused to a session that is not new, and does not take over an address that has an account", async () => {
+    const a = await signUp();
+    const b = await signUp(`grace${n}@example.com`);
+    const s = (await rig.service.session(header(a)))!;
+    const taken = await rig.service.changeEmail(s, `grace${n}@example.com`);
+    expect(taken).toBe("sent");
+    await rig.flush();
+    expect(lastMail().to).toBe(`grace${n}@example.com`);
+    expect(lastMail().text).not.toMatch(/\d{6}/);
+    expect(await rig.service.confirmEmail(s, `grace${n}@example.com`, "123456")).toBe("bad");
+    rig.clock.now += 11 * MIN;
+    const old = (await rig.service.session(header(a)))!;
+    expect(await rig.service.changeEmail(old, `x${n}@example.com`)).toBe("need-fresh");
+    expect(b.ok).toBe(true);
   });
 });
 
 describe("export and deletion", () => {
-  it("erases the account, its identity links and what apps hold, and reports it", async () => {
+  it("erases the account, its identity links and what apps hold, frees the address and reports it", async () => {
     const erased: string[] = [];
     rig = memoryService({ data: { relay: { erase: async (a) => (erased.push(a), { groups: 2 }), export: async () => ({ groups: [] }) } } });
     const r = await signUp();
-    await rig.service.social("google", await token("google"), NONCE, OTHER);
-    const s = (await rig.service.session(`Bearer ${r.token}`))!;
+    const t = await token("google");
+    await rig.service.social("google", t.idToken, t.raw, OTHER);
+    await rig.flush();
+    await rig.service.confirmLink(email, codeIn(lastMail()), OTHER);
+    const s = (await rig.service.session(header(r)))!;
     const exported = await rig.service.export(s);
     expect(exported.account).toMatchObject({ email, hasPassword: true });
-    expect(JSON.stringify(exported)).not.toContain(r.token.split(".")[1]);
+    expect(JSON.stringify(exported)).not.toContain((r as { token: string }).token.split(".")[1]);
 
     const gone = await rig.service.delete(s);
-    expect(gone).toMatchObject({ account: true, sessions: 2, identities: 1, apps: { relay: { groups: 2 } } });
+    expect(gone).toMatchObject({ ok: true, deleted: { account: true, sessions: 2, identities: 1, apps: { relay: { groups: 2 } } } });
     expect(erased).toEqual([s.account]);
-    const name = await accountName(email);
-    expect(rig.accounts.get(name)!.store.value).toBeUndefined();
-    expect(rig.accounts.get(name)!.store.alarm).toBeUndefined();
+    expect(rig.accounts.get(s.account)!.store.value).toBeUndefined();
+    expect(rig.accounts.get(s.account)!.store.alarm).toBeUndefined();
     expect([...rig.identities.values()].every((i) => i.store.value === undefined)).toBe(true);
-    expect(await rig.service.session(`Bearer ${r.token}`)).toBeUndefined();
+    expect([...rig.addresses.values()].every((x) => x.store.value?.account === undefined)).toBe(true);
+    expect(await rig.service.session(header(r))).toBeUndefined();
     expect(await rig.service.signinPassword(email, PASSWORD, LOGIN)).toEqual({ ok: false, why: "bad" });
+    await rig.service.signup(email);
+    await rig.flush();
+    const again = await rig.service.confirm(email, codeIn(lastMail()), PASSWORD, LOGIN);
+    expect(again.ok).toBe(true);
+    expect((await rig.service.session(header(again)))!.account).not.toBe(s.account);
   });
 });

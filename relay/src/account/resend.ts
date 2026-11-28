@@ -2,6 +2,7 @@ import { MailFailedError, MailNotConfiguredError, type Mailer } from "./core/ema
 
 export function resendMailer(env: { RESEND_API_KEY?: string; MAIL_FROM?: string }): Mailer {
   return {
+    ready: () => Boolean(env.RESEND_API_KEY && env.MAIL_FROM),
     async send(mail) {
       if (!env.RESEND_API_KEY || !env.MAIL_FROM) throw new MailNotConfiguredError("email sending is not configured");
       const res = await fetch("https://api.resend.com/emails", {

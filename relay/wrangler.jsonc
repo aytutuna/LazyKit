@@ -17,12 +17,12 @@
     "GOOGLE_CLIENT_IDS": "",
     "MAIL_FROM": "Lazy <accounts@alazy.app>"
   },
-  "durable_objects": { "bindings": [{ "name": "ROOMS", "class_name": "Room" }, { "name": "GROUPS", "class_name": "Group" }, { "name": "PURCHASES", "class_name": "Purchase" }, { "name": "QUOTAS", "class_name": "Quota" }, { "name": "ACCOUNTS", "class_name": "Account" }, { "name": "IDENTITIES", "class_name": "Identity" }] },
+  "durable_objects": { "bindings": [{ "name": "ROOMS", "class_name": "Room" }, { "name": "GROUPS", "class_name": "Group" }, { "name": "PURCHASES", "class_name": "Purchase" }, { "name": "QUOTAS", "class_name": "Quota" }, { "name": "ACCOUNTS", "class_name": "Account" }, { "name": "IDENTITIES", "class_name": "Identity" }, { "name": "ADDRESSES", "class_name": "Address" }] },
   "migrations": [
     { "tag": "v1", "new_sqlite_classes": ["Room"] },
     { "tag": "v2", "new_sqlite_classes": ["Group"] },
     { "tag": "v3", "new_sqlite_classes": ["Purchase"] },
     { "tag": "v4", "new_sqlite_classes": ["Install"] },
-    { "tag": "v5", "new_sqlite_classes": ["Quota", "Account", "Identity"], "deleted_classes": ["Install"] }
+    { "tag": "v5", "new_sqlite_classes": ["Quota", "Account", "Identity", "Address"], "deleted_classes": ["Install"] }
   ]
 }

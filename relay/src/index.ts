@@ -9,7 +9,7 @@ export { Room } from "./room";
 export { Group } from "./group";
 export { Quota } from "./quota";
 export { Purchase } from "./purchase";
-export { Account } from "./account/account";
+export { Account, Address } from "./account/account";
 export { Identity } from "./account/identity";
 
 const sessionOf = (req: Request, env: Cloudflare.Env) => accountService(env).session(req.headers.get("Authorization"));

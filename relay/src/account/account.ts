@@ -1,7 +1,7 @@
 import { DurableObject } from "cloudflare:workers";
-import { services } from "../services";
-import { AccountCore, type State, type Store } from "./core/account";
-import { resendMailer } from "./resend";
+import { AccountCore, type AccountState, type Store } from "./core/account";
+import { AddressCore, type AddressState } from "./core/address";
+import { depsOf } from "./deps";
 
 export const durableStore = <T>(ctx: DurableObjectState): Store<T> => ({
   get: () => ctx.storage.get<T>("s"),
@@ -13,46 +13,39 @@ export const durableStore = <T>(ctx: DurableObjectState): Store<T> => ({
   cancel: () => ctx.storage.deleteAlarm(),
 });
 
-// One Durable Object per account: it runs the calls one at a time, which is what the code and
-// password try limits rely on, and erasing an account is one deleteAll.
+// One Durable Object per account, named by its random id: it runs the calls one at a time, and
+// erasing an account is one deleteAll.
 export class Account extends DurableObject<Cloudflare.Env> {
   private core: AccountCore;
 
   constructor(ctx: DurableObjectState, env: Cloudflare.Env) {
     super(ctx, env);
-    this.core = new AccountCore(durableStore<State>(ctx), {
-      codeKey: () => env.ACCOUNT_KEY,
-      mailer: () => services().mailer ?? resendMailer(env),
-    });
+    this.core = new AccountCore(durableStore<AccountState>(ctx), depsOf(ctx, env));
     ctx.blockConcurrencyWhile(() => this.core.load());
   }
 
-  startSignup(...a: Parameters<AccountCore["startSignup"]>) {
-    return this.core.startSignup(...a);
+  create(...a: Parameters<AccountCore["create"]>) {
+    return this.core.create(...a);
   }
 
-  startSignin(...a: Parameters<AccountCore["startSignin"]>) {
-    return this.core.startSignin(...a);
+  addIdentity(...a: Parameters<AccountCore["addIdentity"]>) {
+    return this.core.addIdentity(...a);
   }
 
-  confirmSignup(...a: Parameters<AccountCore["confirmSignup"]>) {
-    return this.core.confirmSignup(...a);
+  open(...a: Parameters<AccountCore["open"]>) {
+    return this.core.open(...a);
   }
 
-  signinWithCode(...a: Parameters<AccountCore["signinWithCode"]>) {
-    return this.core.signinWithCode(...a);
-  }
-
-  signinWithPassword(...a: Parameters<AccountCore["signinWithPassword"]>) {
-    return this.core.signinWithPassword(...a);
-  }
-
-  signinWithIdentity(...a: Parameters<AccountCore["signinWithIdentity"]>) {
-    return this.core.signinWithIdentity(...a);
+  verifyPassword(...a: Parameters<AccountCore["verifyPassword"]>) {
+    return this.core.verifyPassword(...a);
   }
 
   check(...a: Parameters<AccountCore["check"]>) {
     return this.core.check(...a);
+  }
+
+  alive(...a: Parameters<AccountCore["alive"]>) {
+    return this.core.alive(...a);
   }
 
   sessions(...a: Parameters<AccountCore["sessions"]>) {
@@ -65,6 +58,18 @@ export class Account extends DurableObject<Cloudflare.Env> {
 
   setPassword(...a: Parameters<AccountCore["setPassword"]>) {
     return this.core.setPassword(...a);
+  }
+
+  authorizeDelete(...a: Parameters<AccountCore["authorizeDelete"]>) {
+    return this.core.authorizeDelete(...a);
+  }
+
+  mailAddress() {
+    return this.core.mailAddress();
+  }
+
+  setEmail(...a: Parameters<AccountCore["setEmail"]>) {
+    return this.core.setEmail(...a);
   }
 
   me() {
@@ -83,6 +88,60 @@ export class Account extends DurableObject<Cloudflare.Env> {
     return this.core.erase();
   }
 
+  async alarm(): Promise<void> {
+    await this.core.sweep();
+  }
+}
+
+// One per email address, named by a keyed hash of its canonical spelling.
+export class Address extends DurableObject<Cloudflare.Env> {
+  private core: AddressCore;
+
+  constructor(ctx: DurableObjectState, env: Cloudflare.Env) {
+    super(ctx, env);
+    this.core = new AddressCore(durableStore<AddressState>(ctx), depsOf(ctx, env));
+    ctx.blockConcurrencyWhile(() => this.core.load());
+  }
+
+  requestSignup(...a: Parameters<AddressCore["requestSignup"]>) {
+    return this.core.requestSignup(...a);
+  }
+
+  requestSignin(...a: Parameters<AddressCore["requestSignin"]>) {
+    return this.core.requestSignin(...a);
+  }
+
+  requestLink(...a: Parameters<AddressCore["requestLink"]>) {
+    return this.core.requestLink(...a);
+  }
+
+  requestEmail(...a: Parameters<AddressCore["requestEmail"]>) {
+    return this.core.requestEmail(...a);
+  }
+
+  takeCode(...a: Parameters<AddressCore["takeCode"]>) {
+    return this.core.takeCode(...a);
+  }
+
+  bindAccount(...a: Parameters<AddressCore["bindAccount"]>) {
+    return this.core.bindAccount(...a);
+  }
+
+  unbind(...a: Parameters<AddressCore["unbind"]>) {
+    return this.core.unbind(...a);
+  }
+
+  account() {
+    return this.core.account();
+  }
+
+  passwordTry(...a: Parameters<AddressCore["passwordTry"]>) {
+    return this.core.passwordTry(...a);
+  }
+
+  passwordGood(...a: Parameters<AddressCore["passwordGood"]>) {
+    return this.core.passwordGood(...a);
+  }
 
   async alarm(): Promise<void> {
     await this.core.sweep();

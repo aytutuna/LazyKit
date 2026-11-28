@@ -1,19 +1,24 @@
-import { accountName, identityName, type AccountCore, type Checked, type Login, type Sent } from "./account";
-import { sha256 } from "./b64";
-import { normalizeEmail } from "./email";
+import type { AccountCore, Checked, Login, Reauth } from "./account";
+import { identityName } from "./account";
+import type { AddressCore, Sent } from "./address";
+import { sha256, toBase64Url } from "./b64";
+import { canonicalEmail, normalizeEmail } from "./email";
 import type { IdentityCore } from "./identity";
-import { IdentityRejectedError, ProviderNotConfiguredError, verifyIdToken, type KeySource, type Provider } from "./oidc";
-import { hashPassword, passwordOk } from "./password";
+import { IdentityRejectedError, KeysUnavailableError, ProviderNotConfiguredError, verifyIdToken, type KeySource, type Provider } from "./oidc";
+import { burnPasswordTime, equal, hashPassword, passwordOk } from "./password";
+import { MINUTE, bytes, hmac, randomId } from "./util";
 
 type Async<T> = { [K in keyof T]: T[K] extends (...a: infer A) => infer R ? (...a: A) => Promise<Awaited<R>> : never };
 
-// What the service calls on one account or identity; a Durable Object stub, a database row or the
-// object itself all fit.
-export type AccountPort = Async<Pick<AccountCore, "startSignup" | "startSignin" | "confirmSignup" | "signinWithCode" | "signinWithPassword" | "signinWithIdentity" | "check" | "sessions" | "revoke" | "setPassword" | "me" | "identityIds" | "export" | "erase">>;
+// What the service calls on one address, account or identity; a Durable Object stub, a database
+// row or the object itself all fit.
+export type AddressPort = Async<Pick<AddressCore, "requestSignup" | "requestSignin" | "requestLink" | "requestEmail" | "takeCode" | "bindAccount" | "unbind" | "account" | "passwordTry" | "passwordGood">>;
+export type AccountPort = Async<Pick<AccountCore, "create" | "addIdentity" | "open" | "verifyPassword" | "check" | "alive" | "sessions" | "revoke" | "setPassword" | "authorizeDelete" | "mailAddress" | "setEmail" | "me" | "identityIds" | "export" | "erase">>;
 export type IdentityPort = Async<Pick<IdentityCore, "account" | "bind" | "use" | "erase">>;
 
 export interface Directory {
-  account(name: string): AccountPort;
+  address(name: string): AddressPort;
+  account(id: string): AccountPort;
   identity(name: string): IdentityPort;
 }
 
@@ -29,15 +34,20 @@ export interface ServiceConfig {
   appleAudiences?: string;
   googleAudiences?: string;
   keys: KeySource;
+  // Key for the address names; without it nothing can be looked up.
+  idKey?: string;
+  // Key for the sign-in nonces.
+  nonceKey?: string;
   stages?: number;
+  now?(): number;
 }
 
-export type Entered =
-  | { ok: true; token: string; session: string; account: unknown }
-  | { ok: false; why: "bad" | "locked" | "refused" | "no-email" | "not-configured" | "bad-email" | "bad-password" | "bad-input" };
+export type Why = "bad" | "locked" | "refused" | "no-email" | "not-configured" | "bad-email" | "bad-password" | "bad-input" | "limited" | "link-code" | "unavailable" | "need-fresh";
+export type Entered = { ok: true; token: string; session: string; account: unknown } | { ok: false; why: Why };
 
 const ID = /^[0-9a-f]{32}$/;
-const TOKEN = /^Bearer ([0-9a-f]{64})\.([A-Za-z0-9_-]{43})$/;
+const TOKEN = /^Bearer ([0-9a-f]{32})\.([A-Za-z0-9_-]{43})$/;
+const NONCE_MS = 10 * MINUTE;
 
 // Sign-in, sessions and deletion for the Lazy account, with no idea where anything is stored.
 export class AccountService {
@@ -46,6 +56,8 @@ export class AccountService {
     private cfg: ServiceConfig,
     private data: Record<string, AppData> = {},
   ) {}
+
+  private clock = () => this.cfg.now?.() ?? Date.now();
 
   // The app and device a session is being made for, or nothing if the body does not say.
   login(body: Record<string, unknown>): Login | undefined {
@@ -64,76 +76,149 @@ export class AccountService {
     return found && found.account === m[1] ? found : undefined;
   }
 
-  private async entered(r: Awaited<ReturnType<AccountPort["signinWithPassword"]>>, name: string): Promise<Entered> {
-    if (!r.ok) return { ok: false, why: r.why };
-    return { ok: true, token: r.token, session: r.session, account: await this.dir.account(name).me() };
+  // Whether a session still stands; open connections ask now and then.
+  alive(account: string, session: string): Promise<boolean> {
+    return this.dir.account(account).alive(session);
   }
 
-  // An address that already has an account is answered like a new one and nothing is sent.
-  async signup(email: unknown, password: unknown): Promise<Sent | "bad-email" | "bad-password"> {
-    const address = normalizeEmail(email);
-    if (!address) return "bad-email";
-    if (!passwordOk(password)) return "bad-password";
-    // Hashed before the lookup, so an address with an account takes as long as a new one.
-    const record = await hashPassword(password, this.cfg.stages);
-    const r = await this.dir.account(await accountName(address)).startSignup(address, record);
-    return r === "exists" ? "sent" : r;
+  private async address(email: unknown) {
+    const typed = normalizeEmail(email);
+    if (!typed || !this.cfg.idKey) return undefined;
+    const canonical = canonicalEmail(typed);
+    return { typed, canonical, port: this.dir.address(await hmac(this.cfg.idKey, `lazy address v1\0${canonical}`)) };
+  }
+
+  private async entered(r: { ok: true; token: string; session: string } | { ok: false }, id: string): Promise<Entered> {
+    if (!r.ok) return { ok: false, why: "bad" };
+    return { ok: true, token: r.token, session: r.session, account: await this.dir.account(id).me() };
+  }
+
+  async signup(email: unknown): Promise<Sent | "bad-email"> {
+    const a = await this.address(email);
+    if (!a) return normalizeEmail(email) ? "not-configured" : "bad-email";
+    return a.port.requestSignup(a.typed, a.canonical);
   }
 
   async code(email: unknown): Promise<Sent | "bad-email"> {
-    const address = normalizeEmail(email);
-    if (!address) return "bad-email";
-    const r = await this.dir.account(await accountName(address)).startSignin();
-    return r === "none" ? "sent" : r;
+    const a = await this.address(email);
+    if (!a) return normalizeEmail(email) ? "not-configured" : "bad-email";
+    return a.port.requestSignin(a.canonical);
   }
 
-  async confirm(email: unknown, code: unknown, login: Login): Promise<Entered> {
-    return this.withCode(email, code, login, (a, c) => a.confirmSignup(c, login));
+  // The password arrives with the code, so what is confirmed is what this request holds.
+  async confirm(email: unknown, code: unknown, password: unknown, login: Login, caller = ""): Promise<Entered> {
+    const a = await this.address(email);
+    if (!a) return { ok: false, why: normalizeEmail(email) ? "not-configured" : "bad-email" };
+    if (!passwordOk(password)) return { ok: false, why: "bad-password" };
+    const taken = await a.port.takeCode("signup", code, a.canonical, caller);
+    if (!taken.ok) return { ok: false, why: "bad" };
+    const id = randomId();
+    const account = this.dir.account(id);
+    await account.create(id, taken.mailTo, await hashPassword(password, this.cfg.stages));
+    if (!(await a.port.bindAccount(id, taken.mailTo))) {
+      await account.erase();
+      return { ok: false, why: "bad" };
+    }
+    return this.entered(await account.open(login), id);
   }
 
-  async signinCode(email: unknown, code: unknown, login: Login): Promise<Entered> {
-    return this.withCode(email, code, login, (a, c) => a.signinWithCode(c, login));
+  async signinCode(email: unknown, code: unknown, login: Login, caller = ""): Promise<Entered> {
+    const a = await this.address(email);
+    if (!a) return { ok: false, why: normalizeEmail(email) ? "not-configured" : "bad-email" };
+    const taken = await a.port.takeCode("signin", code, a.canonical, caller);
+    if (!taken.ok || !taken.account) return { ok: false, why: "bad" };
+    return this.entered(await this.dir.account(taken.account).open(login), taken.account);
   }
 
-  private async withCode(email: unknown, code: unknown, _login: Login, go: (a: AccountPort, c: string) => ReturnType<AccountPort["signinWithCode"]>): Promise<Entered> {
-    const address = normalizeEmail(email);
-    if (!address) return { ok: false, why: "bad-email" };
-    const name = await accountName(address);
-    return this.entered(await go(this.dir.account(name), typeof code === "string" ? code.trim() : ""), name);
-  }
-
-  async signinPassword(email: unknown, password: unknown, login: Login): Promise<Entered> {
-    const address = normalizeEmail(email);
-    if (!address) return { ok: false, why: "bad-email" };
+  async signinPassword(email: unknown, password: unknown, login: Login, caller = ""): Promise<Entered> {
+    const a = await this.address(email);
+    if (!a) return { ok: false, why: normalizeEmail(email) ? "not-configured" : "bad-email" };
     if (typeof password !== "string" || password.length > 1024) return { ok: false, why: "bad-password" };
-    const name = await accountName(address);
-    return this.entered(await this.dir.account(name).signinWithPassword(password, login), name);
+    if ((await a.port.passwordTry(caller)) === "locked") return { ok: false, why: "locked" };
+    const id = await a.port.account();
+    if (!id) {
+      await burnPasswordTime(this.cfg.stages);
+      return { ok: false, why: "bad" };
+    }
+    const account = this.dir.account(id);
+    if (!(await account.verifyPassword(password))) return { ok: false, why: "bad" };
+    await a.port.passwordGood(caller);
+    return this.entered(await account.open(login), id);
   }
 
-  // Both providers hand the app an ID token for a nonce the app made. A token is good for one sign-in.
-  async social(provider: Provider, idToken: unknown, nonce: unknown, login: Login): Promise<Entered> {
+  // A nonce the app takes to Apple or Google: random, stamped with its expiry and signed, so the
+  // sign-in that uses it is one this server asked for.
+  async nonce(): Promise<string | undefined> {
+    if (!this.cfg.nonceKey) return undefined;
+    const body = `${toBase64Url(crypto.getRandomValues(new Uint8Array(18)))}.${this.clock() + NONCE_MS}`;
+    return `${body}.${await hmac(this.cfg.nonceKey, `lazy nonce v1\0${body}`)}`;
+  }
+
+  private async nonceGood(nonce: string): Promise<boolean> {
+    const m = /^([A-Za-z0-9_-]{24})\.(\d{10,16})\.([0-9a-f]{64})$/.exec(nonce);
+    if (!m || !this.cfg.nonceKey || Number(m[2]) < this.clock()) return false;
+    return equal(bytes(await hmac(this.cfg.nonceKey, `lazy nonce v1\0${m[1]}.${m[2]}`)), bytes(m[3]));
+  }
+
+  // Both providers hand the app an ID token for the nonce this server issued (Apple's carries its
+  // SHA-256, Google's the nonce itself). A token and a nonce are good for one sign-in each.
+  async social(provider: Provider, idToken: unknown, nonce: unknown, login: Login, caller = ""): Promise<Entered> {
     if (typeof idToken !== "string" || typeof nonce !== "string") return { ok: false, why: "bad-input" };
+    if (!(await this.nonceGood(nonce))) return { ok: false, why: "refused" };
     let ident;
     try {
-      ident = await verifyIdToken(provider, idToken, nonce, provider === "apple" ? this.cfg.appleAudiences : this.cfg.googleAudiences, this.cfg.keys);
+      ident = await verifyIdToken(provider, idToken, provider === "apple" ? await sha256(nonce) : nonce, provider === "apple" ? this.cfg.appleAudiences : this.cfg.googleAudiences, this.cfg.keys, this.clock());
     } catch (e) {
       if (e instanceof ProviderNotConfiguredError) return { ok: false, why: "not-configured" };
+      if (e instanceof KeysUnavailableError) return { ok: false, why: "unavailable" };
       if (e instanceof IdentityRejectedError) return { ok: false, why: "refused" };
       throw e;
     }
     const id = await identityName(provider, ident.sub);
     const identity = this.dir.identity(id);
-    if (!(await identity.use(await sha256(idToken), ident.exp))) return { ok: false, why: "refused" };
+    if (!(await identity.use(await sha256(idToken), ident.exp)) || !(await identity.use(`nonce:${await sha256(nonce)}`, ident.exp))) return { ok: false, why: "refused" };
 
-    let name = await identity.account();
-    const email = name ? "" : normalizeEmail(ident.email);
-    if (!name) {
-      if (!email) return { ok: false, why: "no-email" };
-      name = await accountName(email);
+    const known = await identity.account();
+    if (known) {
+      const r = await this.dir.account(known).open(login);
+      if (!r.ok) await identity.erase();
+      return r.ok ? this.entered(r, known) : { ok: false, why: "refused" };
     }
-    const r = await this.dir.account(name).signinWithIdentity(email || "", { id, provider }, login);
-    if (r.ok) await identity.bind(name);
-    return this.entered(r, name);
+    const a = await this.address(ident.email);
+    if (!a) return { ok: false, why: ident.email ? (normalizeEmail(ident.email) ? "not-configured" : "no-email") : "no-email" };
+
+    // The address already has an account: the owner says yes by code before anything is linked.
+    if (await a.port.account()) {
+      const sent = await a.port.requestLink(a.canonical, { id, provider });
+      return sent === "sent" ? { ok: false, why: "link-code" } : { ok: false, why: sent === "none" ? "refused" : sent };
+    }
+    const fresh = randomId();
+    const account = this.dir.account(fresh);
+    // The link is written before the account that holds it, so deleting the account cannot miss it.
+    await identity.bind(fresh);
+    await account.create(fresh, a.typed, undefined, { id, provider });
+    if (!(await a.port.bindAccount(fresh, a.typed))) {
+      await account.erase();
+      await identity.erase();
+      return { ok: false, why: "refused" };
+    }
+    return this.entered(await account.open(login), fresh);
+  }
+
+  async confirmLink(email: unknown, code: unknown, login: Login, caller = ""): Promise<Entered> {
+    const a = await this.address(email);
+    if (!a) return { ok: false, why: normalizeEmail(email) ? "not-configured" : "bad-email" };
+    const taken = await a.port.takeCode("link", code, a.canonical, caller);
+    const link = taken.ok ? (taken.extra as { id: string; provider: string } | undefined) : undefined;
+    if (!taken.ok || !taken.account || !link) return { ok: false, why: "bad" };
+    const identity = this.dir.identity(link.id);
+    const account = this.dir.account(taken.account);
+    await identity.bind(taken.account);
+    if ((await account.addIdentity(link)) === "gone") {
+      await identity.erase();
+      return { ok: false, why: "bad" };
+    }
+    return this.entered(await account.open(login), taken.account);
   }
 
   me = (s: Checked) => this.dir.account(s.account).me();
@@ -141,10 +226,33 @@ export class AccountService {
   revoke = (s: Checked, id: string) => this.dir.account(s.account).revoke(id);
   signout = (s: Checked) => this.dir.account(s.account).revoke(s.session);
 
-  async setPassword(s: Checked, password: unknown, current: unknown): Promise<"ok" | "bad" | "locked" | "bad-password"> {
+  async setPassword(s: Checked, password: unknown, current: unknown): Promise<Reauth | "bad-password"> {
     if (!passwordOk(password)) return "bad-password";
     const record = await hashPassword(password, this.cfg.stages);
     return this.dir.account(s.account).setPassword(record, typeof current === "string" ? current : undefined, s.fresh, s.session);
+  }
+
+  // Asks that a stale session shows the password first.
+  async changeEmail(s: Checked, email: unknown): Promise<Sent | "bad-email" | "need-fresh"> {
+    if (!s.fresh) return "need-fresh";
+    const a = await this.address(email);
+    if (!a) return normalizeEmail(email) ? "not-configured" : "bad-email";
+    return a.port.requestEmail(a.typed, a.canonical, s.account);
+  }
+
+  async confirmEmail(s: Checked, email: unknown, code: unknown, caller = ""): Promise<"ok" | "bad" | "bad-email" | "need-fresh"> {
+    if (!s.fresh) return "need-fresh";
+    const a = await this.address(email);
+    if (!a) return "bad-email";
+    const taken = await a.port.takeCode("email", code, a.canonical, caller);
+    if (!taken.ok || taken.extra !== s.account) return "bad";
+    const account = this.dir.account(s.account);
+    const old = await account.mailAddress();
+    if (!(await a.port.bindAccount(s.account, taken.mailTo))) return "bad";
+    await account.setEmail(taken.mailTo);
+    const previous = old && (await this.address(old));
+    if (previous && previous.canonical !== a.canonical) await previous.port.unbind(s.account);
+    return "ok";
   }
 
   async export(s: Checked) {
@@ -153,13 +261,20 @@ export class AccountService {
     return { account: await this.dir.account(s.account).export(), apps };
   }
 
-  // Everything that hangs off the account goes first, and each step can be run again; the account itself goes last.
-  async delete(s: Checked) {
+  // A session that is not new has to show the password. Everything that hangs off the account goes
+  // first, and each step can be run again; the account itself goes last.
+  async delete(s: Checked, password?: unknown) {
     const acct = this.dir.account(s.account);
+    const ok = await acct.authorizeDelete(s.fresh, typeof password === "string" ? password : undefined);
+    if (ok !== "ok") return { ok: false as const, why: ok };
+    const email = await acct.mailAddress();
     for (const id of await acct.identityIds()) await this.dir.identity(id).erase();
     const apps: Record<string, unknown> = {};
     for (const [k, d] of Object.entries(this.data)) apps[k] = await d.erase(s.account);
     const own = await acct.erase();
-    return { account: true, ...own, apps };
+    const a = email ? await this.address(email) : undefined;
+    if (a) await a.port.unbind(s.account);
+    return { ok: true as const, deleted: { account: true, ...own, apps } };
   }
 }
+

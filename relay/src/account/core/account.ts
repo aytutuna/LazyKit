@@ -1,55 +1,19 @@
 import { sha256, toBase64Url } from "./b64";
-import { MailFailedError, MailNotConfiguredError, type Mailer } from "./email";
 import { burnPasswordTime, equal, verifyPassword, type PasswordRecord } from "./password";
+import type { Deps, Store } from "./store";
+import { DAY, MINUTE, bytes, noFails, failsAdd, failsForgive, failsFull, type Fails } from "./util";
 
-const MINUTE = 60_000;
-const DAY = 86_400_000;
-const CODE_MS = 10 * MINUTE;
-const CODE_TRIES = 3;
-const CODES_PER_WINDOW = 3;
-const CODE_FAILS_PER_DAY = 10;
-const PASSWORD_FAILS = 10;
-const PASSWORD_WINDOW_MS = 15 * MINUTE;
 const SESSION_IDLE_MS = 30 * DAY;
+const SESSION_MAX_MS = 180 * DAY;
 const SEEN_REFRESH_MS = 3_600_000;
 const FRESH_MS = 10 * MINUTE;
 const MAX_SESSIONS = 20;
-const PENDING_KEEP_MS = 3_600_000;
+const REAUTH_WINDOW_MS = 15 * MINUTE;
+const REAUTH_FAILS = 10;
 
-export const accountName = (email: string) => sha256(`lazy account v1\0${email}`);
+export type { Store };
+
 export const identityName = (provider: string, sub: string) => sha256(`lazy identity v1\0${provider}\0${sub}`);
-
-const bytes = (s: string) => new TextEncoder().encode(s);
-
-export type { State };
-
-async function hmac(key: string, text: string): Promise<string> {
-  const k = await crypto.subtle.importKey("raw", bytes(key), { name: "HMAC", hash: "SHA-256" }, false, ["sign"]);
-  return Array.from(new Uint8Array(await crypto.subtle.sign("HMAC", k, bytes(text))), (b) => b.toString(16).padStart(2, "0")).join("");
-}
-
-// Where one account's state lives and when it is next swept; a Durable Object, a table row or a map.
-export interface Store<T> {
-  get(): Promise<T | undefined>;
-  put(value: T): Promise<void>;
-  erase(): Promise<void>;
-  // Asks for a sweep at that time unless one is already booked.
-  scheduleIfNone(at: number): Promise<void>;
-  cancel(): Promise<void>;
-}
-
-export interface AccountDeps {
-  // The secret that keys the stored code hashes; without it no code can be sent.
-  codeKey(): string | undefined;
-  mailer(): Mailer;
-  now?(): number;
-}
-
-interface Code {
-  hash: string;
-  expires: number;
-  tries: number;
-}
 
 interface Session {
   id: string;
@@ -61,18 +25,14 @@ interface Session {
   seen: number;
 }
 
-interface State {
+export interface AccountState {
+  id: string;
   email: string;
   created: number;
-  active: boolean;
   password?: PasswordRecord;
-  pending?: PasswordRecord;
-  codes: { signup?: Code; signin?: Code };
-  sends: number[];
-  passwordFails: { count: number; since: number };
-  codeFails: { count: number; since: number };
   identities: { id: string; provider: string }[];
   sessions: Session[];
+  reauth: Fails;
 }
 
 export interface Login {
@@ -81,8 +41,7 @@ export interface Login {
   label: string;
 }
 
-export type Signed = { ok: true; token: string; session: string } | { ok: false; why: "bad" | "locked" };
-export type Sent = "sent" | "limited" | "not-configured" | "failed";
+export type Signed = { ok: true; token: string; session: string } | { ok: false; why: "bad" };
 
 export interface Checked {
   account: string;
@@ -92,16 +51,18 @@ export interface Checked {
   fresh: boolean;
 }
 
-// Everything about one person's sign-in: named by a hash of the verified email, so one address is one
-// account whichever way it was proved. It knows nothing of any app's data; apps ask it who a session
-// belongs to. Every rule here is about one account at a time (count the try, then compare), so the
-// store must hand it one account's state and run its calls one after another.
+export type Reauth = "ok" | "bad" | "locked" | "need-fresh";
+
+// One person's sign-in methods and sessions, under a random id that nothing else is derived from.
+// It knows nothing of any app's data; apps ask it who a session belongs to. Counting wrong tries at
+// the front door is the address object's job; this one counts only the checks made with a live
+// session (changing the password, deleting the account).
 export class AccountCore {
-  private s?: State;
+  private s?: AccountState;
 
   constructor(
-    private store: Store<State>,
-    private deps: AccountDeps,
+    private store: Store<AccountState>,
+    private deps: Deps,
   ) {}
 
   async load(): Promise<void> {
@@ -112,139 +73,36 @@ export class AccountCore {
 
   private async save(): Promise<void> {
     await this.store.put(this.s!);
-    await this.store.scheduleIfNone(this.clock() + (this.s!.active ? DAY : PENDING_KEEP_MS));
+    await this.store.scheduleIfNone(this.clock() + DAY);
   }
 
-  private fresh(email: string, now: number): State {
-    return { email, created: now, active: false, codes: {}, sends: [], passwordFails: { count: 0, since: 0 }, codeFails: { count: 0, since: 0 }, identities: [], sessions: [] };
+  // Tells the person by mail that something about their sign-in changed; a failure to send is ignored.
+  private notify(subject: string, text: string): void {
+    this.deps.defer(this.deps.mailer().send({ to: this.s!.email, subject, text }).catch(() => undefined));
   }
 
-  // The code is keyed with a secret over the address, so a copy of the stored hash cannot be guessed offline.
-  private codeHash(code: string): Promise<string> {
-    return hmac(this.deps.codeKey()!, `${this.s!.email}\0${code}`);
-  }
-
-  // Sends a new code; nothing stays behind if the mail does not go.
-  private async mailCode(purpose: "signup" | "signin", now: number): Promise<Sent> {
-    const s = this.s!;
-    if (!this.deps.codeKey()) return "not-configured";
-    s.sends = s.sends.filter((t) => now - t < CODE_MS);
-    if (s.sends.length >= CODES_PER_WINDOW) return "limited";
-    let digits: string;
-    for (;;) {
-      const n = crypto.getRandomValues(new Uint32Array(1))[0];
-      if (n < 4_294_000_000) {
-        digits = String(n % 1_000_000).padStart(6, "0");
-        break;
-      }
-    }
-    const previous = s.codes[purpose];
-    s.codes[purpose] = { hash: await this.codeHash(digits), expires: now + CODE_MS, tries: 0 };
-    const text =
-      purpose === "signup"
-        ? `Your Lazy code is ${digits}. It confirms your new account and works for 10 minutes. If you did not ask for it, ignore this email.`
-        : `Your Lazy sign-in code is ${digits}. It works for 10 minutes. If you did not ask for it, ignore this email and nobody gets in.`;
-    try {
-      await this.deps.mailer().send({ to: s.email, subject: `Your Lazy code: ${digits}`, text });
-    } catch (e) {
-      s.codes[purpose] = previous;
-      if (e instanceof MailNotConfiguredError) return "not-configured";
-      if (e instanceof MailFailedError) return "failed";
-      throw e;
-    }
-    s.sends.push(now);
+  // False when the id is taken.
+  async create(id: string, email: string, password?: PasswordRecord, identity?: { id: string; provider: string }, now = this.clock()): Promise<boolean> {
+    if (this.s) return false;
+    this.s = { id, email, created: now, password, identities: identity ? [identity] : [], sessions: [], reauth: noFails() };
     await this.save();
-    return "sent";
+    return true;
   }
 
-  // An address that already has an account gets nothing and the caller cannot tell.
-  async startSignup(email: string, password: PasswordRecord, now = this.clock()): Promise<Sent | "exists"> {
-    this.s ??= this.fresh(email, now);
-    if (this.s.active) return "exists";
-    const sent = await this.mailCode("signup", now);
-    if (sent === "sent") {
-      this.s.pending = password;
+  async addIdentity(identity: { id: string; provider: string }): Promise<"ok" | "gone"> {
+    const s = this.s;
+    if (!s) return "gone";
+    if (!s.identities.some((i) => i.id === identity.id)) {
+      s.identities.push(identity);
       await this.save();
+      this.notify("A sign-in method was added to your Lazy account", `${identity.provider === "apple" ? "Sign in with Apple" : "Sign in with Google"} can now sign in to your Lazy account. If that was not you, change your password and remove the sessions you do not know in the app.`);
     }
-    return sent;
+    return "ok";
   }
 
-  async startSignin(now = this.clock()): Promise<Sent | "none"> {
-    if (!this.s?.active) return "none";
-    return this.mailCode("signin", now);
-  }
-
-  // The try is counted before the compare, so parallel guesses cannot all slip under the limit.
-  private async takeCode(purpose: "signup" | "signin", code: string, now: number): Promise<boolean> {
-    const s = this.s!;
-    const c = s.codes[purpose];
-    if (!c) return false;
-    if (now - s.codeFails.since >= DAY) s.codeFails = { count: 0, since: now };
-    if (c.expires <= now || c.tries >= CODE_TRIES || s.codeFails.count >= CODE_FAILS_PER_DAY) return false;
-    c.tries++;
-    await this.save();
-    const ok = typeof code === "string" && /^\d{6}$/.test(code) && equal(bytes(await this.codeHash(code)), bytes(c.hash));
-    if (ok) delete s.codes[purpose];
-    else s.codeFails.count++;
-    await this.save();
-    return ok;
-  }
-
-  async confirmSignup(code: string, login: Login, now = this.clock()): Promise<Signed> {
+  async open(login: Login, now = this.clock()): Promise<Signed> {
     const s = this.s;
-    if (!s || s.active || !s.pending || !(await this.takeCode("signup", code, now))) return { ok: false, why: "bad" };
-    s.password = s.pending;
-    return this.open(login, now, true);
-  }
-
-  async signinWithCode(code: string, login: Login, now = this.clock()): Promise<Signed> {
-    if (!this.s?.active || !(await this.takeCode("signin", code, now))) return { ok: false, why: "bad" };
-    return this.open(login, now);
-  }
-
-  async signinWithPassword(password: string, login: Login, now = this.clock()): Promise<Signed> {
-    const s = this.s;
-    if (!s?.active || !s.password) {
-      await burnPasswordTime();
-      return { ok: false, why: "bad" };
-    }
-    if (!this.passwordTry(now)) return { ok: false, why: "locked" };
-    await this.save();
-    if (!(await verifyPassword(password, s.password))) return { ok: false, why: "bad" };
-    s.passwordFails = { count: 0, since: 0 };
-    return this.open(login, now);
-  }
-
-  private passwordTry(now: number): boolean {
-    const f = this.s!.passwordFails;
-    if (now - f.since >= PASSWORD_WINDOW_MS) {
-      f.count = 0;
-      f.since = now;
-    }
-    return ++f.count <= PASSWORD_FAILS;
-  }
-
-  // Apple or Google vouched for the address. An unconfirmed password sign-up for it is thrown away,
-  // so a stranger who typed the address first cannot keep a way in.
-  async signinWithIdentity(email: string, identity: { id: string; provider: string }, login: Login, now = this.clock()): Promise<Signed> {
-    if (!this.s && !email) return { ok: false, why: "bad" };
-    this.s ??= this.fresh(email, now);
-    const s = this.s;
-    if (!s.active) {
-      s.pending = undefined;
-      s.codes = {};
-      s.created = now;
-    }
-    if (!s.identities.some((i) => i.id === identity.id)) s.identities.push(identity);
-    return this.open(login, now, true);
-  }
-
-  private async open(login: Login, now: number, activate = false): Promise<Signed> {
-    const s = this.s!;
-    if (activate) {
-      s.active = true;
-      s.pending = undefined;
-    }
+    if (!s) return { ok: false, why: "bad" };
     const secret = toBase64Url(crypto.getRandomValues(new Uint8Array(32)));
     const id = toBase64Url(crypto.getRandomValues(new Uint8Array(9)));
     // A device that signs in again replaces its own earlier session for the same app.
@@ -252,16 +110,26 @@ export class AccountCore {
     s.sessions.push({ id, hash: await sha256(secret), app: login.app, device: login.device, label: login.label, created: now, seen: now });
     if (s.sessions.length > MAX_SESSIONS) s.sessions.sort((a, b) => a.seen - b.seen).splice(0, s.sessions.length - MAX_SESSIONS);
     await this.save();
-    return { ok: true, token: `${await accountName(s.email)}.${secret}`, session: id };
+    return { ok: true, token: `${s.id}.${secret}`, session: id };
+  }
+
+  // Takes as long for an account without a password as for one with it.
+  async verifyPassword(password: string): Promise<boolean> {
+    const rec = this.s?.password;
+    if (!rec) {
+      await burnPasswordTime(this.deps.stages?.());
+      return false;
+    }
+    return verifyPassword(password, rec);
   }
 
   async check(secret: string, now = this.clock()): Promise<Checked | undefined> {
     const s = this.s;
-    if (!s?.active) return undefined;
+    if (!s) return undefined;
     const hash = bytes(await sha256(secret));
     const found = s.sessions.find((x) => equal(bytes(x.hash), hash));
     if (!found) return undefined;
-    if (now - found.seen > SESSION_IDLE_MS) {
+    if (now - found.seen > SESSION_IDLE_MS || now - found.created > SESSION_MAX_MS) {
       s.sessions = s.sessions.filter((x) => x !== found);
       await this.save();
       return undefined;
@@ -270,7 +138,12 @@ export class AccountCore {
       found.seen = now;
       await this.save();
     }
-    return { account: await accountName(s.email), session: found.id, app: found.app, device: found.device, fresh: now - found.created < FRESH_MS };
+    return { account: s.id, session: found.id, app: found.app, device: found.device, fresh: now - found.created < FRESH_MS };
+  }
+
+  // Whether a session still stands, for open connections to ask now and then.
+  alive(session: string): boolean {
+    return Boolean(this.s?.sessions.some((x) => x.id === session));
   }
 
   sessions(current: string) {
@@ -285,27 +158,51 @@ export class AccountCore {
     return true;
   }
 
-  // Changing a password needs the old one unless the session is a few minutes old, which is how a
-  // person who forgot it sets a new one after signing in by email code. Other sessions end.
-  async setPassword(next: PasswordRecord, current: string | undefined, fresh: boolean, session: string, now = this.clock()): Promise<"ok" | "bad" | "locked"> {
+  // A session made in the last minutes may act on its own; an older one has to show the password,
+  // and where there is none it has to sign in again.
+  private async reauth(fresh: boolean, password: string | undefined, now: number): Promise<Reauth> {
     const s = this.s;
-    if (!s?.active) return "bad";
-    if (s.password && !fresh) {
-      if (typeof current !== "string") return "bad";
-      if (!this.passwordTry(now)) return "locked";
-      await this.save();
-      if (!(await verifyPassword(current, s.password))) return "bad";
-      s.passwordFails = { count: 0, since: 0 };
-    }
+    if (!s) return "bad";
+    if (fresh) return "ok";
+    if (!s.password) return "need-fresh";
+    if (typeof password !== "string") return "bad";
+    if (failsFull(s.reauth, "", now, REAUTH_WINDOW_MS, REAUTH_FAILS, REAUTH_FAILS)) return "locked";
+    failsAdd(s.reauth, "", now, REAUTH_WINDOW_MS);
+    await this.save();
+    if (!(await verifyPassword(password, s.password))) return "bad";
+    failsForgive(s.reauth, "");
+    return "ok";
+  }
+
+  async setPassword(next: PasswordRecord, current: string | undefined, fresh: boolean, session: string, now = this.clock()): Promise<Reauth> {
+    const r = await this.reauth(fresh, current, now);
+    if (r !== "ok") return r;
+    const s = this.s!;
     s.password = next;
     s.sessions = s.sessions.filter((x) => x.id === session);
     await this.save();
+    this.notify("Your Lazy password was changed", "The password of your Lazy account was changed and your other sessions were signed out. If that was not you, ask for a sign-in code and change it again.");
     return "ok";
+  }
+
+  authorizeDelete(fresh: boolean, password: string | undefined, now = this.clock()): Promise<Reauth> {
+    return this.reauth(fresh, password, now);
+  }
+
+  mailAddress(): string | undefined {
+    return this.s?.email;
+  }
+
+  async setEmail(email: string): Promise<void> {
+    if (!this.s) return;
+    this.s.email = email;
+    await this.save();
+    this.notify("The email of your Lazy account changed", "This address is now the email of your Lazy account.");
   }
 
   me() {
     const s = this.s;
-    if (!s?.active) return undefined;
+    if (!s) return undefined;
     return { email: s.email, created: s.created, providers: [...new Set(s.identities.map((i) => i.provider))], password: Boolean(s.password), sessions: s.sessions.length };
   }
 
@@ -315,7 +212,7 @@ export class AccountCore {
 
   export() {
     const s = this.s;
-    if (!s?.active) return undefined;
+    if (!s) return undefined;
     return {
       email: s.email,
       created: s.created,
@@ -333,19 +230,13 @@ export class AccountCore {
     return gone;
   }
 
-  // Forgets a sign-up nobody confirmed, and old sessions and codes of the rest.
+  // Forgets sessions that have lapsed.
   async sweep(): Promise<void> {
     const s = this.s;
     if (!s) return;
     const now = this.clock();
-    if (!s.active) {
-      await this.erase();
-      return;
-    }
-    s.sessions = s.sessions.filter((x) => now - x.seen <= SESSION_IDLE_MS);
-    for (const k of ["signup", "signin"] as const) if (s.codes[k] && s.codes[k]!.expires <= now) delete s.codes[k];
-    s.sends = s.sends.filter((t) => now - t < CODE_MS);
+    s.sessions = s.sessions.filter((x) => now - x.seen <= SESSION_IDLE_MS && now - x.created <= SESSION_MAX_MS);
     await this.store.put(s);
-    if (s.sessions.length > 0) await this.store.scheduleIfNone(now + DAY);
+    await this.store.scheduleIfNone(now + DAY);
   }
 }

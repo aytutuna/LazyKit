@@ -28,6 +28,8 @@ export interface Mail {
 
 export interface Mailer {
   send(mail: Mail): Promise<void>;
+  // False when sending is not set up, so a caller can say so without trying.
+  ready?(): boolean;
 }
 
 export class MailNotConfiguredError extends Error {
@@ -36,4 +38,18 @@ export class MailNotConfiguredError extends Error {
 
 export class MailFailedError extends Error {
   name = "MailFailedError";
+}
+
+// The spelling that decides which account an address belongs to: a plus tag is dropped everywhere,
+// and Gmail ignores dots in the name and treats googlemail.com as gmail.com. Mail still goes to the
+// address as it was registered.
+export function canonicalEmail(address: string): string {
+  const at = address.lastIndexOf("@");
+  let local = address.slice(0, at).split("+")[0];
+  let domain = address.slice(at + 1);
+  if (domain === "gmail.com" || domain === "googlemail.com") {
+    local = local.replaceAll(".", "");
+    domain = "gmail.com";
+  }
+  return `${local}@${domain}`;
 }

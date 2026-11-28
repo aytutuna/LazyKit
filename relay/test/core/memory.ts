@@ -1,7 +1,9 @@
-import { AccountCore, type State, type Store } from "../../src/account/core/account";
+import { AccountCore, type AccountState } from "../../src/account/core/account";
+import { AddressCore, type AddressState } from "../../src/account/core/address";
+import type { Mail, Mailer } from "../../src/account/core/email";
 import { IdentityCore } from "../../src/account/core/identity";
-import type { Mail } from "../../src/account/core/email";
-import { AccountService, type AccountPort, type AppData, type Directory, type IdentityPort } from "../../src/account/core/service";
+import { AccountService, type AccountPort, type AddressPort, type AppData, type Directory, type IdentityPort } from "../../src/account/core/service";
+import type { Deps, Store } from "../../src/account/core/store";
 import { jwtKit } from "./jwt";
 
 export class MemoryStore<T> implements Store<T> {
@@ -26,31 +28,64 @@ export class MemoryStore<T> implements Store<T> {
 
 export const kit = await jwtKit();
 
-// A whole account service held in memory, with a clock the test moves and a mailbox it reads.
-export function memoryService(over: { codeKey?: string; apps?: string[]; data?: Record<string, AppData> } = {}) {
+interface Options {
+  codeKey?: string;
+  idKey?: string;
+  mailReady?: boolean;
+  data?: Record<string, AppData>;
+}
+
+// A whole account service held in memory: a clock the test moves, a mailbox it reads, mail that can
+// be made to fail, and `flush` to let the mail that was sent after the answer finish.
+export function memoryService(over: Options = {}) {
   const clock = { now: Date.now() };
   const mail: Mail[] = [];
-  const accounts = new Map<string, { core: AccountCore; store: MemoryStore<State> }>();
+  const pending: Promise<unknown>[] = [];
+  const mailer = { fail: false, delay: 0 };
+  const sender: Mailer = {
+    ready: () => over.mailReady !== false,
+    send: async (m) => {
+      if (mailer.delay) await new Promise((r) => setTimeout(r, mailer.delay));
+      if (mailer.fail) throw new Error("refused");
+      mail.push(m);
+    },
+  };
+  const deps: Deps = { codeKey: () => ("codeKey" in over ? over.codeKey : "test-key"), mailer: () => sender, defer: (p) => void pending.push(p), stages: () => 1, now: () => clock.now };
+  const addresses = new Map<string, { core: AddressCore; store: MemoryStore<AddressState> }>();
+  const accounts = new Map<string, { core: AccountCore; store: MemoryStore<AccountState> }>();
   const identities = new Map<string, { core: IdentityCore; store: MemoryStore<any> }>();
-  const codeKey = "codeKey" in over ? over.codeKey : "test-key";
   const dir: Directory = {
-    account(name) {
-      if (!accounts.has(name)) {
-        const store = new MemoryStore<State>();
-        accounts.set(name, { store, core: new AccountCore(store, { codeKey: () => codeKey, mailer: () => ({ send: async (m) => void mail.push(m) }), now: () => clock.now }) });
+    address(name) {
+      if (!addresses.has(name)) {
+        const store = new MemoryStore<AddressState>();
+        addresses.set(name, { store, core: new AddressCore(store, deps) });
       }
-      return accounts.get(name)!.core as unknown as AccountPort;
+      return addresses.get(name)!.core as unknown as AddressPort;
+    },
+    account(id) {
+      if (!accounts.has(id)) {
+        const store = new MemoryStore<AccountState>();
+        accounts.set(id, { store, core: new AccountCore(store, deps) });
+      }
+      return accounts.get(id)!.core as unknown as AccountPort;
     },
     identity(name) {
       if (!identities.has(name)) {
         const store = new MemoryStore<any>();
-        identities.set(name, { store, core: new IdentityCore(store) });
+        identities.set(name, { store, core: new IdentityCore(store, () => clock.now) });
       }
       return identities.get(name)!.core as unknown as IdentityPort;
     },
   };
-  const service = new AccountService(dir, { apps: over.apps ?? ["lazysend", "lazyprint"], appleAudiences: "com.lazyscan.lazyscan", googleAudiences: "google-client", keys: kit.keys, stages: 1 }, over.data);
-  return { service, clock, mail, accounts, identities };
+  const service = new AccountService(
+    dir,
+    { apps: ["lazysend", "lazyprint"], appleAudiences: "com.lazyscan.lazyscan", googleAudiences: "google-client", keys: kit.keys, idKey: "idKey" in over ? over.idKey : "test-id-key", nonceKey: "nonce-key", stages: 1, now: () => clock.now },
+    over.data,
+  );
+  const flush = async () => {
+    while (pending.length) await Promise.all(pending.splice(0));
+  };
+  return { service, clock, mail, mailer, flush, addresses, accounts, identities };
 }
 
 export const codeIn = (m: Mail) => /\b(\d{6})\b/.exec(m.text)![1];
