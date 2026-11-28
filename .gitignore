@@ -8,3 +8,4 @@ obj/
 .gradle/
 build/
 local.properties
+native/link-tests/android/linktests/src/androidTest/assets/

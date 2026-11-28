@@ -2,7 +2,6 @@ package app.alazy.linktests
 
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import androidx.test.platform.app.InstrumentationRegistry
-import app.alazy.link.Tls
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.async
 import kotlinx.coroutines.delay
@@ -24,6 +23,7 @@ import uniffi.lazy_link_ffi.PushPlatform
 import uniffi.lazy_link_ffi.Relay
 import uniffi.lazy_link_ffi.RelayFailure
 import uniffi.lazy_link_ffi.Session
+import uniffi.lazy_link_ffi.trustDevelopmentRoot
 import java.net.HttpURLConnection
 import java.net.URL
 import java.net.URLEncoder
@@ -32,16 +32,20 @@ import java.security.SecureRandom
 @RunWith(AndroidJUnit4::class)
 class RelayTest {
     // The development relay under `wrangler dev --local-protocol https` and its mail sink, reached from the emulator at
-    // 10.0.2.2. The relay's certificate authority is in the device's user certificate store (scripts/link-android.sh).
+    // 10.0.2.2. Android checks the relay against bundled roots only, so the relay's development authority (an asset,
+    // put there by scripts/link-android.sh) is added by hand.
     private val args = InstrumentationRegistry.getArguments()
     private val base = (args.getString("relayUrl") ?: error("relayUrl is not set")).trimEnd('/')
     private val accountBase = base.replace("/relay/", "/account/")
     private val sink = args.getString("mailSink") ?: "http://10.0.2.2:8790"
     private val password = "correct horse battery"
 
-    // The platform verifier needs the app's context before the first connection.
     @Before
-    fun startTls() = Tls.init(InstrumentationRegistry.getInstrumentation().targetContext)
+    fun trustTheDevelopmentAuthority() {
+        val pem = InstrumentationRegistry.getInstrumentation().context.assets.open("dev_ca.pem").bufferedReader().readText()
+        val body = pem.lines().filter { !it.startsWith("-----") }.joinToString("")
+        trustDevelopmentRoot(java.util.Base64.getMimeDecoder().decode(body))
+    }
 
     private fun id() = ByteArray(16).also { SecureRandom().nextBytes(it) }.joinToString("") { "%02x".format(it) }
     private fun room() = ByteArray(32).also { SecureRandom().nextBytes(it) }.joinToString("") { "%02x".format(it) }
