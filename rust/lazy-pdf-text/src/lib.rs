@@ -12,6 +12,7 @@
 //!   engine, whose runtimes carry their own versions.
 //! - `is_right_to_left` looks at the first 256 characters, where the reference takes 256 grapheme clusters.
 //! - A bidi line cut inside a surrogate pair takes the whole pair.
+//!
 //! Required Notice: Copyright (c) 2026 Alazy Inc. (https://alazy.app)
 
 mod bidi;
