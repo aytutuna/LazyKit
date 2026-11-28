@@ -4,8 +4,6 @@
 use std::sync::Arc;
 
 mod account;
-#[cfg(target_os = "android")]
-mod android;
 mod proof;
 mod relay;
 
@@ -234,6 +232,14 @@ impl PairingSession {
     pub fn end(&self) {
         self.inner.close();
     }
+}
+
+/// Trusts one more certificate authority (DER) for the relay and account connections made from now
+/// on. Only for a relay that runs on a developer's machine with an authority of its own: an app
+/// never calls it.
+#[uniffi::export]
+pub fn trust_development_root(der: Vec<u8>) {
+    lazy_link::tls::trust_development_root(&der);
 }
 
 #[cfg(test)]

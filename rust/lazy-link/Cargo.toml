@@ -19,8 +19,16 @@ x509-cert = { version = "0.2", default-features = false, features = ["std"], opt
 tokio = { version = "1.54.1", features = ["rt", "net", "time", "sync", "macros", "io-util"], optional = true }
 tokio-rustls = { version = "0.26", default-features = false, features = ["aws-lc-rs", "tls12"], optional = true }
 rustls = { version = "0.23", default-features = false, features = ["aws-lc-rs", "std", "tls12"], optional = true }
-rustls-platform-verifier = { version = "0.7", optional = true }
 tokio-tungstenite = { version = "0.30.0", default-features = false, features = ["handshake"], optional = true }
+
+# Apple and Windows judge the relay's certificate through the system. Android does not: its user-installed
+# certificate authorities (device management, interception tools) would be trusted, so the relay is checked
+# against Mozilla's roots, bundled at a pinned version.
+[target.'cfg(not(target_os = "android"))'.dependencies]
+rustls-platform-verifier = { version = "0.7", optional = true }
+
+[target.'cfg(target_os = "android")'.dependencies]
+webpki-roots = { version = "=1.0.12", optional = true }
 
 [dev-dependencies]
 async-trait = "0.1"
@@ -31,5 +39,5 @@ tokio = { version = "1", features = ["net", "rt-multi-thread", "test-util"] }
 
 [features]
 # The relay client with its TLS (rustls on aws-lc-rs, certificates judged by the system through
-# rustls-platform-verifier); the plain protocol code builds without it, and so does the wasm crate.
-relay = ["dep:async-trait", "dep:tokio", "dep:tokio-tungstenite", "dep:futures-util", "dep:getrandom", "dep:httparse", "dep:serde_json", "dep:rustls", "dep:tokio-rustls", "dep:rustls-platform-verifier", "dep:x509-cert"]
+# rustls-platform-verifier, Mozilla's roots on Android); the plain protocol code builds without it, and so does the wasm crate.
+relay = ["dep:async-trait", "dep:tokio", "dep:tokio-tungstenite", "dep:futures-util", "dep:getrandom", "dep:httparse", "dep:serde_json", "dep:rustls", "dep:tokio-rustls", "dep:rustls-platform-verifier", "dep:webpki-roots", "dep:x509-cert"]

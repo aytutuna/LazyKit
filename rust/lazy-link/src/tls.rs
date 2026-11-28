@@ -1,6 +1,7 @@
 //! TLS for the relay client and, pinned, for the phone link: rustls on aws-lc-rs over a TCP
-//! socket. The relay's certificate is judged by the system (rustls-platform-verifier); a phone's
-//! self-made one by its public key's fingerprint.
+//! socket. The relay's certificate is judged by the system on Apple and Windows
+//! (rustls-platform-verifier) and by Mozilla's bundled roots on Android; a phone's self-made one
+//! by its public key's fingerprint.
 //! Required Notice: Copyright (c) 2026 Alazy Inc. (https://alazy.app)
 
 use crate::spki_fingerprint;
@@ -10,8 +11,9 @@ use rustls::client::danger::{HandshakeSignatureValid, ServerCertVerified, Server
 use rustls::crypto::{CryptoProvider, WebPkiSupportedAlgorithms, aws_lc_rs};
 use rustls::pki_types::{CertificateDer, ServerName, UnixTime};
 use rustls::{ClientConfig, DigitallySignedStruct, Error, SignatureScheme};
-use rustls_platform_verifier::BuilderVerifierExt;
-use std::sync::Arc;
+#[cfg(not(target_os = "android"))]
+use rustls_platform_verifier::{BuilderVerifierExt, Verifier};
+use std::sync::{Arc, Mutex as StdMutex};
 use std::time::Duration;
 use subtle::ConstantTimeEq;
 use tokio::io::{AsyncReadExt, AsyncWriteExt, ReadHalf, WriteHalf};
@@ -22,6 +24,19 @@ use tokio_rustls::client::TlsStream;
 use x509_cert::der::{Decode, Encode};
 
 const CONNECT_TIMEOUT: Duration = Duration::from_secs(15);
+
+// Roots an app adds for a relay of its own (development); empty in a shipped app.
+static DEVELOPMENT_ROOTS: StdMutex<Vec<CertificateDer<'static>>> = StdMutex::new(Vec::new());
+
+/// Trusts one more certificate authority, given as DER, for the relay connections made from now
+/// on. A relay run on a developer's machine has a certificate of its own authority; an app never
+/// calls this.
+pub fn trust_development_root(der: &[u8]) {
+    DEVELOPMENT_ROOTS
+        .lock()
+        .unwrap()
+        .push(CertificateDer::from(der.to_vec()));
+}
 
 fn provider() -> Arc<CryptoProvider> {
     Arc::new(aws_lc_rs::default_provider())
@@ -37,17 +52,17 @@ pub struct TlsTransport {
 }
 
 impl TlsTransport {
-    /// For a host with a certificate the system trusts, such as the relay: Windows' certificate
-    /// store, the Apple keychain, Android's trust manager. On Android the app has to call the
-    /// library's init once first, or the handshake fails.
+    /// For the relay: Windows' certificate store or the Apple keychain judge its certificate. On
+    /// Android the system's trust is not used, since certificate authorities that a user or a
+    /// device manager installed there would let the owner of one read the relay traffic (group and
+    /// device ids, attestation answers, push tokens); Mozilla's roots, bundled at a pinned version
+    /// of `webpki-roots`, judge it instead.
     pub fn system() -> Result<Self, TransportError> {
-        let config = ClientConfig::builder_with_provider(provider())
+        let builder = ClientConfig::builder_with_provider(provider())
             .with_safe_default_protocol_versions()
-            .map_err(failed)?
-            .with_platform_verifier()
-            .map_err(failed)?
-            .with_no_client_auth();
-        Ok(Self::with_config(config))
+            .map_err(failed)?;
+        let extra = DEVELOPMENT_ROOTS.lock().unwrap().clone();
+        Ok(Self::with_config(system_verified(builder, extra)?))
     }
 
     /// For a device with a self-made certificate: the connection is made only to the server whose
@@ -193,4 +208,35 @@ impl ServerCertVerifier for Pinned {
     fn supported_verify_schemes(&self) -> Vec<SignatureScheme> {
         self.algorithms.supported_schemes()
     }
+}
+
+#[cfg(target_os = "android")]
+fn system_verified(
+    builder: rustls::ConfigBuilder<ClientConfig, rustls::WantsVerifier>,
+    extra: Vec<CertificateDer<'static>>,
+) -> Result<ClientConfig, TransportError> {
+    let mut roots = rustls::RootCertStore::empty();
+    roots.extend(webpki_roots::TLS_SERVER_ROOTS.iter().cloned());
+    for root in extra {
+        roots.add(root).map_err(failed)?;
+    }
+    Ok(builder.with_root_certificates(roots).with_no_client_auth())
+}
+
+#[cfg(not(target_os = "android"))]
+fn system_verified(
+    builder: rustls::ConfigBuilder<ClientConfig, rustls::WantsVerifier>,
+    extra: Vec<CertificateDer<'static>>,
+) -> Result<ClientConfig, TransportError> {
+    if extra.is_empty() {
+        return Ok(builder
+            .with_platform_verifier()
+            .map_err(failed)?
+            .with_no_client_auth());
+    }
+    let verifier = Verifier::new_with_extra_roots(extra, provider()).map_err(failed)?;
+    Ok(builder
+        .dangerous()
+        .with_custom_certificate_verifier(Arc::new(verifier))
+        .with_no_client_auth())
 }

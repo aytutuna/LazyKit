@@ -4,7 +4,7 @@
 
 use lazy_link::relay::{Relay, RelayError, random_id};
 use lazy_link::spki_fingerprint;
-use lazy_link::tls::TlsTransport;
+use lazy_link::tls::{TlsTransport, trust_development_root};
 use lazy_link::transport::open;
 use rcgen::PublicKeyData;
 use rustls::pki_types::{CertificateDer, PrivateKeyDer};
@@ -162,4 +162,22 @@ async fn the_relay_client_speaks_http_over_tls() {
         nobody.status().await,
         Err(RelayError::Transport(_))
     ));
+}
+
+#[tokio::test]
+async fn a_development_authority_makes_the_system_transport_trust_a_relay_of_its_own() {
+    let server = serve().await;
+    let before = TlsTransport::system().unwrap();
+    assert!(
+        open(&before, "127.0.0.1", server.port, "localhost")
+            .await
+            .is_err()
+    );
+    trust_development_root(&server.cert);
+    let after = TlsTransport::system().unwrap();
+    assert!(
+        open(&after, "127.0.0.1", server.port, "localhost")
+            .await
+            .is_ok()
+    );
 }
