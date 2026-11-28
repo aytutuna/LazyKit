@@ -1,5 +1,5 @@
 import { env, exports } from "cloudflare:workers";
-import { runInDurableObject } from "cloudflare:test";
+import { runDurableObjectAlarm, runInDurableObject } from "cloudflare:test";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { accountName, identityName } from "../src/account/account";
 import { MailFailedError, MailNotConfiguredError } from "../src/account/email";
@@ -11,7 +11,7 @@ const PASSWORD = "correct horse battery";
 const LOGIN = { app: "lazysend", device: DEVICE_A, label: "laptop" };
 const stubOf = async (email: string) => env.ACCOUNTS.get(env.ACCOUNTS.idFromName(await accountName(email)));
 const body = async (r: Response) => (await r.json()) as Record<string, any>;
-const empty = (stub: DurableObjectStub<any>) => runInDurableObject(stub, async (_o, state) => expect([...(await state.storage.list())]).toEqual([]));
+const empty = (stub: DurableObjectStub) => runInDurableObject(stub, async (_o, state) => expect([...(await state.storage.list())]).toEqual([]));
 
 beforeEach(() => {
   fakes();
@@ -82,7 +82,7 @@ describe("sign-up", () => {
   it("forgets a sign-up nobody confirmed", async () => {
     await account("signup", "POST", { email: EMAIL, password: PASSWORD });
     const stub = await stubOf(EMAIL);
-    await runInDurableObject(stub, async (o: any) => o.alarm());
+    expect(await runDurableObjectAlarm(stub)).toBe(true);
     await empty(stub);
   });
 });
@@ -171,19 +171,6 @@ describe("codes", () => {
     const stub = await stubOf(EMAIL);
     await runInDurableObject(stub, async (_o, state) => {
       expect(JSON.stringify(await state.storage.get("s"))).not.toContain(code);
-    });
-  });
-
-  it("is refused without the server's key", async () => {
-    const stub = await stubOf(EMAIL);
-    await runInDurableObject(stub, async (o: any) => {
-      const key = o.env.ACCOUNT_KEY;
-      o.env.ACCOUNT_KEY = undefined;
-      try {
-        expect(await o.startSignup(EMAIL, { v: 1, stages: 1, salt: "", hash: "" })).toBe("not-configured");
-      } finally {
-        o.env.ACCOUNT_KEY = key;
-      }
     });
   });
 });

@@ -5,6 +5,8 @@ import { useServices } from "../src/services";
 import { WEEKLY_CAP } from "../src/group";
 import { CLOSE_CAPPED, MAX_BUFFERED, MAX_FRAME, MAX_STREAMS } from "../src/room";
 import { weekOf } from "../src/week";
+import { accountName } from "../src/account/account";
+import { groupSession } from "./helpers";
 
 declare const __BIG__: boolean;
 
@@ -64,11 +66,11 @@ class Peer {
 // unless the test says otherwise.
 const groupOf = (room: string) => room.slice(32);
 
+// Every group has its own signed-in account, made on first use; a stream's end needs no sign-in.
 const ask = async (room: string, query: string, group = groupOf(room), device = DEVICE) => {
-  await env.GROUPS.get(env.GROUPS.idFromName(group)).setVerified();
-  return exports.default.fetch(`https://alazy.app/relay/v1/${room}?${query}&group=${group}&device=${device}`, {
-    headers: { Upgrade: "websocket" },
-  });
+  const headers: Record<string, string> = { Upgrade: "websocket" };
+  if (!query.includes("role=stream")) Object.assign(headers, (await groupSession(group, device)).headers);
+  return exports.default.fetch(`https://alazy.app/relay/v1/${room}?${query}&group=${group}&device=${device}`, { headers });
 };
 
 async function open(room: string, query: string, group?: string, device?: string): Promise<Peer> {
@@ -105,11 +107,12 @@ async function stream(h: Host): Promise<[Peer, Peer]> {
   return [guest, await h.stream()];
 }
 
-const groupApi = async (group: string, path: string, body: unknown) => {
-  await env.GROUPS.get(env.GROUPS.idFromName(group)).setVerified();
+const groupApi = async (group: string, path: string, body: { device: string; [k: string]: unknown }) => {
+  const s = await groupSession(group, body.device);
   return exports.default.fetch(`https://alazy.app/relay/v1/group/${group}/${path}`, {
     method: "POST",
     body: JSON.stringify(body),
+    headers: s.headers,
   });
 };
 
@@ -117,8 +120,8 @@ const bytes = (...v: number[]) => new Uint8Array(v);
 const stub = (room: string) => env.ROOMS.get(env.ROOMS.idFromName(room));
 const groupStub = (group: string) => env.GROUPS.get(env.GROUPS.idFromName(group));
 const used = async (group: string) => (await groupStub(group).status()).used;
-const stored = (group: string) =>
-  runInDurableObject(groupStub(group), (_o, state) => state.storage.get<Record<string, number>>("usage"));
+const quotaOf = async (group: string) => env.QUOTAS.get(env.QUOTAS.idFromName(await accountName(`${group}@test.local`)));
+const stored = async (group: string) => runInDurableObject(await quotaOf(group), (_o, state) => state.storage.get<Record<string, number>>("usage"));
 
 describe("relay", () => {
   afterEach(() => useServices());
@@ -517,10 +520,8 @@ describe("relay", () => {
     const h = await host(newRoom(), group);
     await groupStub(group).record(WEEKLY_CAP);
     expect((await ask(h.room, "role=guest", group)).status).toBe(402);
-    await runInDurableObject(groupStub(group), async (g) => {
-      useServices({ verifier: { verify: async () => ({ until: Date.now() + 86_400_000, purchase: "p" }) } });
-      await g.buy("apple", "receipt", group);
-    });
+    useServices({ verifier: { verify: async () => ({ until: Date.now() + 86_400_000, purchase: "p" }) } });
+    await (await quotaOf(group)).buy("apple", "receipt", "account");
     const [guest, side] = await stream(h);
     guest.ws.send(new Uint8Array(100));
     await side.until(100);
@@ -632,7 +633,8 @@ describe("relay", () => {
     const group = newGroup();
     const day = 86_400_000;
     const now = Date.now();
-    await runInDurableObject(groupStub(group), async (g, state) => {
+    await ask(newRoom(), "role=host", group);
+    await runInDurableObject(await quotaOf(group), async (g, state) => {
       await g.record(10, now - 100 * day);
       await g.record(20, now - 7 * day);
       await g.record(30, now);

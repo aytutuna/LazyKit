@@ -256,7 +256,7 @@ describe("groups and accounts", () => {
   it("forgets a group nobody has used for 90 days and frees its place", async () => {
     const o = await owned();
     const g = stub(o.group);
-    await runInDurableObject(g, async (obj: any, state) => {
+    await runInDurableObject(g as unknown as DurableObjectStub, async (obj: any, state) => {
       obj.seenAt = Date.now() - 100 * 86_400_000;
       await state.storage.put("seenAt", obj.seenAt);
       await obj.alarm();
@@ -270,7 +270,7 @@ describe("groups and accounts", () => {
     const o = await owned();
     const g = stub(o.group);
     await g.setPush(device(1), "fcm", "t");
-    await runInDurableObject(g, async (obj: any, state) => {
+    await runInDurableObject(g as unknown as DurableObjectStub, async (obj: any, state) => {
       obj.seenAt = Date.now() - 100 * 86_400_000;
       await obj.alarm();
       expect(await state.storage.get("account")).toBe(o.account);
