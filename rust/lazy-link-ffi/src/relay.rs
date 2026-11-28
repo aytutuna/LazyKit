@@ -10,7 +10,7 @@ use std::time::Duration;
 use tokio::io::{AsyncReadExt, AsyncWriteExt, ReadHalf, WriteHalf};
 use tokio::sync::{Mutex, Notify};
 
-/// What the app proves to the relay about itself.
+/// What the app proves to the service about itself: App Attest on Apple devices, Play Integrity on Android.
 #[derive(Debug, Clone, uniffi::Enum)]
 pub enum AppProof {
     /// App Attest: the key id and the attestation object.
@@ -20,12 +20,6 @@ pub enum AppProof {
     },
     /// A Play Integrity token whose nonce is the challenge text.
     Google { token: String },
-    /// The install's P-256 public key (65 bytes, uncompressed) and its 64-byte signature (r then
-    /// s) over `lazy relay install v1`, a zero byte, the group, a zero byte and the challenge.
-    Desktop {
-        public_key: Vec<u8>,
-        signature: Vec<u8>,
-    },
 }
 
 /// The app's way to prove itself, asked once when the relay meets a new group.
@@ -56,13 +50,6 @@ impl relay::Attester for ForeignAttester {
                 attestation,
             },
             AppProof::Google { token } => Attestation::Google { token },
-            AppProof::Desktop {
-                public_key,
-                signature,
-            } => Attestation::Desktop {
-                public_key,
-                signature,
-            },
         })
     }
 }
@@ -91,8 +78,12 @@ pub enum RelayFailure {
     AttestationRejected,
     #[error("the relay cannot check this platform's app proof yet")]
     AttestationUnavailable,
-    #[error("this install has verified too many new groups this week")]
-    AttestationInstallLimit,
+    #[error("sign in first")]
+    SignIn,
+    #[error("the group belongs to another account")]
+    WrongAccount,
+    #[error("the session is for another device")]
+    WrongDevice,
     #[error("the app could not make its proof: {reason}")]
     Attester { reason: String },
     #[error("the relay answered {status}")]
@@ -120,7 +111,9 @@ impl From<relay::RelayError> for RelayFailure {
             E::AttestationRequired => Self::AttestationRequired,
             E::AttestationRejected => Self::AttestationRejected,
             E::AttestationUnavailable => Self::AttestationUnavailable,
-            E::AttestationInstallLimit => Self::AttestationInstallLimit,
+            E::SignIn => Self::SignIn,
+            E::WrongAccount => Self::WrongAccount,
+            E::WrongDevice => Self::WrongDevice,
             E::Attester(reason) => Self::Attester { reason },
             E::Refused(status) => Self::Refused { status },
             E::Closed(code) => Self::Closed { code },
@@ -151,6 +144,27 @@ pub struct GroupStatus {
     pub paid_until: u64,
     pub paid: bool,
     pub capped: bool,
+    /// The account's token, which a store purchase carries so the relay knows whose it is.
+    pub account_token: String,
+}
+
+/// The kind of device a group is made on: Apple and Google groups also need the app check.
+#[derive(Debug, Clone, Copy, uniffi::Enum)]
+pub enum GroupPlatform {
+    Apple,
+    Google,
+    Desktop,
+}
+
+fn status_of(s: relay::GroupStatus) -> GroupStatus {
+    GroupStatus {
+        used: s.used,
+        cap: s.cap,
+        paid_until: s.paid_until,
+        paid: s.paid,
+        capped: s.capped,
+        account_token: s.account_token,
+    }
 }
 
 #[derive(uniffi::Object)]
@@ -161,30 +175,35 @@ pub struct Relay {
 // Calls run on a Tokio runtime of their own: the stream tasks need one.
 #[uniffi::export(async_runtime = "tokio")]
 impl Relay {
-    /// `base` is the relay's address up to the version, `https://alazy.app/relay/v1`.
+    /// `base` is the relay's address up to the version, `https://alazy.app/relay/v1`. `session` is
+    /// the token an account sign-in gave, made for this `device`.
     #[uniffi::constructor]
     pub fn new(
         base: String,
         group: String,
         device: String,
+        session: String,
         attester: Option<Arc<dyn AppAttester>>,
     ) -> Result<Arc<Self>, RelayFailure> {
-        let mut inner = relay::Relay::system(&base, &group, &device)?;
+        let mut inner = relay::Relay::system(&base, &group, &device)?.with_session(&session);
         if let Some(attester) = attester {
             inner = inner.with_attester(Arc::new(ForeignAttester(attester)));
         }
         Ok(Arc::new(Self { inner }))
     }
 
+    /// Makes the signed-in account the owner of this group, before its first use.
+    pub async fn claim(&self, platform: GroupPlatform) -> Result<GroupStatus, RelayFailure> {
+        let platform = match platform {
+            GroupPlatform::Apple => relay::GroupPlatform::Apple,
+            GroupPlatform::Google => relay::GroupPlatform::Google,
+            GroupPlatform::Desktop => relay::GroupPlatform::Desktop,
+        };
+        Ok(status_of(self.inner.claim(platform).await?))
+    }
+
     pub async fn status(&self) -> Result<GroupStatus, RelayFailure> {
-        let s = self.inner.status().await?;
-        Ok(GroupStatus {
-            used: s.used,
-            cap: s.cap,
-            paid_until: s.paid_until,
-            paid: s.paid,
-            capped: s.capped,
-        })
+        Ok(status_of(self.inner.status().await?))
     }
 
     pub async fn register_push(
