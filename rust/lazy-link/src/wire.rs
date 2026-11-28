@@ -3,10 +3,9 @@
 //! Required Notice: Copyright (c) 2026 Alazy Inc. (https://alazy.app)
 
 use crate::http;
-use crate::transport::{self, Transport};
+use crate::transport::{self, Transport, TransportStream};
 use std::sync::Arc;
 use std::time::Duration;
-use tokio::io::DuplexStream;
 
 /// How long a connect or a plain request may take before it counts as failed.
 pub(crate) const REQUEST_TIMEOUT: Duration = Duration::from_secs(15);
@@ -65,7 +64,7 @@ impl Wire {
 
     // The connect runs as its own task: when the caller times out and goes away, a connection
     // that finishes later still ends up here and is dropped, which closes it.
-    pub async fn dial(&self) -> Result<DuplexStream, String> {
+    pub async fn dial(&self) -> Result<TransportStream, String> {
         let transport = self.transport.clone();
         let host = self.host.clone();
         let port = self.port;

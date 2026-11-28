@@ -5,10 +5,17 @@
 
 use async_trait::async_trait;
 use std::fmt;
-use std::sync::Arc;
-use tokio::io::{AsyncReadExt, AsyncWriteExt, DuplexStream};
+use std::io;
+use std::pin::Pin;
+use std::sync::{Arc, Mutex};
+use std::task::{Context, Poll};
+use std::time::Duration;
+use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt, DuplexStream, ReadBuf};
 
 const CHUNK: usize = 16 * 1024;
+/// A connection that has delivered nothing for this long is dead; the relay's own pings come every
+/// 30 seconds, so a live one never stays quiet this long.
+const IDLE_READ: Duration = Duration::from_secs(90);
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct TransportError(pub String);
@@ -46,34 +53,91 @@ pub trait Connection: Send + Sync {
     async fn close(&self);
 }
 
+/// A connection as a byte stream. The end of the connection reads as the end of the stream; a
+/// connection that broke (a TLS error, a read that timed out) reads as an error.
+#[derive(Debug)]
+pub struct TransportStream {
+    pipe: DuplexStream,
+    failure: Arc<Mutex<Option<String>>>,
+}
+
+impl AsyncRead for TransportStream {
+    fn poll_read(
+        mut self: Pin<&mut Self>,
+        cx: &mut Context<'_>,
+        buf: &mut ReadBuf<'_>,
+    ) -> Poll<io::Result<()>> {
+        let before = buf.filled().len();
+        match Pin::new(&mut self.pipe).poll_read(cx, buf) {
+            Poll::Ready(Ok(())) if buf.filled().len() == before => {
+                match self.failure.lock().unwrap().take() {
+                    Some(why) => Poll::Ready(Err(io::Error::other(why))),
+                    None => Poll::Ready(Ok(())),
+                }
+            }
+            other => other,
+        }
+    }
+}
+
+impl AsyncWrite for TransportStream {
+    fn poll_write(
+        mut self: Pin<&mut Self>,
+        cx: &mut Context<'_>,
+        data: &[u8],
+    ) -> Poll<io::Result<usize>> {
+        Pin::new(&mut self.pipe).poll_write(cx, data)
+    }
+
+    fn poll_flush(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<io::Result<()>> {
+        Pin::new(&mut self.pipe).poll_flush(cx)
+    }
+
+    fn poll_shutdown(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<io::Result<()>> {
+        Pin::new(&mut self.pipe).poll_shutdown(cx)
+    }
+}
+
 /// Connects and returns the connection as a byte stream.
 pub async fn open(
     transport: &dyn Transport,
     host: &str,
     port: u16,
     server_name: &str,
-) -> Result<DuplexStream, TransportError> {
+) -> Result<TransportStream, TransportError> {
     Ok(pump(transport.connect(host, port, server_name).await?))
 }
 
 // TODO: the phone link needs half-close (a request body ends with a write shutdown while the
 // reply is still coming); today the end of the pipe's write side closes the whole connection.
 // Two tasks carry bytes between the connection and the pipe's far end; they end when either side does.
-fn pump(conn: Arc<dyn Connection>) -> DuplexStream {
+fn pump(conn: Arc<dyn Connection>) -> TransportStream {
     let (near, far) = tokio::io::duplex(CHUNK * 4);
     let (mut from_pipe, mut to_pipe) = tokio::io::split(far);
     let reading = conn.clone();
+    let failure = Arc::new(Mutex::new(None));
+    let broke = failure.clone();
     tokio::spawn(async move {
         loop {
-            match reading.read(CHUNK).await {
-                Ok(bytes) if !bytes.is_empty() => {
+            match tokio::time::timeout(IDLE_READ, reading.read(CHUNK)).await {
+                Ok(Ok(bytes)) if !bytes.is_empty() => {
                     if to_pipe.write_all(&bytes).await.is_err() {
                         break;
                     }
                 }
-                _ => break,
+                Ok(Ok(_)) => break,
+                Ok(Err(e)) => {
+                    *broke.lock().unwrap() = Some(e.0);
+                    break;
+                }
+                Err(_) => {
+                    *broke.lock().unwrap() = Some("the connection went quiet".into());
+                    break;
+                }
             }
         }
+        // A reader that is gone leaves a connection nobody is waiting on; closing frees it.
+        reading.close().await;
         let _ = to_pipe.shutdown().await;
     });
     tokio::spawn(async move {
@@ -90,5 +154,8 @@ fn pump(conn: Arc<dyn Connection>) -> DuplexStream {
         }
         conn.close().await;
     });
-    near
+    TransportStream {
+        pipe: near,
+        failure,
+    }
 }

@@ -4,7 +4,7 @@
 
 use crate::base64url;
 use crate::tls::TlsTransport;
-use crate::transport::Transport;
+use crate::transport::{Transport, TransportStream};
 use crate::wire::{REQUEST_TIMEOUT, Reply, Wire, retry_after};
 use async_trait::async_trait;
 use futures_util::{SinkExt, StreamExt};
@@ -74,7 +74,7 @@ enum Ctl {
     Ack,
 }
 
-type Socket = WebSocketStream<DuplexStream>;
+type Socket = WebSocketStream<TransportStream>;
 
 #[derive(Debug)]
 pub enum RelayError {
@@ -480,7 +480,7 @@ impl Relay {
         }
     }
 
-    async fn dial(&self) -> Result<DuplexStream, RelayError> {
+    async fn dial(&self) -> Result<TransportStream, RelayError> {
         self.wire.dial().await.map_err(RelayError::Transport)
     }
 

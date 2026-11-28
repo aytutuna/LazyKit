@@ -194,3 +194,75 @@ async fn a_connection_that_arrives_after_the_deadline_is_closed() {
         "the late connection was left open"
     );
 }
+
+// A connection that gives some bytes and then a failure, or goes quiet.
+struct Breaks {
+    quiet: bool,
+    sent: std::sync::atomic::AtomicBool,
+    closed: Arc<AtomicBool>,
+}
+
+#[async_trait]
+impl Connection for Breaks {
+    async fn read(&self, _: usize) -> Result<Vec<u8>, TransportError> {
+        if self.quiet {
+            return std::future::pending().await;
+        }
+        if self.sent.swap(true, Ordering::SeqCst) {
+            Err(TransportError("alert: bad record MAC".into()))
+        } else {
+            Ok(b"partial".to_vec())
+        }
+    }
+
+    async fn write(&self, _: &[u8]) -> Result<(), TransportError> {
+        Ok(())
+    }
+
+    async fn close(&self) {
+        self.closed.store(true, Ordering::SeqCst);
+    }
+}
+
+struct BreaksTransport(bool, Arc<AtomicBool>);
+
+#[async_trait]
+impl Transport for BreaksTransport {
+    async fn connect(
+        &self,
+        _: &str,
+        _: u16,
+        _: &str,
+    ) -> Result<Arc<dyn Connection>, TransportError> {
+        Ok(Arc::new(Breaks {
+            quiet: self.0,
+            sent: AtomicBool::new(false),
+            closed: self.1.clone(),
+        }))
+    }
+}
+
+#[tokio::test]
+async fn a_broken_connection_reads_as_an_error_not_as_the_end() {
+    let closed = Arc::new(AtomicBool::new(false));
+    let mut s = open(&BreaksTransport(false, closed.clone()), "h", 1, "h")
+        .await
+        .unwrap();
+    let mut got = [0u8; 7];
+    s.read_exact(&mut got).await.unwrap();
+    assert_eq!(&got, b"partial");
+    let err = s.read(&mut got).await.unwrap_err();
+    assert!(err.to_string().contains("bad record MAC"), "{err}");
+}
+
+#[tokio::test(start_paused = true)]
+async fn a_connection_that_goes_quiet_is_given_up_on_and_closed() {
+    let closed = Arc::new(AtomicBool::new(false));
+    let mut s = open(&BreaksTransport(true, closed.clone()), "h", 1, "h")
+        .await
+        .unwrap();
+    let mut got = [0u8; 1];
+    let err = s.read(&mut got).await.unwrap_err();
+    assert!(err.to_string().contains("went quiet"), "{err}");
+    assert!(closed.load(Ordering::SeqCst), "a dead connection is closed");
+}
