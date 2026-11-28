@@ -250,7 +250,7 @@ async fn a_refused_proof_is_reported_as_such() {
         .with_attester(Fake::new(apple()));
     assert!(matches!(
         relay.connect(&room_id(b"r")).await,
-        Err(RelayError::Refused(429))
+        Err(RelayError::AttestationInstallLimit)
     ));
 }
 

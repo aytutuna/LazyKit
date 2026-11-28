@@ -169,6 +169,8 @@ pub enum RelayFailure {
     AttestationRejected,
     #[error("the relay cannot check this platform's app proof yet")]
     AttestationUnavailable,
+    #[error("this install has verified too many new groups this week")]
+    AttestationInstallLimit,
     #[error("the app could not make its proof: {reason}")]
     Attester { reason: String },
     #[error("the relay answered {status}")]
@@ -196,6 +198,7 @@ impl From<relay::RelayError> for RelayFailure {
             E::AttestationRequired => Self::AttestationRequired,
             E::AttestationRejected => Self::AttestationRejected,
             E::AttestationUnavailable => Self::AttestationUnavailable,
+            E::AttestationInstallLimit => Self::AttestationInstallLimit,
             E::Attester(reason) => Self::Attester { reason },
             E::Refused(status) => Self::Refused { status },
             E::Closed(code) => Self::Closed { code },

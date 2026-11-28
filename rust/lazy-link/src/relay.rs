@@ -100,6 +100,8 @@ pub enum RelayError {
     AttestationRejected,
     /// The relay cannot check this kind of proof yet.
     AttestationUnavailable,
+    /// This computer has verified as many new groups this week as the relay allows an install.
+    AttestationInstallLimit,
     /// The app's [`Attester`] could not make a proof.
     Attester(String),
     /// The purchase already pays for another group.
@@ -127,6 +129,9 @@ impl fmt::Display for RelayError {
             Self::AttestationRejected => f.write_str("the relay refused the app check"),
             Self::AttestationUnavailable => {
                 f.write_str("the relay cannot check this platform's app proof yet")
+            }
+            Self::AttestationInstallLimit => {
+                f.write_str("this install has verified too many new groups this week")
             }
             Self::Attester(e) => write!(f, "the app could not make its proof: {e}"),
             Self::PurchaseUsed => f.write_str("the purchase pays for another group"),
@@ -551,6 +556,7 @@ impl Relay {
         match reply.into_result()?.0 {
             204 => Ok(()),
             422 => Err(RelayError::AttestationRejected),
+            429 => Err(RelayError::AttestationInstallLimit),
             501 => Err(RelayError::AttestationUnavailable),
             status => Err(RelayError::Refused(status)),
         }

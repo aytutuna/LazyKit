@@ -223,5 +223,8 @@ async fn a_connection_that_arrives_after_the_deadline_is_closed() {
     ));
     assert!(!closed.load(Ordering::SeqCst));
     tokio::time::sleep(Duration::from_secs(120)).await;
-    assert!(closed.load(Ordering::SeqCst), "the late connection was left open");
+    assert!(
+        closed.load(Ordering::SeqCst),
+        "the late connection was left open"
+    );
 }
