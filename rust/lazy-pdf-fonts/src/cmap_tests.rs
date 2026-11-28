@@ -550,3 +550,14 @@ fn to_unicode_rejects_what_does_not_fit() {
     assert!(write_to_unicode(&[(-1, u("a"))], 2).is_err());
     assert!(write_to_unicode(&[], 5).is_err());
 }
+
+#[test]
+fn lengths_past_the_mask_width_find_nothing() {
+    let map = with_header(
+        "1 begincodespacerange <00> <FF> endcodespacerange
+1 beginbfchar <01> <0041> endbfchar
+endcmap",
+    );
+    assert_eq!(map.unicode_of(1, 40), None);
+    assert_eq!(map.cid_of(1, 40), None);
+}

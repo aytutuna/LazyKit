@@ -59,7 +59,9 @@ impl<V: Clone> CodeRanges<V> {
             order,
             value,
         });
-        self.length_mask |= 1 << length;
+        if length < 32 {
+            self.length_mask |= 1 << length;
+        }
     }
 
     /// Sorts what was added. Later additions win over earlier ones that cover the same code.
@@ -272,7 +274,8 @@ impl CMap {
         }
         let table = if notdef { &self.notdefs } else { &self.cids };
         for n in lengths(length) {
-            if table.length_mask & (1 << n) != 0
+            if n < 32
+                && table.length_mask & (1 << n) != 0
                 && let Some((lo, value)) = table.try_find(n, code)
             {
                 if notdef {
@@ -294,7 +297,8 @@ impl CMap {
     pub fn unicode_of(&self, code: i64, length: usize) -> Option<String> {
         let c = code as u32;
         for n in lengths(length) {
-            if self.texts.length_mask & (1 << n) != 0
+            if n < 32
+                && self.texts.length_mask & (1 << n) != 0
                 && let Some((lo, mut value)) = self.texts.try_find(n, c)
             {
                 if c != lo
