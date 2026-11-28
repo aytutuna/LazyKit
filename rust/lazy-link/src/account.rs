@@ -23,14 +23,15 @@ pub struct Login {
 }
 
 /// A session the service opened. `token` goes in every later request, here and at the relay.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct Session {
     pub token: String,
     pub session: String,
-    pub account: String,
+    /// The account as `me` shows it: its address, whether it has a password, its linked identities.
+    pub account: Value,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq)]
 pub enum SignIn {
     Done(Session),
     /// The identity is already an account's under another sign-in: a code was sent to the account's
@@ -167,7 +168,7 @@ fn session_of(r: &Reply) -> Result<Session, AccountError> {
     Ok(Session {
         token: text("token")?,
         session: text("session")?,
-        account: text("account")?,
+        account: v["account"].clone(),
     })
 }
 

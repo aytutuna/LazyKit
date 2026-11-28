@@ -5,31 +5,114 @@
 
 mod common;
 
+use lazy_link::account::{Account, Bot, Login, Session};
 use lazy_link::relay::{
-    MAX_FRAME, MAX_STREAMS, Platform, Relay, RelayError, Store, WINDOW_FRAMES, random_id, room_id,
+    GroupPlatform, MAX_FRAME, MAX_STREAMS, Platform, Relay, RelayError, Store, WINDOW_FRAMES,
+    random_id, room_id,
 };
 use sha2::{Digest, Sha256};
 use std::time::Duration;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
+use tokio::net::TcpStream;
 use tokio::time::timeout;
 
 fn url() -> String {
     std::env::var("RELAY_URL").unwrap_or_else(|_| "http://127.0.0.1:8787/relay/v1".into())
 }
 
-// A device that proves itself to the relay the way a computer does.
-fn device(group: &str) -> Relay {
-    Relay::new(&url(), group, &random_id(), common::tcp())
+fn account_url() -> String {
+    std::env::var("ACCOUNT_URL").unwrap_or_else(|_| url().replace("/relay/", "/account/"))
 }
 
-// Two devices of one person: same group, different device ids.
-fn pair() -> (Relay, Relay, String) {
-    let group = random_id();
-    (
-        device(&group),
-        device(&group),
-        room_id(random_id().as_bytes()),
-    )
+// Where the relay's dev run posts its mail (relay/scripts/dev-mail.mjs).
+fn sink() -> String {
+    std::env::var("MAIL_SINK").unwrap_or_else(|_| "127.0.0.1:8790".into())
+}
+
+const PASSWORD: &str = "correct horse battery";
+
+// The code in the newest mail to `email`, asked of the sink.
+async fn code_for(email: &str) -> String {
+    for _ in 0..50 {
+        let mut tcp = TcpStream::connect(sink()).await.unwrap();
+        let request =
+            format!("GET /code?to={email} HTTP/1.1\r\nHost: sink\r\nConnection: close\r\n\r\n");
+        tcp.write_all(request.as_bytes()).await.unwrap();
+        let mut answer = String::new();
+        tcp.read_to_string(&mut answer).await.unwrap();
+        if answer.starts_with("HTTP/1.1 200") {
+            return answer.rsplit("\r\n\r\n").next().unwrap().trim().to_owned();
+        }
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    }
+    panic!("no mail came for {email}");
+}
+
+fn login(device: &str) -> Login {
+    Login {
+        app: "lazysend".into(),
+        device: device.into(),
+        label: None,
+    }
+}
+
+// A new account, signed up through the service with the mail read from the dev sink; its first
+// device's session.
+async fn sign_up(device: &str) -> (String, Session) {
+    let email = format!("{}@example.com", &random_id()[..12]);
+    let account = Account::new(&account_url(), common::tcp());
+    account
+        .signup(&email, &Bot::Turnstile("dev".into()))
+        .await
+        .unwrap();
+    let code = code_for(&email).await;
+    let session = account
+        .confirm_signup(&email, &code, PASSWORD, &login(device))
+        .await
+        .unwrap();
+    (email, session)
+}
+
+async fn sign_in(email: &str, device: &str) -> Session {
+    Account::new(&account_url(), common::tcp())
+        .signin_password(email, PASSWORD, &login(device))
+        .await
+        .unwrap()
+}
+
+fn relay_of(group: &str, device: &str, session: &Session) -> Relay {
+    Relay::new(&url(), group, device, common::tcp()).with_session(&session.token)
+}
+
+struct Person {
+    email: String,
+    device: String,
+    session: Session,
+    group: String,
+    relay: Relay,
+}
+
+// A person with a group and one device that has claimed it.
+async fn person() -> Person {
+    let (device, group) = (random_id(), random_id());
+    let (email, session) = sign_up(&device).await;
+    let relay = relay_of(&group, &device, &session);
+    relay.claim(GroupPlatform::Desktop).await.unwrap();
+    Person {
+        email,
+        device,
+        session,
+        group,
+        relay,
+    }
+}
+
+// Two devices of one person: same account and group, different devices and sessions.
+async fn pair() -> (Relay, Relay, String) {
+    let p = person().await;
+    let device = random_id();
+    let b = relay_of(&p.group, &device, &sign_in(&p.email, &device).await);
+    (p.relay, b, room_id(random_id().as_bytes()))
 }
 
 fn pattern(len: usize, seed: u8) -> Vec<u8> {
@@ -41,7 +124,7 @@ fn pattern(len: usize, seed: u8) -> Vec<u8> {
 #[tokio::test(flavor = "multi_thread")]
 #[ignore = "needs the relay on RELAY_URL"]
 async fn a_transfer_crosses_the_relay_between_two_cores() {
-    let (a, b, room) = pair();
+    let (a, b, room) = pair().await;
     let mut host = a.host(&room).await.unwrap();
     let up = pattern(3 * 1024 * 1024 + 123, 1);
     let down = pattern(2 * 1024 * 1024 + 7, 2);
@@ -90,7 +173,7 @@ async fn a_transfer_crosses_the_relay_between_two_cores() {
 #[tokio::test(flavor = "multi_thread")]
 #[ignore = "needs the relay on RELAY_URL"]
 async fn the_room_holds_sixteen_streams_and_no_more() {
-    let (a, b, room) = pair();
+    let (a, b, room) = pair().await;
     let mut host = a.host(&room).await.unwrap();
     let mut guests = Vec::new();
     let mut ends = Vec::new();
@@ -123,7 +206,7 @@ async fn the_room_holds_sixteen_streams_and_no_more() {
 #[tokio::test(flavor = "multi_thread")]
 #[ignore = "needs the relay on RELAY_URL"]
 async fn a_reader_that_stops_makes_the_writer_wait() {
-    let (a, b, room) = pair();
+    let (a, b, room) = pair().await;
     let mut host = a.host(&room).await.unwrap();
     let (guest, stalled) = tokio::join!(b.connect(&room), host.accept());
     let mut guest = guest.unwrap();
@@ -144,9 +227,9 @@ async fn a_reader_that_stops_makes_the_writer_wait() {
 #[tokio::test(flavor = "multi_thread")]
 #[ignore = "needs the relay on RELAY_URL"]
 async fn another_group_cannot_use_the_room() {
-    let (a, _, room) = pair();
+    let (a, _, room) = pair().await;
     let _host = a.host(&room).await.unwrap();
-    let stranger = device(&random_id());
+    let stranger = person().await.relay;
     assert!(matches!(
         stranger.connect(&room).await,
         Err(RelayError::WrongGroup)
@@ -159,8 +242,47 @@ async fn another_group_cannot_use_the_room() {
 
 #[tokio::test(flavor = "multi_thread")]
 #[ignore = "needs the relay on RELAY_URL"]
+async fn the_relay_checks_who_is_asking() {
+    let mine = person().await;
+    let other = person().await;
+    let room = room_id(random_id().as_bytes());
+    // No session.
+    let nobody = Relay::new(&url(), &mine.group, &mine.device, common::tcp());
+    assert!(matches!(nobody.status().await, Err(RelayError::SignIn)));
+    assert!(matches!(
+        nobody.connect(&room).await,
+        Err(RelayError::SignIn)
+    ));
+    // Another account's session on my group.
+    let intruder = relay_of(&mine.group, &other.device, &other.session);
+    assert!(matches!(
+        intruder.status().await,
+        Err(RelayError::WrongAccount)
+    ));
+    assert!(matches!(
+        intruder.claim(GroupPlatform::Desktop).await,
+        Err(RelayError::WrongAccount)
+    ));
+    assert!(matches!(
+        intruder.host(&room).await,
+        Err(RelayError::WrongAccount)
+    ));
+    // My session on a device it was not made for.
+    let borrowed = relay_of(&mine.group, &random_id(), &mine.session);
+    assert!(matches!(
+        borrowed.host(&room).await,
+        Err(RelayError::WrongDevice)
+    ));
+    // My own device is let in, and the account token is there for a purchase to carry.
+    let status = mine.relay.status().await.unwrap();
+    assert_eq!(status.account_token.len(), 36);
+    assert!(mine.relay.host(&room).await.is_ok());
+}
+
+#[tokio::test(flavor = "multi_thread")]
+#[ignore = "needs the relay on RELAY_URL"]
 async fn push_tokens_register_and_a_missing_host_is_reported() {
-    let (a, b, room) = pair();
+    let (a, b, room) = pair().await;
     a.register_push(Platform::Fcm, "token").await.unwrap();
     drop(a.host(&room).await.unwrap());
     // The relay sees the host's socket close a moment after the drop.
@@ -182,7 +304,7 @@ async fn push_tokens_register_and_a_missing_host_is_reported() {
 #[tokio::test(flavor = "multi_thread")]
 #[ignore = "needs the relay on RELAY_URL"]
 async fn a_group_starts_unpaid_and_receipts_are_not_checked_yet() {
-    let (a, _, _) = pair();
+    let (a, _, _) = pair().await;
     let status = a.status().await.unwrap();
     assert!(!status.paid && !status.capped);
     assert_eq!(status.used, 0);
@@ -196,7 +318,7 @@ async fn a_group_starts_unpaid_and_receipts_are_not_checked_yet() {
 #[tokio::test(flavor = "multi_thread")]
 #[ignore = "needs the relay on RELAY_URL"]
 async fn a_reply_still_arrives_after_the_request_is_shut_down() {
-    let (a, b, room) = pair();
+    let (a, b, room) = pair().await;
     let mut host = a.host(&room).await.unwrap();
     let server = tokio::spawn(async move {
         let mut s = host.accept().await.unwrap();
@@ -218,7 +340,7 @@ async fn a_reply_still_arrives_after_the_request_is_shut_down() {
 #[tokio::test(flavor = "multi_thread")]
 #[ignore = "needs the relay on RELAY_URL"]
 async fn a_host_that_writes_and_drops_still_delivers_everything() {
-    let (a, b, room) = pair();
+    let (a, b, room) = pair().await;
     let mut host = a.host(&room).await.unwrap();
     let body = pattern(WINDOW_FRAMES * MAX_FRAME + 256 * 1024 + 100_000, 3);
     let want = Sha256::digest(&body);
@@ -254,7 +376,7 @@ async fn a_host_that_writes_and_drops_still_delivers_everything() {
 #[tokio::test(flavor = "multi_thread")]
 #[ignore = "needs the relay on RELAY_URL"]
 async fn a_host_that_drops_without_shutdown_still_delivers_everything() {
-    let (a, b, room) = pair();
+    let (a, b, room) = pair().await;
     let mut host = a.host(&room).await.unwrap();
     let body = pattern(WINDOW_FRAMES * MAX_FRAME + 100_000, 5);
     let want = Sha256::digest(&body);

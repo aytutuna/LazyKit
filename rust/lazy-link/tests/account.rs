@@ -20,7 +20,7 @@ fn account(url: &str) -> Account {
     Account::new(&url.replace("/relay/", "/account/"), common::tcp())
 }
 
-const SESSION: &str = r#"{"token":"acct.sess","session":"sess","account":"acct"}"#;
+const SESSION: &str = r#"{"token":"acct.sess","session":"sess","account":{"email":"ada@example.com","password":true}}"#;
 
 fn body_of(head: &str) -> serde_json::Value {
     serde_json::from_str(head.split("\r\n\r\n").nth(1).unwrap()).unwrap()
@@ -46,7 +46,7 @@ async fn signing_up_sends_the_bot_check_and_reads_the_session() {
         Session {
             token: "acct.sess".into(),
             session: "sess".into(),
-            account: "acct".into()
+            account: serde_json::json!({ "email": "ada@example.com", "password": true }),
         }
     );
     let heads = heads.lock().unwrap();
