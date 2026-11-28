@@ -120,6 +120,19 @@ class Notices(unittest.TestCase):
             with self.assertRaises(notices.MissingTexts):
                 notices.licence_texts(metadata, fallback)
 
+    def test_bundled_texts_are_added_and_a_missing_one_is_an_error(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            metadata, fallback = self.crate_in(tmp, name="aws-lc-sys")
+            crate = Path(tmp) / "crate"
+            (crate / "LICENSE").write_text("Own text", encoding="utf-8")
+            with self.assertRaisesRegex(notices.MissingTexts, r"aws-lc-sys 1.0.0 \(LICENSE-jitterentropy\)"):
+                notices.licence_texts(metadata, fallback)
+            (fallback / "aws-lc-sys-1.0.0").mkdir(parents=True)
+            for name in notices.BUNDLED["aws-lc-sys"]:
+                (fallback / "aws-lc-sys-1.0.0" / name).write_text(f"{name} text", encoding="utf-8")
+            files = [n for n, _ in notices.licence_texts(metadata, fallback)[("aws-lc-sys", "1.0.0")]]
+            self.assertEqual(files, ["LICENSE", "LICENSE-jitterentropy", "LICENSE-s2n-bignum"])
+
     def test_the_native_components_are_named(self):
         text = notices.render(METADATA, PINS + NATIVE_PINS)
         self.assertIn("ONNX Runtime 9.8.7 (MIT)", text)

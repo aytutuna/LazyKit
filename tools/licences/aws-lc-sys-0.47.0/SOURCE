@@ -1,0 +1,3 @@
+aws-lc-sys 0.47.0 bundles AWS-LC v5.12.0 (AWSLC_VERSION_NUMBER_STRING), whose packaged crate leaves out the licence files of two bundled libraries.
+LICENSE-jitterentropy: https://github.com/aws/aws-lc/blob/v5.12.0/third_party/jitterentropy/jitterentropy-library/LICENSE
+LICENSE-s2n-bignum: https://github.com/aws/aws-lc/blob/v5.12.0/third_party/s2n-bignum/s2n-bignum-imported/LICENSE

@@ -27,12 +27,10 @@ TARGETS = [
 # The web part has no TLS of its own: the browser does it, so it is looked at alone.
 WASM = ["-p", "lazy-link-wasm", "--target", "wasm32-unknown-unknown"]
 
-# Licence files that sit deeper than a crate's top folder and belong to code it bundles.
+# Licence texts of code a crate bundles but leaves out of its package, kept under tools/licences/<crate>-<version>/ next
+# to the crate's own files; one that is missing is an error.
 BUNDLED = {
-    "aws-lc-sys": [
-        "aws-lc/third_party/jitterentropy/jitterentropy-library/LICENSE",
-        "aws-lc/third_party/s2n-bignum/LICENSE",
-    ],
+    "aws-lc-sys": ["LICENSE-jitterentropy", "LICENSE-s2n-bignum"],
 }
 
 LICENCE_FILE = re.compile(r"(LICEN[CS]E|COPYING|NOTICE|UNLICENSE)", re.I)
@@ -128,10 +126,12 @@ def licence_texts(metadata, fallback=FALLBACK):
             continue
         folder = Path(p["manifest_path"]).parent
         files = read_files(folder, lambda n: LICENCE_FILE.match(n))
-        for rel in BUNDLED.get(p["name"], []):
-            extra = folder / rel
-            if extra.is_file():
-                files.append((rel, extra.read_text(encoding="utf-8", errors="replace")))
+        for name in BUNDLED.get(p["name"], []):
+            kept = fallback / f"{p['name']}-{p['version']}" / name
+            if kept.is_file():
+                files.append((name, kept.read_text(encoding="utf-8", errors="replace")))
+            else:
+                missing.append(f"{p['name']} {p['version']} ({name})")
         extra = fallback / f"{p['name']}-{p['version']}"
         if not files and extra.is_dir():
             files = read_files(extra, lambda n: n != "SOURCE")
