@@ -185,6 +185,8 @@ impl Document {
         self.objects.clear();
         self.object_streams.clear();
         self.bad_object_streams.clear();
+        self.globals.clear();
+        self.refused_globals.clear();
         // Where each object was found: an object stream's members count as written where the stream is.
         let mut written: HashMap<u32, u64> = HashMap::with_capacity(scan.objects.len());
         for (number, (offset, generation)) in &scan.objects {

@@ -21,9 +21,9 @@ const MAX_FILTER_STAGES: usize = 16;
 /// What all the stages of a chain may produce between them, as a multiple of the size limit.
 const CHAIN_OUTPUT_FACTOR: usize = 4;
 
-/// The most a JBIG2 globals stream may expand to; they hold symbols, not pictures.
 type Globals = Arc<Vec<u8>>;
 
+/// The most a JBIG2 globals stream may expand to; they hold symbols, not pictures.
 const MAX_GLOBALS: usize = 32 << 20;
 const MAX_CACHED_GLOBALS: usize = 64 << 20;
 

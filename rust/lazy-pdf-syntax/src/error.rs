@@ -11,8 +11,6 @@ pub enum Problem {
     Encrypted,
     /// The file uses something this reader does not handle.
     Unsupported,
-    /// A stream or its output passes the size limit it was read under.
-    TooLarge,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -20,7 +18,8 @@ pub struct ReadError {
     pub problem: Problem,
     /// Technical, one char per byte where it quotes the file.
     pub detail: String,
-    /// The stream or its output passed the size limit it was read under. The problem is still `Damaged`.
+    /// The stream's data or its decoded output passes the limit the caller gave, so a bigger limit may do. The
+    /// problem stays `Damaged`.
     pub too_large: bool,
 }
 
@@ -52,7 +51,6 @@ impl fmt::Display for Problem {
             Problem::Damaged => "Damaged",
             Problem::Encrypted => "Encrypted",
             Problem::Unsupported => "Unsupported",
-            Problem::TooLarge => "TooLarge",
         })
     }
 }
