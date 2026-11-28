@@ -259,7 +259,10 @@ export class Room extends DurableObject {
       if (!who || ws.readyState !== WebSocket.OPEN) continue;
       const key = `${who.account}.${who.session}`;
       if (!seen.has(key)) seen.set(key, await this.env.ACCOUNTS.get(this.env.ACCOUNTS.idFromName(who.account)).alive(who.session));
-      if (!seen.get(key)) this.end(ws, 1008, "signed out");
+      if (seen.get(key)) continue;
+      this.end(ws, 1008, "signed out");
+      // The host's own ends of the streams go with its control socket.
+      if (this.ctx.getTags(ws)[0] === "host") for (const s of this.ctx.getWebSockets("stream")) this.end(s, 1008, "signed out");
     }
   }
 

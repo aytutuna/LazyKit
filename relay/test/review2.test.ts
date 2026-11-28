@@ -1,3 +1,4 @@
+import { exports } from "cloudflare:workers";
 import { afterEach, describe, expect, it } from "vitest";
 import { services, useServices } from "../src/services";
 import { account, codeIn, fakes, mailed, sent, signUp, who , tweak } from "./helpers";
@@ -21,8 +22,9 @@ describe("second review findings in workerd", () => {
   it("without CF-Connecting-IP a stranger and the owner are one caller", async () => {
     fakes();
     await signUp(who.email, PW);
-    for (let i = 0; i < 10; i++) await account("signin", "POST", { email: who.email, password: "wrong password!!", ...ME });
-    const owner = await account("signin", "POST", { email: who.email, password: PW, ...ME });
+    const bare = (password: string) => exports.default.fetch("https://alazy.app/account/v1/signin", { method: "POST", body: JSON.stringify({ email: who.email, password, ...ME }) });
+    for (let i = 0; i < 10; i++) await bare("wrong password!!");
+    const owner = await bare(PW);
     expect(owner.status).toBe(429);
   });
 

@@ -18,6 +18,9 @@ export const who = { email: "", other: "", apple: "", google: "" };
 // Mail goes to `sent` and the identity providers publish one key, k1.
 let base: Partial<Services> = {};
 
+// Every test calls from an address of its own, so the per-address limits do not carry over.
+export let ipHeader: Record<string, string> = {};
+
 // Changes some of the fakes for one test.
 export function tweak(over: Partial<Services>): void {
   useServices({ ...base, ...over });
@@ -26,6 +29,7 @@ export function tweak(over: Partial<Services>): void {
 export function fakes(extra: Partial<Services> = {}): void {
   sent.length = 0;
   people++;
+  ipHeader = { "CF-Connecting-IP": `192.0.${Math.floor(people / 250)}.${(people % 250) + 1}` };
   Object.assign(who, { email: `ada${people}@example.com`, other: `grace${people}@example.com`, apple: `apple-sub-${people}`, google: `google-sub-${people}` });
   base = {
     mailer: { send: async (m) => void sent.push(m) },
@@ -49,7 +53,7 @@ export const account = (path: string, method = "GET", body?: unknown, token?: st
   exports.default.fetch(`https://alazy.app/account/v1/${path}`, {
     method,
     body: body === undefined ? undefined : JSON.stringify((path === "signup" || path === "code") && body && !("turnstile" in (body as object)) && !("attest" in (body as object)) ? { turnstile: "ok-token", ...(body as object) } : body),
-    headers: { ...(token ? { Authorization: `Bearer ${token}` } : {}), ...headers },
+    headers: { ...ipHeader, ...(token ? { Authorization: `Bearer ${token}` } : {}), ...headers },
   });
 
 export const newNonce = async () => ((await (await account("nonce", "POST", {})).json()) as { nonce: string }).nonce;

@@ -96,8 +96,10 @@ const FORM = ["POST signup", "POST code", "POST nonce", "POST signup/confirm", "
 export async function accountApi(req: Request, env: Cloudflare.Env, path: string, ip: string | null): Promise<Response> {
   const svc = accountService(env);
   const route = `${req.method} ${path}`;
-  const caller = ip ? networkOf(ip) : "";
-  const limited = (l: RateLimiter) => (ip && !l.allow(ip) ? fail("slow down", 503, { "Retry-After": "600" }) : undefined);
+  // A request that carries no address is one shared caller, not an exemption.
+  const key = ip ?? "unknown";
+  const caller = ip ? networkOf(ip) : "unknown";
+  const limited = (l: RateLimiter) => (!l.allow(key) ? fail("slow down", 503, { "Retry-After": "600" }) : undefined);
   const header = req.headers.get("Authorization");
 
   if (req.method === "GET" || req.method === "DELETE") {

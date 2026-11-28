@@ -325,6 +325,22 @@ describe("sessions and re-checks", () => {
     expect(await rig.service.session(header(r))).toBeUndefined();
   });
 
+  it("counts an open connection as use, but not past idle or absolute expiry", async () => {
+    const r = await signUp();
+    const s = (await rig.service.session(header(r)))!;
+    expect(await rig.service.alive(s.account, s.session)).toBe(true);
+    for (let i = 0; i < 5; i++) {
+      rig.clock.now += 25 * DAY;
+      expect(await rig.service.alive(s.account, s.session)).toBe(true);
+    }
+    rig.clock.now += 40 * DAY;
+    expect(await rig.service.alive(s.account, s.session)).toBe(false);
+    const idle = await signUp(`idle${n}@example.com`);
+    const i = (await rig.service.session(header(idle)))!;
+    rig.clock.now += 31 * DAY;
+    expect(await rig.service.alive(i.account, i.session)).toBe(false);
+  });
+
   it("refuses forged and cross-account tokens", async () => {
     const a = await signUp();
     const b = await signUp(`grace${n}@example.com`);

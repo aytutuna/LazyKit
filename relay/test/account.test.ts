@@ -5,7 +5,7 @@ import { identityName } from "../src/account/core/account";
 import { canonicalEmail } from "../src/account/core/email";
 import { hmac } from "../src/account/core/util";
 import { NotConfiguredError, services, useServices } from "../src/services";
-import { DEVICE_A, account, inside, codeIn, fakes, idToken, mailed, newNonce, sent, signUp, who , tweak } from "./helpers";
+import { DEVICE_A, account, inside, codeIn, fakes, idToken, mailed, newNonce, sent, signUp, who , tweak, ipHeader } from "./helpers";
 
 const PASSWORD = "correct horse battery";
 const LOGIN = { app: "lazysend", device: DEVICE_A, label: "laptop" };
@@ -97,21 +97,21 @@ describe("sign-up over HTTP", () => {
   it("limits one address and one caller the same whether or not the account exists", async () => {
     const real = `real${who.apple}@example.com`;
     await signUp(real, PASSWORD);
-    const statuses = async (email: string) => {
+    const statuses = async (email: string, ip: string) => {
       const out: number[] = [];
-      for (let i = 0; i < 5; i++) out.push((await account("code", "POST", { email })).status);
+      for (let i = 0; i < 5; i++) out.push((await account("code", "POST", { email }, undefined, { "CF-Connecting-IP": ip })).status);
       return out;
     };
     // The real address has used one send of its window on signing up; the other one asks for it.
     const ghost = `ghost${who.apple}@example.com`;
     await account("signup", "POST", { email: ghost });
-    expect(await statuses(ghost)).toEqual(await statuses(real));
+    expect(await statuses(ghost, "198.51.100.31")).toEqual(await statuses(real, "198.51.100.32"));
   });
 });
 
 describe("bot check over HTTP", () => {
   it("wants a Turnstile token before it sends any mail", async () => {
-    const plain = (path: string, body: object) => exports.default.fetch(`https://alazy.app/account/v1/${path}`, { method: "POST", body: JSON.stringify(body) });
+    const plain = (path: string, body: object) => exports.default.fetch(`https://alazy.app/account/v1/${path}`, { method: "POST", body: JSON.stringify(body), headers: ipHeader });
     for (const path of ["signup", "code"]) {
       expect((await plain(path, { email: EMAIL })).status).toBe(403);
       expect((await plain(path, { email: EMAIL, turnstile: "" })).status).toBe(403);
@@ -131,7 +131,7 @@ describe("bot check over HTTP", () => {
     tweak({ integrity: { decode: async () => make(current) } });
     let current = await newNonce();
     const proof = { nonce: current, platform: "google", token: "tok" };
-    const plain = (body: object) => exports.default.fetch("https://alazy.app/account/v1/signup", { method: "POST", body: JSON.stringify(body) });
+    const plain = (body: object) => exports.default.fetch("https://alazy.app/account/v1/signup", { method: "POST", body: JSON.stringify(body), headers: ipHeader });
     expect((await plain({ email: EMAIL, attest: proof })).status).toBe(202);
     expect((await plain({ email: who.other, attest: proof })).status).toBe(403);
     current = "n".repeat(24) + ".1.0";

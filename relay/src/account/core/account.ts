@@ -153,8 +153,15 @@ export class AccountCore {
   }
 
   // Whether a session still stands, for open connections to ask now and then.
-  alive(session: string): boolean {
-    return Boolean(this.s?.sessions.some((x) => x.id === session));
+  // A session counts as used while a connection made with it is open, but lapses at its absolute end.
+  async alive(session: string, now = this.clock()): Promise<boolean> {
+    const found = this.s?.sessions.find((x) => x.id === session);
+    if (!found || now - found.seen > SESSION_IDLE_MS || now - found.created > SESSION_MAX_MS) return false;
+    if (now - found.seen >= SEEN_REFRESH_MS) {
+      found.seen = now;
+      await this.save();
+    }
+    return true;
   }
 
   sessions(current: string) {
