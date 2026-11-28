@@ -9,6 +9,7 @@ on:
       - testdata/pdf/**
       - testdata/scan/**
       - testdata/pdf-filters/**
+      - testdata/pdf-fonts/**
       - native/**
       - tools/**
       - THIRD-PARTY-NOTICES.txt

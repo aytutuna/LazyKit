@@ -1,0 +1,38 @@
+[package]
+name = "lazy-pdf-fonts-fuzz"
+version = "0.0.0"
+edition = "2024"
+license-file = "../../../LICENSE"
+publish = false
+
+[package.metadata]
+cargo-fuzz = true
+
+[dependencies]
+libfuzzer-sys = "0.4.13"
+
+[dependencies.lazy-pdf-fonts]
+path = ".."
+
+[[bin]]
+name = "truetype"
+path = "fuzz_targets/truetype.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "cff"
+path = "fuzz_targets/cff.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "type1"
+path = "fuzz_targets/type1.rs"
+test = false
+doc = false
+bench = false
+
+[workspace]
