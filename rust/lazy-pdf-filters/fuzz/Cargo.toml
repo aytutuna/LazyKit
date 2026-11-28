@@ -1,0 +1,58 @@
+[package]
+name = "lazy-pdf-filters-fuzz"
+version = "0.0.0"
+edition = "2024"
+license-file = "../../../LICENSE"
+publish = false
+
+[package.metadata]
+cargo-fuzz = true
+
+[dependencies]
+libfuzzer-sys = "0.4"
+lazy-pdf-filters = { path = ".." }
+
+# Not a member of the rust workspace: fuzzing needs a nightly compiler.
+[workspace]
+
+[[bin]]
+name = "flate"
+path = "fuzz_targets/flate.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "lzw"
+path = "fuzz_targets/lzw.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "ascii"
+path = "fuzz_targets/ascii.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "ccitt"
+path = "fuzz_targets/ccitt.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "jbig2"
+path = "fuzz_targets/jbig2.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "dct"
+path = "fuzz_targets/dct.rs"
+test = false
+doc = false
+bench = false
