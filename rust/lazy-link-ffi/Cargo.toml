@@ -16,3 +16,7 @@ sha2 = "0.10"
 thiserror = "2"
 tokio = { version = "1.54.1", features = ["sync", "io-util", "macros"] }
 uniffi = { workspace = true, features = ["tokio"] }
+
+[target.'cfg(target_os = "android")'.dependencies]
+jni = "0.22"
+rustls-platform-verifier = "0.7"

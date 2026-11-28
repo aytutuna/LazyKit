@@ -1,6 +1,5 @@
 [graph]
 all-features = true
-# Test code may use TLS libraries; what the apps ship may not.
 exclude-dev = true
 
 [licenses]
@@ -14,6 +13,8 @@ allow = [
     "ISC",
     "Zlib",
     "Unicode-3.0",
+    # webpki-root-certs, the Mozilla CA list rustls-platform-verifier falls back on where the system gives none
+    "CDLA-Permissive-2.0",
     # UniFFI (the Swift, Kotlin and C# bindings) is MPL-2.0: file-level, so unmodified use only needs its notice and source link
     "MPL-2.0",
 ]
@@ -25,19 +26,13 @@ ignore = true
 
 [bans]
 multiple-versions = "allow"
-# The apps use each system's own TLS (SChannel, Network.framework, Android's sockets, the browser), so no TLS
-# library of our own may reach a shipped crate.
+# TLS is rustls on aws-lc-rs, in Rust, on every platform. Nothing else may bring its own: ring, OpenSSL
+# and the system-linked native-tls stay out.
 deny = [
     { name = "ring" },
-    { name = "rustls" },
-    { name = "rustls-webpki" },
-    { name = "rustls-platform-verifier" },
-    { name = "webpki-roots" },
     { name = "native-tls" },
     { name = "openssl" },
     { name = "openssl-sys" },
-    { name = "aws-lc-rs" },
-    { name = "aws-lc-sys" },
 ]
 wildcards = "deny"
 allow-wildcard-paths = true

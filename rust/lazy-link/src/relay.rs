@@ -4,6 +4,7 @@
 
 use crate::base64url;
 use crate::http;
+use crate::tls::TlsTransport;
 use crate::transport::{self, Transport};
 use async_trait::async_trait;
 use futures_util::{SinkExt, StreamExt};
@@ -288,8 +289,14 @@ pub struct Relay {
 }
 
 impl Relay {
-    /// `base` is the relay's address up to the version, for example `https://alazy.app/relay/v1`.
-    /// Connections are opened by `transport`, which does the TLS.
+    /// The relay over TLS that the system trusts (see [`TlsTransport::system`]). `base` is the
+    /// relay's address up to the version, for example `https://alazy.app/relay/v1`.
+    pub fn system(base: &str, group: &str, device: &str) -> Result<Self, RelayError> {
+        let transport = TlsTransport::system().map_err(|e| RelayError::Transport(e.0))?;
+        Ok(Self::new(base, group, device, Arc::new(transport)))
+    }
+
+    /// Like [`system`](Self::system), with connections opened by `transport`.
     pub fn new(base: &str, group: &str, device: &str, transport: Arc<dyn Transport>) -> Self {
         let secure = base.starts_with("https");
         let rest = base.split_once("://").map_or(base, |(_, rest)| rest);
@@ -455,12 +462,12 @@ impl Relay {
     }
 
     // The connect runs as its own task: when the caller times out and goes away, a connection
-    // that the app completes later still ends up here and is dropped, which closes it.
+    // that finishes later still ends up here and is dropped, which closes it.
     async fn dial(&self) -> Result<DuplexStream, RelayError> {
         let transport = self.transport.clone();
         let host = self.host.clone();
         let port = self.port;
-        tokio::spawn(async move { transport::open(&*transport, &host, port, &host, None).await })
+        tokio::spawn(async move { transport::open(&*transport, &host, port, &host).await })
             .await
             .map_err(|e| RelayError::Transport(e.to_string()))?
             .map_err(|e| RelayError::Transport(e.0))

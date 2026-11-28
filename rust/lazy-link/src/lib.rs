@@ -11,6 +11,8 @@ pub mod relay;
 mod session;
 mod short_code;
 #[cfg(feature = "relay")]
+pub mod tls;
+#[cfg(feature = "relay")]
 pub mod transport;
 
 pub use fingerprint::{

@@ -31,7 +31,6 @@ impl Transport for Tcp {
         host: &str,
         port: u16,
         _server_name: &str,
-        _pinned: bool,
     ) -> Result<Arc<dyn Connection>, TransportError> {
         let (read, write) = TcpStream::connect((host, port))
             .await
@@ -70,10 +69,6 @@ impl Connection for TcpConnection {
 
     async fn close(&self) {
         let _ = self.write.lock().await.shutdown().await;
-    }
-
-    fn peer_spki(&self) -> Option<Vec<u8>> {
-        None
     }
 }
 
@@ -144,7 +139,6 @@ impl Transport for Replies {
         host: &str,
         port: u16,
         server_name: &str,
-        _pinned: bool,
     ) -> Result<Arc<dyn Connection>, TransportError> {
         self.connects
             .lock()
@@ -183,8 +177,4 @@ impl Connection for Canned {
     }
 
     async fn close(&self) {}
-
-    fn peer_spki(&self) -> Option<Vec<u8>> {
-        None
-    }
 }

@@ -6,7 +6,6 @@ mod common;
 
 use async_trait::async_trait;
 use lazy_link::relay::{Relay, RelayError, random_id, room_id};
-use lazy_link::spki_fingerprint;
 use lazy_link::transport::{Connection, Transport, TransportError, open};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
@@ -15,14 +14,12 @@ use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
 // A connection that echoes, with a certificate key the test names.
 struct Echo {
-    spki: Option<Vec<u8>>,
     inbox: Mutex<Vec<u8>>,
     wake: tokio::sync::Notify,
     closed: Arc<AtomicBool>,
 }
 
 struct EchoTransport {
-    spki: Option<Vec<u8>>,
     closed: Arc<AtomicBool>,
 }
 
@@ -33,10 +30,8 @@ impl Transport for EchoTransport {
         _: &str,
         _: u16,
         _: &str,
-        _: bool,
     ) -> Result<Arc<dyn Connection>, TransportError> {
         Ok(Arc::new(Echo {
-            spki: self.spki.clone(),
             inbox: Mutex::default(),
             wake: tokio::sync::Notify::new(),
             closed: self.closed.clone(),
@@ -72,17 +67,12 @@ impl Connection for Echo {
         self.closed.store(true, Ordering::SeqCst);
         self.wake.notify_one();
     }
-
-    fn peer_spki(&self) -> Option<Vec<u8>> {
-        self.spki.clone()
-    }
 }
 
-fn echo(spki: Option<&[u8]>) -> (EchoTransport, Arc<AtomicBool>) {
+fn echo() -> (EchoTransport, Arc<AtomicBool>) {
     let closed = Arc::new(AtomicBool::new(false));
     (
         EchoTransport {
-            spki: spki.map(<[u8]>::to_vec),
             closed: closed.clone(),
         },
         closed,
@@ -91,10 +81,8 @@ fn echo(spki: Option<&[u8]>) -> (EchoTransport, Arc<AtomicBool>) {
 
 #[tokio::test]
 async fn bytes_go_both_ways_over_the_connection() {
-    let (t, _) = echo(None);
-    let s = open(&t, "relay.test", 443, "relay.test", None)
-        .await
-        .unwrap();
+    let (t, _) = echo();
+    let s = open(&t, "relay.test", 443, "relay.test").await.unwrap();
     let data: Vec<u8> = (0..100_000u32).map(|i| (i % 251) as u8).collect();
     let (mut rd, mut wr) = tokio::io::split(s);
     let send = data.clone();
@@ -105,29 +93,6 @@ async fn bytes_go_both_ways_over_the_connection() {
     rd.read_exact(&mut got).await.unwrap();
     assert_eq!(got, data);
     writer.await.unwrap();
-}
-
-#[tokio::test]
-async fn a_pinned_connection_needs_the_pinned_key() {
-    let spki = b"a public key in DER".to_vec();
-    let pin = spki_fingerprint(&spki);
-    let (t, closed) = echo(Some(&spki));
-    assert!(open(&t, "h", 1, "h", Some(&pin)).await.is_ok());
-    assert!(!closed.load(Ordering::SeqCst));
-
-    let mut wrong = pin;
-    wrong[0] ^= 1;
-    let err = open(&t, "h", 1, "h", Some(&wrong)).await.unwrap_err();
-    assert!(err.0.contains("pinned"), "{err}");
-    assert!(
-        closed.load(Ordering::SeqCst),
-        "a refused connection is closed"
-    );
-
-    let (t, _) = echo(None);
-    let err = open(&t, "h", 1, "h", Some(&wrong)).await.unwrap_err();
-    assert!(err.0.contains("no certificate"), "{err}");
-    assert!(open(&t, "h", 1, "h", None).await.is_ok());
 }
 
 #[tokio::test]
@@ -178,7 +143,6 @@ async fn a_stalled_connection_is_given_up_on() {
             _: &str,
             _: u16,
             _: &str,
-            _: bool,
         ) -> Result<Arc<dyn Connection>, TransportError> {
             std::future::pending().await
         }
@@ -207,13 +171,12 @@ async fn a_connection_that_arrives_after_the_deadline_is_closed() {
             host: &str,
             port: u16,
             name: &str,
-            pinned: bool,
         ) -> Result<Arc<dyn Connection>, TransportError> {
             tokio::time::sleep(Duration::from_secs(60)).await;
-            self.0.connect(host, port, name, pinned).await
+            self.0.connect(host, port, name).await
         }
     }
-    let (inner, closed) = echo(None);
+    let (inner, closed) = echo();
     let relay = Relay::new(
         "https://alazy.app/relay/v1",
         &random_id(),
@@ -230,37 +193,4 @@ async fn a_connection_that_arrives_after_the_deadline_is_closed() {
         closed.load(Ordering::SeqCst),
         "the late connection was left open"
     );
-}
-
-#[tokio::test]
-async fn only_a_pinned_open_asks_for_a_pinned_connection() {
-    struct Spy(Mutex<Vec<bool>>, EchoTransport);
-    #[async_trait]
-    impl Transport for Spy {
-        async fn connect(
-            &self,
-            host: &str,
-            port: u16,
-            name: &str,
-            pinned: bool,
-        ) -> Result<Arc<dyn Connection>, TransportError> {
-            self.0.lock().unwrap().push(pinned);
-            self.1.connect(host, port, name, pinned).await
-        }
-    }
-    let spki = b"key".to_vec();
-    let (inner, _) = echo(Some(&spki));
-    let spy = Arc::new(Spy(Mutex::default(), inner));
-    open(&*spy, "h", 1, "h", None).await.unwrap();
-    open(&*spy, "h", 1, "h", Some(&spki_fingerprint(&spki)))
-        .await
-        .unwrap();
-    let relay = Relay::new(
-        "https://alazy.app/relay/v1",
-        &random_id(),
-        &random_id(),
-        spy.clone(),
-    );
-    let _ = relay.status().await;
-    assert_eq!(*spy.0.lock().unwrap(), [false, true, false]);
 }
