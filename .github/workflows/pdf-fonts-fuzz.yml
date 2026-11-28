@@ -7,6 +7,7 @@ on:
       - rust/lazy-pdf-fonts/**
       - rust/lazy-pdf-syntax/**
       - rust/lazy-pdf-filters/**
+      - rust/lazy-pdf-text/**
       - rust/Cargo.lock
       - rust/Cargo.toml
       - testdata/pdf-fonts/**
@@ -36,7 +37,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        target: [truetype, cff, type1, cmap, content, font]
+        target: [truetype, cff, type1, cmap, content, font, resources]
     env:
       # A short run on every push, a long one every week.
       SECONDS_TO_FUZZ: ${{ github.event_name == 'schedule' && 1500 || 30 }}
