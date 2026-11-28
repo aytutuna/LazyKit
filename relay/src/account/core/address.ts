@@ -75,6 +75,15 @@ export class AddressCore {
     return this.s.account;
   }
 
+  // An address bound to an account that is gone (a deletion that stopped half way) is unbound again.
+  private async repair(): Promise<void> {
+    const id = this.s.account;
+    if (id && this.deps.accountExists && !(await this.deps.accountExists(id))) {
+      this.s.account = undefined;
+      this.s.mailTo = undefined;
+    }
+  }
+
   private ready(): boolean {
     return Boolean(this.deps.codeKey()) && this.deps.mailer().ready?.() !== false;
   }
@@ -124,6 +133,7 @@ export class AddressCore {
   // sees the same answer either way.
   async requestSignup(typed: string, canonical: string, now = this.clock()): Promise<Sent> {
     if (!this.ready()) return "not-configured";
+    await this.repair();
     if (!this.reserveSend(now)) return "limited";
     if (this.s.account && this.s.mailTo) {
       this.later(this.s.mailTo, "You already have a Lazy account", "Someone asked to create a Lazy account with this address, which already has one. Sign in instead; if you forgot your password, ask for a sign-in code. If it was not you, you can ignore this email.");
@@ -136,6 +146,7 @@ export class AddressCore {
 
   async requestSignin(canonical: string, now = this.clock()): Promise<Sent> {
     if (!this.ready()) return "not-configured";
+    await this.repair();
     if (!this.reserveSend(now)) return "limited";
     if (this.s.account && this.s.mailTo) await this.issue("signin", canonical, this.s.mailTo, now);
     else await this.hash("signin", canonical, "000000");
@@ -234,6 +245,7 @@ export class AddressCore {
   // Forgets what has run out; an address with nothing left and no account is deleted. A newer code is not touched.
   async sweep(): Promise<void> {
     const now = this.clock();
+    await this.repair();
     this.s.sends = this.s.sends.filter((t) => now - t < CODE_MS);
     for (const k of Object.keys(this.s.codes) as Purpose[]) if (this.s.codes[k]!.expires <= now) delete this.s.codes[k];
     if (windowIdle(this.s.code, now, DAY)) this.s.misses = undefined;

@@ -28,6 +28,10 @@ export class Account extends DurableObject<Cloudflare.Env> {
     return this.core.create(...a);
   }
 
+  exists() {
+    return this.core.exists();
+  }
+
   addIdentity(...a: Parameters<AccountCore["addIdentity"]>) {
     return this.core.addIdentity(...a);
   }

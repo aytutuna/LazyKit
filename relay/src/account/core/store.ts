@@ -17,5 +17,7 @@ export interface Deps {
   defer(task: Promise<unknown>): void;
   // Rounds of password hashing, for work that has to take as long as the real thing.
   stages?(): number;
+  // Whether an account still stands, for an address that names it.
+  accountExists?(id: string): Promise<boolean>;
   now?(): number;
 }

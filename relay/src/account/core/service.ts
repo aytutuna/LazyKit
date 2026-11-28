@@ -13,7 +13,7 @@ type Async<T> = { [K in keyof T]: T[K] extends (...a: infer A) => infer R ? (...
 // What the service calls on one address, account or identity; a Durable Object stub, a database
 // row or the object itself all fit.
 export type AddressPort = Async<Pick<AddressCore, "requestSignup" | "requestSignin" | "requestLink" | "requestEmail" | "takeCode" | "bindAccount" | "unbind" | "account" | "passwordTry" | "passwordGood">>;
-export type AccountPort = Async<Pick<AccountCore, "create" | "addIdentity" | "open" | "verifyPassword" | "check" | "alive" | "sessions" | "revoke" | "setPassword" | "authorizeDelete" | "mailAddress" | "setEmail" | "me" | "identityIds" | "export" | "erase">>;
+export type AccountPort = Async<Pick<AccountCore, "create" | "exists" | "addIdentity" | "open" | "verifyPassword" | "check" | "alive" | "sessions" | "revoke" | "setPassword" | "authorizeDelete" | "mailAddress" | "setEmail" | "me" | "identityIds" | "export" | "erase">>;
 export type IdentityPort = Async<Pick<IdentityCore, "account" | "bind" | "use" | "erase">>;
 
 export interface Directory {
@@ -251,11 +251,15 @@ export class AccountService {
     const taken = await a.port.takeCode("email", code, a.canonical, caller);
     if (!taken.ok || taken.extra !== s.account) return "bad";
     const account = this.dir.account(s.account);
+    // The old address is let go first, so a stop half way leaves an address unbound, never one bound to nothing.
     const old = await account.mailAddress();
-    if (!(await a.port.bindAccount(s.account, taken.mailTo))) return "bad";
-    await account.setEmail(taken.mailTo);
-    const previous = old && (await this.address(old));
+    const previous = old ? await this.address(old) : undefined;
     if (previous && previous.canonical !== a.canonical) await previous.port.unbind(s.account);
+    if (!(await a.port.bindAccount(s.account, taken.mailTo))) {
+      if (previous && old) await previous.port.bindAccount(s.account, old);
+      return "bad";
+    }
+    await account.setEmail(taken.mailTo);
     return "ok";
   }
 
@@ -271,13 +275,15 @@ export class AccountService {
     const acct = this.dir.account(s.account);
     const ok = await acct.authorizeDelete(s.fresh, typeof password === "string" ? password : undefined);
     if (ok !== "ok") return { ok: false as const, why: ok };
+    // The address goes first: a stop half way leaves an account nobody can reach by email, which a
+    // second delete finishes, never an address bound to an account that is gone.
     const email = await acct.mailAddress();
+    const a = email ? await this.address(email) : undefined;
+    if (a) await a.port.unbind(s.account);
     for (const id of await acct.identityIds()) await this.dir.identity(id).erase();
     const apps: Record<string, unknown> = {};
     for (const [k, d] of Object.entries(this.data)) apps[k] = await d.erase(s.account);
     const own = await acct.erase();
-    const a = email ? await this.address(email) : undefined;
-    if (a) await a.port.unbind(s.account);
     return { ok: true as const, deleted: { account: true, ...own, apps } };
   }
 }

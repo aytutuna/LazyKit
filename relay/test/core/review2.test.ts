@@ -70,21 +70,40 @@ describe("second review findings", () => {
     expect(toVictim.length).toBeGreaterThan(0);
   });
 
-  it.fails("Q5 a delete cut off after the account is erased leaves the address bound to nothing for good", async () => {
+  it("Q5 an address bound to an account that is gone is unbound again", async () => {
     const rig = memoryService();
     const r = await signUp(rig, "gone5@example.com");
     const s = (await rig.service.session(`Bearer ${r.token}`))!;
-    const addr = [...rig.addresses.values()][0].core as any;
-    const unbind = addr.unbind.bind(addr);
-    addr.unbind = async () => { throw new Error("worker died"); };
-    await expect(rig.service.delete(s)).rejects.toThrow();
-    addr.unbind = unbind;
-    expect(await rig.service.session(`Bearer ${r.token}`)).toBeUndefined();
-    rig.clock.now += 3 * 86_400_000;
-    await addr.sweep();
+    await rig.accounts.get(s.account)!.core.erase();
     expect(await rig.service.signup("gone5@example.com")).toBe("sent");
     await rig.flush();
     expect(rig.mail[rig.mail.length - 1].subject).not.toBe("You already have a Lazy account");
+    const again: any = await rig.service.confirm("gone5@example.com", codeIn(rig.mail[rig.mail.length - 1]), PW, LOGIN);
+    expect(again.ok).toBe(true);
+  });
+
+  it("Q5 a sweep unbinds an address whose account is gone", async () => {
+    const rig = memoryService();
+    const r = await signUp(rig, "gone5b@example.com");
+    const s = (await rig.service.session(`Bearer ${r.token}`))!;
+    await rig.accounts.get(s.account)!.core.erase();
+    const addr = [...rig.addresses.values()][0];
+    await (addr.core as any).sweep();
+    expect(addr.store.value?.account).toBeUndefined();
+  });
+
+  it("Q5 a delete that stops after the address is let go can be run again", async () => {
+    const rig = memoryService();
+    const r = await signUp(rig, "gone5c@example.com");
+    const s = (await rig.service.session(`Bearer ${r.token}`))!;
+    const acct = rig.accounts.get(s.account)!.core as any;
+    const erase = acct.erase.bind(acct);
+    acct.erase = async () => { throw new Error("worker died"); };
+    await expect(rig.service.delete(s)).rejects.toThrow();
+    expect([...rig.addresses.values()][0].store.value?.account).toBeUndefined();
+    acct.erase = erase;
+    expect((await rig.service.delete(s)).ok).toBe(true);
+    expect(await rig.service.session(`Bearer ${r.token}`)).toBeUndefined();
   });
 
   it("Q6 four networks spend every try of the owner code", async () => {

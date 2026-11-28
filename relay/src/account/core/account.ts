@@ -141,6 +141,10 @@ export class AccountCore {
     return { account: s.id, session: found.id, app: found.app, device: found.device, fresh: now - found.created < FRESH_MS };
   }
 
+  exists(): boolean {
+    return this.s !== undefined;
+  }
+
   // Whether a session still stands, for open connections to ask now and then.
   alive(session: string): boolean {
     return Boolean(this.s?.sessions.some((x) => x.id === session));

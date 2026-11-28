@@ -50,7 +50,7 @@ export function memoryService(over: Options = {}) {
       mail.push(m);
     },
   };
-  const deps: Deps = { codeKey: () => ("codeKey" in over ? over.codeKey : "test-key"), mailer: () => sender, defer: (p) => void pending.push(p), stages: () => 1, now: () => clock.now };
+  const deps: Deps = { codeKey: () => ("codeKey" in over ? over.codeKey : "test-key"), mailer: () => sender, defer: (p) => void pending.push(p), stages: () => 1, accountExists: async (id) => accounts.get(id)?.store.value !== undefined, now: () => clock.now };
   const addresses = new Map<string, { core: AddressCore; store: MemoryStore<AddressState> }>();
   const accounts = new Map<string, { core: AccountCore; store: MemoryStore<AccountState> }>();
   const identities = new Map<string, { core: IdentityCore; store: MemoryStore<any> }>();

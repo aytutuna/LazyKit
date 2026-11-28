@@ -10,5 +10,6 @@ export const depsOf = (ctx: DurableObjectState, env: Cloudflare.Env): Deps => ({
   codeKey: () => env.ACCOUNT_KEY,
   mailer: () => services().mailer ?? resendMailer(env),
   defer: (task) => ctx.waitUntil(task),
+  accountExists: (id) => env.ACCOUNTS.get(env.ACCOUNTS.idFromName(id)).exists(),
   stages: () => stagesOf(env),
 });
