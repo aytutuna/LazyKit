@@ -206,7 +206,13 @@ export class AccountCore {
     return this.s.password ? this.checkPassword(password, now) : "ok";
   }
 
-  // A few requests a day for mail that goes to an address, counted when asked.
+  // Whether another request of this kind is allowed today; nothing is counted.
+  async canAsk(kind: string, now = this.clock()): Promise<boolean> {
+    const mine = (this.s?.asks?.[kind] ?? []).filter((t) => now - t < DAY);
+    return Boolean(this.s) && mine.length < ASKS_PER_DAY;
+  }
+
+  // A few requests a day for mail that goes to an address, counted when asked, after the mail went.
   async ask(kind: string, now = this.clock()): Promise<boolean> {
     const s = this.s;
     if (!s) return false;

@@ -10,10 +10,11 @@ import { MINUTE, bytes, hmac, randomId } from "./util";
 
 type Async<T> = { [K in keyof T]: T[K] extends (...a: infer A) => infer R ? (...a: A) => Promise<Awaited<R>> : never };
 
-// What the service calls on one address, account or identity; a Durable Object stub, a database
-// row or the object itself all fit.
-export type AddressPort = Async<Pick<AddressCore, "requestSignup" | "requestSignin" | "requestLink" | "requestEmail" | "requestOldCheck" | "notifyChange" | "takeCode" | "bindAccount" | "unbind" | "account" | "passwordTry" | "passwordGood">>;
-export type AccountPort = Async<Pick<AccountCore, "create" | "exists" | "addIdentity" | "open" | "verifyPassword" | "check" | "alive" | "sessions" | "revoke" | "setPassword" | "authorizeDelete" | "authorizeEmailChange" | "ask" | "mailAddress" | "setEmail" | "me" | "identityIds" | "export" | "erase">>;
+// What the service calls on one address, account or identity; a Durable Object stub or the object
+// itself fits. Each object has to take one call at a time, as a Durable Object does: the cores read,
+// wait and then write, so a store that runs calls side by side needs a lock around each object.
+export type AddressPort = Async<Pick<AddressCore, "requestSignup" | "requestSignin" | "requestLink" | "requestEmail" | "requestOldCheck" | "notifyChange" | "takeCode" | "dropCode" | "bindAccount" | "unbind" | "account" | "passwordTry" | "passwordGood">>;
+export type AccountPort = Async<Pick<AccountCore, "create" | "exists" | "addIdentity" | "open" | "verifyPassword" | "check" | "alive" | "sessions" | "revoke" | "setPassword" | "authorizeDelete" | "authorizeEmailChange" | "canAsk" | "ask" | "mailAddress" | "setEmail" | "me" | "identityIds" | "export" | "erase">>;
 export type IdentityPort = Async<Pick<IdentityCore, "account" | "bind" | "claim" | "release" | "use" | "erase">>;
 
 export type OncePort = Async<{ take(until: number): boolean }>;
@@ -273,11 +274,13 @@ export class AccountService {
   async passwordCode(s: Checked): Promise<Sent | "bad"> {
     const account = this.dir.account(s.account);
     if ((await account.me())?.password) return "bad";
-    if (!(await account.ask("password"))) return "limited";
+    if (!(await account.canAsk("password"))) return "limited";
     const email = await account.mailAddress();
     const a = email ? await this.address(email) : undefined;
     if (!a) return "bad";
     const r = await a.port.requestOldCheck(a.canonical, s.account, "setpw");
+    // The day's count is for mail that went; a refusal by the mail budget or the address's own window is not one.
+    if (r === "sent") await account.ask("password");
     return r === "none" ? "bad" : r;
   }
 
@@ -290,13 +293,17 @@ export class AccountService {
     const account = this.dir.account(s.account);
     const ok = await account.authorizeEmailChange(typeof password === "string" ? password : undefined);
     if (ok !== "ok") return ok;
-    if (!(await account.ask("email"))) return "limited";
+    if (!(await account.canAsk("email"))) return "limited";
     const old = await account.mailAddress();
     const previous = old ? await this.address(old) : undefined;
     if (!previous) return "bad";
-    const asked = await previous.port.requestOldCheck(previous.canonical, s.account);
+    // The same address in another spelling is no change.
+    if (previous.canonical === a.canonical) return "bad-email";
+    const asked = await previous.port.requestOldCheck(previous.canonical, s.account, "emailold", undefined, { typed: a.typed, canonical: a.canonical });
     if (asked !== "sent") return asked === "none" ? "bad" : asked;
-    return a.port.requestEmail(a.typed, a.canonical, s.account);
+    const sent = await a.port.requestEmail(a.typed, a.canonical, s.account);
+    if (sent === "sent") await account.ask("email");
+    return sent;
   }
 
   // The old address is told before the account moves, and the change waits until that mail has gone;
@@ -309,10 +316,15 @@ export class AccountService {
     const old = await account.mailAddress();
     const previous = old ? await this.address(old) : undefined;
     if (!previous) return "bad";
-    const proof = await previous.port.takeCode("emailold", oldCode, previous.canonical, caller);
-    if (!proof.ok || proof.extra !== s.account) return "bad";
-    const taken = await a.port.takeCode(`email:${s.account}`, code, a.canonical, caller);
+    // Both codes have to be right before either is spent, so a wrong one does not cost the other.
+    const proof = await previous.port.takeCode("emailold", oldCode, previous.canonical, caller, undefined, undefined, true);
+    if (!proof.ok) return "bad";
+    const wants = proof.extra as { account?: string; to?: string } | undefined;
+    if (wants?.account !== s.account || wants.to !== a.canonical) return "bad";
+    const taken = await a.port.takeCode(`email:${s.account}`, code, a.canonical, caller, undefined, undefined, true);
     if (!taken.ok || taken.extra !== s.account) return "bad";
+    await previous.port.dropCode("emailold");
+    await a.port.dropCode(`email:${s.account}`);
     if (!(await previous.port.notifyChange(old!, `The email of your Lazy account is being changed to ${taken.mailTo}. If that was not you, change your password now and sign the other sessions out.`))) return "mail-failed";
     // The old address is let go first, so a stop half way leaves an address unbound, never one bound to nothing.
     if (previous.canonical !== a.canonical) await previous.port.unbind(s.account);

@@ -174,6 +174,7 @@ export class AddressCore {
 
   // A provider vouched for this address, which already has an account: the owner has to say yes by code.
   async requestLink(canonical: string, identity: { id: string; provider: string; app: string; device: string }, now = this.clock()): Promise<Sent | "none"> {
+    await this.repair();
     if (!this.s.account || !this.s.mailTo) return "none";
     if (!this.ready()) return "not-configured";
     const slot = await this.reserveSend(now, true);
@@ -208,12 +209,14 @@ export class AddressCore {
   }
 
   // The current address of an account is asked as well before its email changes.
-  async requestOldCheck(canonical: string, account: string, purpose: "emailold" | "setpw" = "emailold", now = this.clock()): Promise<Sent | "none"> {
+  // A change of email names its new address, in the mail and in what the code is good for.
+  async requestOldCheck(canonical: string, account: string, purpose: "emailold" | "setpw" = "emailold", now = this.clock(), change?: { typed: string; canonical: string }): Promise<Sent | "none"> {
     if (this.s.account !== account || !this.s.mailTo) return "none";
     if (!this.ready()) return "not-configured";
     const slot = await this.reserveSend(now, true);
     if (slot !== "ok") return slot;
-    await this.issue(purpose, canonical, this.s.mailTo, now, account);
+    const text = change ? (digits: string) => `Your Lazy code is ${digits}. Changing the email of your Lazy account to ${change.typed} needs it, and it works for 10 minutes. If you did not ask for that, ignore this email and nothing changes.` : undefined;
+    await this.issue(purpose, canonical, this.s.mailTo, now, change ? { account, to: change.canonical } : account, text);
     await this.save();
     return "sent";
   }
@@ -234,7 +237,7 @@ export class AddressCore {
   // an address with no live code does the same hashing and the same two writes, so that is not a way to
   // tell which addresses have codes or accounts.
   // `only` names what the code was made for (the device that asked, say): a right code from anywhere else counts as a wrong try and stays unspent.
-  async takeCode(purpose: Purpose, code: unknown, canonical: string, caller: string, only?: Record<string, string>, now = this.clock()): Promise<Taken> {
+  async takeCode(purpose: Purpose, code: unknown, canonical: string, caller: string, only?: Record<string, string>, now = this.clock(), keep = false): Promise<Taken> {
     if (!this.deps.codeKey()) return { ok: false };
     if (this.codeCallers.full(caller, now, CODE_FAILS_CALLER) || windowFull(this.s.code, now, DAY, CODE_FAILS_TOTAL)) return { ok: false };
     const c = this.s.codes[purpose];
@@ -253,13 +256,21 @@ export class AddressCore {
     const same = equal(bytes(await this.hash(purpose, canonical, guess)), bytes(live ? c.hash : "-"));
     const fits = !only || Object.entries(only).every(([k, v]) => (c?.extra as Record<string, unknown> | undefined)?.[k] === v);
     const good = Boolean(live) && same && guess === code && fits;
-    if (good) delete this.s.codes[purpose];
-    else {
+    // `keep` checks the code without spending it, for a step that needs two codes to be right together.
+    if (good) {
+      if (!keep) delete this.s.codes[purpose];
+    } else {
       this.codeCallers.add(caller, now);
       windowAdd(this.s.code, now, DAY);
     }
     await this.save();
     return good ? { ok: true, account: this.s.account, mailTo: c!.mailTo, extra: c!.extra } : { ok: false };
+  }
+
+  // Spends a code that `takeCode` checked with `keep`.
+  async dropCode(purpose: Purpose): Promise<void> {
+    delete this.s.codes[purpose];
+    await this.save();
   }
 
   // True once, for the first account to claim the address.

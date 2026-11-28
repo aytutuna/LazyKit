@@ -677,6 +677,65 @@ describe("changing the email", () => {
     expect(oldCode).toMatch(/^[0-9]{6}$/);
   });
 
+  it("does not spend the old mailbox's code on a wrong code from the new one", async () => {
+    const a = await signUp();
+    const s = (await rig.service.session(header(a)))!;
+    const next = `grace${n}@example.com`;
+    const { oldCode, newCode } = await ask(s, email, next, PASSWORD);
+    expect(await rig.service.confirmEmail(s, next, "000000", "x", oldCode)).toBe("bad");
+    expect(await rig.service.confirmEmail(s, next, newCode, "x", oldCode)).toBe("ok");
+  });
+
+  it("makes the old mailbox's code good for one new address and names it in the mail", async () => {
+    const a = await signUp();
+    const s = (await rig.service.session(header(a)))!;
+    const first = `grace${n}@example.com`;
+    const second = `hopper${n}@example.com`;
+    const one = await ask(s, email, first, PASSWORD);
+    rig.clock.now += 11 * MIN;
+    const two = await ask(s, email, second, PASSWORD);
+    expect(lastTo(email).text).toContain(second);
+    expect(await rig.service.confirmEmail(s, first, one.newCode, "x", two.oldCode)).toBe("bad");
+    expect(await rig.service.confirmEmail(s, second, two.newCode, "x", two.oldCode)).toBe("ok");
+  });
+
+  it("refuses a change to another spelling of the same address", async () => {
+    const a = await signUp(`ada.l${n}@gmail.com`);
+    const s = (await rig.service.session(header(a)))!;
+    const before = rig.mail.length;
+    expect(await rig.service.changeEmail(s, `adal${n}+x@gmail.com`, PASSWORD)).toBe("bad-email");
+    await rig.flush();
+    expect(rig.mail).toHaveLength(before);
+  });
+
+  it("keeps at most five accounts waiting on one new address, the oldest giving way", async () => {
+    const free = `target${n}@example.com`;
+    const asked: { s: NonNullable<Awaited<ReturnType<typeof rig.service.session>>>; old: string; code: string }[] = [];
+    for (let i = 0; i < 6; i++) {
+      const own = `person${i}-${n}@example.com`;
+      const r = await signUp(own, PASSWORD);
+      const s = (await rig.service.session(header(r)))!;
+      expect(await rig.service.changeEmail(s, free, PASSWORD)).toBe("sent");
+      await rig.flush();
+      asked.push({ s, old: codeIn(lastTo(own)), code: codeIn(lastTo(free)) });
+    }
+    expect(await rig.service.confirmEmail(asked[0].s, free, asked[0].code, "x", asked[0].old)).toBe("bad");
+    expect(await rig.service.confirmEmail(asked[5].s, free, asked[5].code, "x", asked[5].old)).toBe("ok");
+  });
+
+  it("counts the day's asks only for mail that went", async () => {
+    const a = await signUp();
+    const s = (await rig.service.session(header(a)))!;
+    rig.budget.left = 0;
+    for (let i = 0; i < 4; i++) expect(await rig.service.changeEmail(s, `x${i}${n}@example.com`, PASSWORD)).toBe("busy");
+    rig.budget.left = Infinity;
+    for (let i = 0; i < 3; i++) {
+      expect(await rig.service.changeEmail(s, `y${i}${n}@example.com`, PASSWORD)).toBe("sent");
+      rig.clock.now += 11 * MIN;
+    }
+    expect(await rig.service.changeEmail(s, `y9${n}@example.com`, PASSWORD)).toBe("limited");
+  });
+
   it("is refused to a session that is not new, and asked for only three times a day", async () => {
     const a = await signUp();
     const s = (await rig.service.session(header(a)))!;
