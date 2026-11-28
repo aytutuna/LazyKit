@@ -36,7 +36,7 @@ androidComponents {
 dependencies {
     implementation("${libs.jna.get().module}:${libs.versions.jna.get()}@aar")
     implementation(libs.coroutines.android)
-    implementation("rustls:rustls-platform-verifier:$verifierVersion")
+    implementation("org.rustls:rustls-platform-verifier:$verifierVersion")
 
     androidTestImplementation(libs.androidx.test.runner)
     androidTestImplementation(libs.androidx.test.ext.junit)
