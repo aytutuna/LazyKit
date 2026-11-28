@@ -1,0 +1,19 @@
+#!/bin/bash
+# Builds lazy-link-ffi for Android, generates its Kotlin bindings and runs the SSLSocket transport tests on the
+# connected device or emulator against a development relay on the host (relay/scripts/dev-tls.sh 8788 0.0.0.0).
+# Needs cargo-ndk, the NDK (ANDROID_NDK_HOME) and a device.
+#   link-android.sh [relay url as the device sees it, default https://10.0.2.2:8788/relay/v1]
+set -euo pipefail
+
+root="$(cd "$(dirname "$0")/../../.." && pwd)"
+out="${LINK_OUT:-$root/.scratch/link-android}"
+rm -rf "$out"
+mkdir -p "$out"
+
+cd "$root/rust"
+cargo ndk -t arm64-v8a -t x86_64 -P 26 -o "$out/jniLibs" build --locked -p lazy-link-ffi
+cargo run --locked -q -p uniffi-bindgen -- generate --library "$out/jniLibs/arm64-v8a/liblazy_link_ffi.so" --language kotlin --out-dir "$out/kotlin" --no-format
+
+cd "$root/native/link-tests/android"
+./gradlew :linktests:connectedDebugAndroidTest -PlinkOut="$out" \
+  -Pandroid.testInstrumentationRunnerArguments.relayUrl="${1:-https://10.0.2.2:8788/relay/v1}" --console=plain
