@@ -894,3 +894,30 @@ fn an_object_listed_at_a_wrong_offset_does_not_clip_its_neighbour_once_the_parse
     let a = document.get(10).expect("object 10 reads");
     assert!(a.as_dict().is_some_and(|d| d.get("S").is_some()));
 }
+
+#[test]
+fn streams_that_inflate_twice_are_not_decoded_for_a_rewrite() {
+    let twice = deflate(&deflate(&vec![0u8; 100 << 20]));
+    let mut pdf = TestPdf::with_pages(1);
+    for n in 20..30 {
+        pdf.stream_with(n, "/Filter [/FlateDecode /FlateDecode]", &twice, None, true);
+    }
+    let started = Instant::now();
+    let file = TestPdf::replace(
+        &pdf.finish(),
+        "/Contents 4 0 R",
+        "/Contents [20 0 R 21 0 R 22 0 R 23 0 R 24 0 R 25 0 R 26 0 R 27 0 R 28 0 R 29 0 R]",
+    );
+    let mut document = open(file);
+    let saved = document.save_rewrite(&lazy_pdf_syntax::SaveOptions {
+        use_object_streams: false,
+        document_id: None,
+    });
+    must_finish_within(Duration::from_secs(2), started);
+    let found = saved
+        .bytes
+        .windows(twice.len())
+        .filter(|w| *w == twice.as_slice())
+        .count();
+    assert_eq!(found, 10);
+}

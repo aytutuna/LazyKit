@@ -13,6 +13,19 @@ use crate::xref::MAX_SECTIONS;
 /// The size qpdf and most writers pack to; an object stream is parsed whole to read one object.
 const OBJECTS_PER_STREAM: usize = 100;
 
+/// How many times its stored size a stream may decode to for a rewrite to try deflating it again.
+const MAX_REPACK_RATIO: usize = 32;
+
+/// Filters that can make data many times longer; a chain with two of them is a bomb or a mistake.
+const EXPANDING: [&[u8]; 6] = [
+    b"FlateDecode",
+    b"Fl",
+    b"LZWDecode",
+    b"LZW",
+    b"RunLengthDecode",
+    b"RL",
+];
+
 const REPACKABLE: [&[u8]; 10] = [
     b"FlateDecode",
     b"Fl",
@@ -437,10 +450,12 @@ impl Rewriter<'_> {
         if !self.can_repack(&stream.dict) {
             return raw;
         }
-        let Ok(plain) = self
-            .document
-            .stream_data_limited(stream, DEFAULT_MAX_SIZE, true)
-        else {
+        // What a few bytes inflate to is not worth the work: past this the stream is kept as it is.
+        let cap = raw
+            .len()
+            .saturating_mul(MAX_REPACK_RATIO)
+            .saturating_add(4096);
+        let Ok(plain) = self.document.stream_data_limited(stream, cap, true) else {
             return raw;
         };
         let deflated = self.document.filters.flate(&plain);
@@ -478,6 +493,14 @@ impl Rewriter<'_> {
             Some(_) => vec![Vec::new()],
         };
         if filters.len() == 1 && (filters[0] == b"FlateDecode" || filters[0] == b"Fl") {
+            return false;
+        }
+        if filters
+            .iter()
+            .filter(|f| EXPANDING.contains(&f.as_slice()))
+            .count()
+            > 1
+        {
             return false;
         }
         if !filters.iter().all(|f| REPACKABLE.contains(&f.as_slice())) {
