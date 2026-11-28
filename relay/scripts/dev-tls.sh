@@ -2,7 +2,7 @@
 # Starts the relay under wrangler dev with TLS in the background and waits until it answers. The certificate comes from
 # a certificate authority made here (relay/.dev-tls/ca.pem), which the test machine has to trust: the relay client
 # judges certificates through the system's trust store, so the scripts that run the native tests install it first
-# (certutil on Windows, security on macOS, the network security config of the test app on Android).
+# (certutil on Windows, security on macOS, the user certificate store on an Android emulator).
 #   dev-tls.sh [port] [bind address]
 set -euo pipefail
 

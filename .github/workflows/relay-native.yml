@@ -2,7 +2,7 @@ name: relay-native
 
 # The relay client, TLS in Rust included, called from C# on Windows, Swift on macOS and Kotlin on an Android emulator,
 # each against the relay under wrangler dev. Its certificate comes from a development authority that the machine trusts
-# (the Windows root store, the macOS keychain, the test app's network security config), because the client judges
+# (the Windows root store, the macOS keychain, the emulator's user certificates), because the client judges
 # certificates through the system. aws-lc-rs builds with the platform's C compiler alone: AWS_LC_SYS_CMAKE_BUILDER=0
 # keeps CMake out and AWS_LC_SYS_PREBUILT_NASM=1 keeps NASM out.
 on:

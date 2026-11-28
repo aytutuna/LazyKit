@@ -65,7 +65,7 @@ class InstallKey : AppAttester {
 @RunWith(AndroidJUnit4::class)
 class RelayTest {
     // The development relay under `wrangler dev --local-protocol https`, reached from the emulator at 10.0.2.2. Its
-    // certificate authority is trusted through this test app's network security config.
+    // certificate authority is in the device's user certificate store (scripts/link-android.sh).
     private val url = URI(InstrumentationRegistry.getArguments().getString("relayUrl") ?: error("relayUrl is not set"))
     private val base = url.toString().trimEnd('/')
 
