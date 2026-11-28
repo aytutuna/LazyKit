@@ -13,8 +13,8 @@ allow = [
     "ISC",
     "Zlib",
     "Unicode-3.0",
-    # webpki-roots, Mozilla's CA list, which the Android build checks the relay against; the platform verifier also
-    # reaches webpki-root-certs under it, on systems the apps do not ship for and in the wasm build, which has no TLS
+    # webpki-roots, Mozilla's CA list, which the Android build checks the relay against; webpki-root-certs, the same list for wasm32
+    # only (the platform verifier's fallback there), is never built into an app
     "CDLA-Permissive-2.0",
     # UniFFI (the Swift, Kotlin and C# bindings) is MPL-2.0: file-level, so unmodified use only needs its notice and source link
     "MPL-2.0",
