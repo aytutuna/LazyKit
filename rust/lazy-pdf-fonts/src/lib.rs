@@ -6,6 +6,7 @@ mod cff;
 mod cff_interp;
 mod cmap;
 mod content_parser;
+mod content_writer;
 mod data;
 mod embedded;
 mod encodings;
@@ -27,6 +28,7 @@ pub use content_parser::{
     ContentOperation, InlineImage, TooManyOperations, parse as parse_content,
     parse_limited as parse_content_limited,
 };
+pub use content_writer::ContentWriter;
 pub use embedded::{
     EmbedStatus, EmbeddedFont, FontDescriptorValues, WidthRun, build, build_glyphs,
 };
