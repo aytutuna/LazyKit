@@ -1,4 +1,5 @@
 import { env, exports } from "cloudflare:workers";
+import { runDurableObjectAlarm } from "cloudflare:test";
 import { afterEach, describe, expect, it } from "vitest";
 import { INSTALL_GROUPS_PER_WEEK, desktopMessage, verifyAttestation } from "../src/attest";
 import type { IntegrityPayload } from "../src/integrity";
@@ -107,6 +108,31 @@ describe("app check at the relay", () => {
     expect((await wantsRoom(g)).status).toBe(403);
     const fresh = newGroup();
     expect((await api(fresh, "attest", await desktop(fresh))).status).toBe(204);
+  });
+
+  it("keeps a verified group through the daily sweep", async () => {
+    const g = newGroup();
+    expect((await api(g, "attest", await desktop(g))).status).toBe(204);
+    const stub = env.GROUPS.get(env.GROUPS.idFromName(g));
+    await runDurableObjectAlarm(stub);
+    expect(await stub.isVerified()).toBe(true);
+    expect((await wantsRoom(g)).status).not.toBe(403);
+  });
+
+  it("forgets a verified group nobody has used for 90 days", async () => {
+    const stub = env.GROUPS.get(env.GROUPS.idFromName(newGroup()));
+    await stub.setVerified(Date.now() - 91 * 86_400_000);
+    expect(await stub.isVerified()).toBe(false);
+  });
+
+  it("counts only a group's first proof against the install", async () => {
+    const key = await newKey();
+    const g = newGroup();
+    for (let i = 0; i < INSTALL_GROUPS_PER_WEEK + 3; i++) {
+      expect((await api(g, "attest", await desktop(g, key))).status).toBe(204);
+    }
+    const other = newGroup();
+    expect((await api(other, "attest", await desktop(other, key))).status).toBe(204);
   });
 
   it("limits how many fresh installs one network starts in an hour", async () => {

@@ -40,8 +40,9 @@ const installId = async (publicKey: Uint8Array) =>
   Array.from(new Uint8Array(await crypto.subtle.digest("SHA-256", new Uint8Array([...new TextEncoder().encode("lazy relay install id v1\0"), ...publicKey]))), (b) => b.toString(16).padStart(2, "0")).join("");
 
 // Checks the proof that this request comes from the real app (or, on a computer, from an install
-// that holds a key). The challenge has been consumed by the caller.
-export async function verifyAttestation(env: Cloudflare.Env, group: string, challenge: string, a: Attestation): Promise<Outcome> {
+// that holds a key). The challenge has been consumed by the caller. `firstTime` is false when
+// the group is already verified, so that proving it again does not use up the install's weekly count.
+export async function verifyAttestation(env: Cloudflare.Env, group: string, challenge: string, a: Attestation, firstTime = true): Promise<Outcome> {
   try {
     // App Attest's client data is the challenge text itself, so every platform hands the same string over.
     const bytes = new TextEncoder().encode(challenge);
@@ -66,6 +67,8 @@ export async function verifyAttestation(env: Cloudflare.Env, group: string, chal
     const key = await crypto.subtle.importKey("raw", publicKey as Uint8Array<ArrayBuffer>, { name: "ECDSA", namedCurve: "P-256" }, false, ["verify"]);
     const signed = await crypto.subtle.verify({ name: "ECDSA", hash: "SHA-256" }, key, fromBase64(a.signature) as Uint8Array<ArrayBuffer>, desktopMessage(group, challenge) as Uint8Array<ArrayBuffer>);
     if (!signed) return "rejected";
+    // Only a group's first proof counts against the install; a reconnect of a verified group is free.
+    if (!firstTime) return "ok";
     const install = env.INSTALLS.get(env.INSTALLS.idFromName(await installId(publicKey)));
     return (await install.claim(INSTALL_GROUPS_PER_WEEK)) ? "ok" : "limit";
   } catch (e) {

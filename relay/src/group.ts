@@ -11,6 +11,7 @@ const CHALLENGE_BYTES = 32;
 const KEEP_WEEKS = 8;
 const WAKE_GAP_MS = 10_000;
 const DEVICE_KEEP_MS = 90 * 86_400_000;
+const VERIFIED_KEEP_MS = 90 * 86_400_000;
 const SEEN_REFRESH_MS = 86_400_000;
 const SWEEP_MS = 86_400_000;
 const CHALLENGE_MS = 5 * 60_000;
@@ -40,15 +41,15 @@ export class Group extends DurableObject<Cloudflare.Env> {
   private paidUntil = 0;
   private devices: Record<string, Device> = {};
   private woken = new Map<string, number>();
-  private verified = false;
+  private verifiedAt = 0;
   // Kept in memory only: a group nobody has verified writes nothing, and a lost challenge costs one retry.
   private challenges = new Map<string, number>();
 
   constructor(ctx: DurableObjectState, env: Cloudflare.Env) {
     super(ctx, env);
     ctx.blockConcurrencyWhile(async () => {
-      const kept = await ctx.storage.get(["usage", "paidUntil", "devices", "verified"]);
-      this.verified = kept.get("verified") === true;
+      const kept = await ctx.storage.get(["usage", "paidUntil", "devices", "verifiedAt"]);
+      this.verifiedAt = (kept.get("verifiedAt") as number | undefined) ?? 0;
       this.usage = (kept.get("usage") as Record<string, number> | undefined) ?? {};
       this.paidUntil = (kept.get("paidUntil") as number | undefined) ?? 0;
       this.devices = (kept.get("devices") as Record<string, Device> | undefined) ?? {};
@@ -100,17 +101,28 @@ export class Group extends DurableObject<Cloudflare.Env> {
     const now = Date.now();
     if (this.pruneUsage(now)) await this.ctx.storage.put("usage", this.usage);
     await this.pruneDevices(now);
-    if (Object.keys(this.devices).length === 0 && Object.keys(this.usage).length === 0 && this.paidUntil <= now) {
+    if (Object.keys(this.devices).length === 0 && Object.keys(this.usage).length === 0 && this.paidUntil <= now && !this.isFresh(now)) {
       await this.ctx.storage.deleteAll();
       this.paidUntil = 0;
-      this.verified = false;
+      this.verifiedAt = 0;
       return;
     }
     await this.ctx.storage.setAlarm(now + SWEEP_MS);
   }
 
-  isVerified(): boolean {
-    return this.verified;
+  private isFresh(now: number): boolean {
+    return now - this.verifiedAt < VERIFIED_KEEP_MS;
+  }
+
+  // A group that keeps asking stays verified: a computer that moves no bytes and has no push
+  // token would otherwise be forgotten by the sweep and have to prove itself again.
+  async isVerified(now = Date.now()): Promise<boolean> {
+    if (!this.isFresh(now)) return false;
+    if (now - this.verifiedAt >= SEEN_REFRESH_MS) {
+      this.verifiedAt = now;
+      await this.ctx.storage.put("verifiedAt", now);
+    }
+    return true;
   }
 
   // A one-time string the app has to bind its proof to; a few may be outstanding at once, for
@@ -130,10 +142,9 @@ export class Group extends DurableObject<Cloudflare.Env> {
     return until !== undefined && until > now;
   }
 
-  async setVerified(): Promise<void> {
-    if (this.verified) return;
-    this.verified = true;
-    await this.ctx.storage.put("verified", true);
+  async setVerified(now = Date.now()): Promise<void> {
+    this.verifiedAt = now;
+    await this.ctx.storage.put("verifiedAt", now);
     await this.sweepSoon();
   }
 

@@ -78,7 +78,7 @@ async function groupApi(req: Request, env: Cloudflare.Env, group: string, what?:
     if (!a || typeof body.challenge !== "string") return text("bad attestation", 400);
     if (a.platform === "desktop" && ip && !installs.allow(ip)) return new Response("slow down", { status: 503, headers: { "Retry-After": "3600" } });
     if (!(await stub.takeChallenge(body.challenge))) return text("no such challenge", 400);
-    const outcome = await verifyAttestation(env, group, body.challenge, a);
+    const outcome = await verifyAttestation(env, group, body.challenge, a, !(await stub.isVerified()));
     if (outcome === "not-configured") return text("not configured", 501);
     if (outcome === "rejected") return text("attestation rejected", 422);
     if (outcome === "limit") return text("too many new groups for this install", 429);
