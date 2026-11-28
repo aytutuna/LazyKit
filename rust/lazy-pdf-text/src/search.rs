@@ -1,13 +1,17 @@
 //! Finding a query on a page.
 //!
-//! Regular expressions run on the `regex` crate, which takes time linear in the text and has no lookaround or
-//! backreferences; the reference engines run ICU's and .NET's, which can take exponential time and are stopped by a
-//! two second limit. A pattern those engines accept that this one does not (a lookaround, a backreference) is a bad
-//! pattern here, and a pattern longer than `MAX_PATTERN` characters or compiling to more than `REGEX_SIZE` bytes is
-//! refused. The whole word option, which the reference wraps in lookarounds, is run as a match that takes one
-//! neighbour on each side and is searched again from the last character of each hit.
+//! Regular expressions run on the `regex` crate, which has no lookaround or backreferences: a pattern the reference
+//! engines (ICU's and .NET's) accept and this one does not is a bad pattern here, and so is a pattern longer than
+//! `MAX_PATTERN` characters or compiling to more than `REGEX_SIZE` bytes. It matches in linear time per match, but a
+//! pattern that makes every match scan far ahead can still add up over a long page, so as in the reference a search
+//! stops after two seconds on a page (checked between matches) and the page is reported; it also stops when asked to.
+//! The whole word option, which the reference wraps in lookarounds, is run as a match that takes one neighbour on each
+//! side and is searched again from the last character of each hit. In WebAssembly there is no clock, so no time limit.
 
 use std::fmt;
+use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::time::Duration;
 
 use regex::{Regex, RegexBuilder};
 
@@ -66,6 +70,61 @@ impl fmt::Display for BadPattern {
 }
 
 impl std::error::Error for BadPattern {}
+
+/// What a search may spend: time on one page, and a flag another thread can set to stop it.
+#[derive(Debug, Clone)]
+pub struct SearchLimits {
+    pub time: Duration,
+    pub cancel: Option<Arc<AtomicBool>>,
+}
+
+impl Default for SearchLimits {
+    fn default() -> Self {
+        SearchLimits {
+            time: Duration::from_secs(2),
+            cancel: None,
+        }
+    }
+}
+
+/// The hits of one page and whether the search was cut short: `timed_out` by the time limit, `cancelled` by the flag.
+#[derive(Debug, Clone, Default)]
+pub struct SearchOutcome {
+    pub matches: Vec<SearchMatch>,
+    pub timed_out: bool,
+    pub cancelled: bool,
+}
+
+struct Watch<'a> {
+    #[cfg(not(target_arch = "wasm32"))]
+    deadline: std::time::Instant,
+    cancel: Option<&'a AtomicBool>,
+    timed_out: bool,
+    cancelled: bool,
+}
+
+impl<'a> Watch<'a> {
+    fn new(limits: &'a SearchLimits) -> Self {
+        Watch {
+            #[cfg(not(target_arch = "wasm32"))]
+            deadline: std::time::Instant::now() + limits.time,
+            cancel: limits.cancel.as_deref(),
+            timed_out: false,
+            cancelled: false,
+        }
+    }
+
+    fn stop(&mut self) -> bool {
+        if self.cancel.is_some_and(|c| c.load(Ordering::Relaxed)) {
+            self.cancelled = true;
+        }
+        #[cfg(not(target_arch = "wasm32"))]
+        if std::time::Instant::now() > self.deadline {
+            self.timed_out = true;
+        }
+        self.cancelled || self.timed_out
+    }
+}
 
 struct Hit {
     range: TextRange,
@@ -166,12 +225,31 @@ impl TextSearch {
     }
 
     pub fn matches(&self, page: &TextPage, all: bool) -> Vec<SearchMatch> {
+        self.matches_limited(page, all, &SearchLimits::default())
+            .matches
+    }
+
+    /// As `matches`, with the limits and the account of whether they were reached.
+    pub fn matches_limited(
+        &self,
+        page: &TextPage,
+        all: bool,
+        limits: &SearchLimits,
+    ) -> SearchOutcome {
+        let mut watch = Watch::new(limits);
+        if watch.stop() {
+            return SearchOutcome {
+                matches: Vec::new(),
+                timed_out: watch.timed_out,
+                cancelled: watch.cancelled,
+            };
+        }
         let mut found: Vec<Hit> = Vec::new();
         let mut texts = vec![SearchText::build(page, &self.options, false)];
-        self.collect(&texts[0], 0, &mut found);
+        self.collect(&texts[0], 0, &mut found, &mut watch);
         if texts[0].has_hyphen_break {
             texts.push(SearchText::build(page, &self.options, true));
-            self.collect(&texts[1], 1, &mut found);
+            self.collect(&texts[1], 1, &mut found, &mut watch);
         }
         found.sort_by(|a, b| {
             a.range
@@ -232,10 +310,14 @@ impl TextSearch {
                 },
             });
         }
-        result
+        SearchOutcome {
+            matches: result,
+            timed_out: watch.timed_out,
+            cancelled: watch.cancelled,
+        }
     }
 
-    fn collect(&self, text: &SearchText, order: usize, found: &mut Vec<Hit>) {
+    fn collect(&self, text: &SearchText, order: usize, found: &mut Vec<Hit>, watch: &mut Watch) {
         if text.text.is_empty() {
             return;
         }
@@ -263,12 +345,21 @@ impl TextSearch {
         };
         let (haystack, units) = to_haystack(&text.text);
         let spans = if self.options.whole_word {
-            whole_word_hits(regex, self.retry.as_ref().unwrap_or(regex), &haystack)
+            whole_word_hits(
+                regex,
+                self.retry.as_ref().unwrap_or(regex),
+                &haystack,
+                watch,
+            )
         } else {
-            regex
-                .find_iter(&haystack)
-                .map(|m| (m.start(), m.end()))
-                .collect()
+            let mut spans = Vec::new();
+            for m in regex.find_iter(&haystack) {
+                spans.push((m.start(), m.end()));
+                if watch.stop() {
+                    break;
+                }
+            }
+            spans
         };
         for (start, end) in spans {
             let (from, to) = (units[start] as usize, units[end] as usize);
@@ -332,11 +423,16 @@ fn char_len_before(text: &str, at: usize) -> usize {
 // character of the previous hit, which can be the neighbour of the next one. The start-of-text alternative comes first,
 // so a hit at the start is found without a neighbour; when it finds the previous hit again, the search is repeated from
 // the same place with `retry`, which has to use the neighbour.
-fn whole_word_hits(regex: &Regex, retry: &Regex, haystack: &str) -> Vec<(usize, usize)> {
+fn whole_word_hits(
+    regex: &Regex,
+    retry: &Regex,
+    haystack: &str,
+    watch: &mut Watch,
+) -> Vec<(usize, usize)> {
     let mut hits = Vec::new();
     let mut at = 0;
     let mut min_start = 0;
-    while at <= haystack.len() {
+    while at <= haystack.len() && !watch.stop() {
         let mut found = regex
             .captures_at(haystack, at)
             .and_then(|c| c.name("hit").map(|g| (g.start(), g.end())));

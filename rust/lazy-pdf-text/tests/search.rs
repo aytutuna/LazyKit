@@ -28,7 +28,10 @@ fn page(lines: &[&str]) -> TextPage {
                 .replace('\\', "\\\\")
                 .replace('(', "\\(")
                 .replace(')', "\\)");
-            format!("BT /F1 10 Tf 100 {} Td ({text}) Tj ET\n", 700 - 12 * i)
+            format!(
+                "BT /F1 10 Tf 100 {} Td ({text}) Tj ET\n",
+                700 - 12 * i as i64
+            )
         })
         .collect();
     pdf.stream(4, "", content.as_bytes());
@@ -68,4 +71,35 @@ fn a_whole_word_hit_may_start_the_text() {
 fn whole_word_hits_do_not_touch_letters() {
     assert_eq!(whole(r"\d+", &["a12 34 5b 6"]), ["34", "6"]);
     assert_eq!(whole(r"ab|abc", &["abcd abc"]), ["abc"]);
+}
+
+#[test]
+fn a_search_stops_at_its_limits() {
+    use lazy_pdf_text::SearchLimits;
+    use std::sync::Arc;
+    use std::sync::atomic::AtomicBool;
+    use std::time::Duration;
+
+    let line = "a".repeat(100);
+    let lines: Vec<&str> = vec![line.as_str(); 60];
+    let page = page(&lines);
+    let options = TextSearchOptions {
+        regex: true,
+        ..TextSearchOptions::default()
+    };
+    let search = TextSearch::new("a(?:.*b)?", &options).unwrap().unwrap();
+    let all = search.matches_limited(&page, false, &SearchLimits::default());
+    assert!(!all.timed_out && !all.cancelled);
+    assert!(!all.matches.is_empty());
+    let quick = SearchLimits {
+        time: Duration::ZERO,
+        cancel: None,
+    };
+    let out = search.matches_limited(&page, false, &quick);
+    assert!(out.timed_out && out.matches.is_empty());
+    let cancel = SearchLimits {
+        cancel: Some(Arc::new(AtomicBool::new(true))),
+        ..SearchLimits::default()
+    };
+    assert!(search.matches_limited(&page, false, &cancel).cancelled);
 }

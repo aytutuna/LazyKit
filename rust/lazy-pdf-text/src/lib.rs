@@ -33,7 +33,10 @@ pub use model::{
 };
 pub use page::TextPage;
 pub use quad::{QuadBox, TextQuad};
-pub use search::{BadPattern, HitCut, MAX_PATTERN, SearchMatch, TextSearch, TextSearchOptions};
+pub use search::{
+    BadPattern, HitCut, MAX_PATTERN, SearchLimits, SearchMatch, SearchOutcome, TextSearch,
+    TextSearchOptions,
+};
 pub use search_text::{collapse, fold, strip_marks};
 pub use selection::TextSelection;
 pub use text_string::decode as decode_text_string;
