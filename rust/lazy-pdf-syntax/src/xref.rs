@@ -169,6 +169,7 @@ impl Document {
     fn merge(&mut self, section: Section) {
         for (number, entry) in section {
             self.entries.entry(number).or_insert(entry);
+            *self.object_starts.borrow_mut() = None;
         }
     }
 

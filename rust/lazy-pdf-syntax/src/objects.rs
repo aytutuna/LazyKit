@@ -271,6 +271,7 @@ impl Document {
                     ..entry
                 },
             );
+            *self.object_starts.borrow_mut() = None;
             return (Some(value), generation);
         }
         self.add_repair(format!("Object {number} could not be read."));
@@ -314,7 +315,7 @@ impl Document {
     /// Where the first object listed after `offset` starts; the end of the data when none does.
     fn next_object_start(&self, offset: u64) -> u64 {
         let mut cache = self.object_starts.borrow_mut();
-        if cache.0 != self.entries.len() {
+        let starts = cache.get_or_insert_with(|| {
             let mut starts: Vec<u64> = self
                 .entries
                 .values()
@@ -328,10 +329,10 @@ impl Document {
                 .collect();
             starts.sort_unstable();
             starts.dedup();
-            *cache = (self.entries.len(), starts);
-        }
-        let next = cache.1.partition_point(|s| *s <= offset);
-        cache.1.get(next).copied().unwrap_or(u64::MAX)
+            starts
+        });
+        let next = starts.partition_point(|s| *s <= offset);
+        starts.get(next).copied().unwrap_or(u64::MAX)
     }
 
     fn parse_budget_spent(&self) -> bool {

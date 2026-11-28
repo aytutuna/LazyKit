@@ -866,3 +866,31 @@ fn contents_cut_short_by_the_size_limit_are_noted() {
         document.repairs()
     );
 }
+
+#[test]
+fn an_object_listed_at_a_wrong_offset_does_not_clip_its_neighbour_once_the_parse_budget_is_spent() {
+    let mut pdf = TestPdf::new();
+    pdf.obj(1, "<</Type /Catalog /Pages 2 0 R>>")
+        .obj(2, "<</Type /Pages /Kids [3 0 R] /Count 1>>")
+        .obj(3, "<</Type /Page /Parent 2 0 R>>");
+    let a_at = pdf.position();
+    pdf.obj(10, &format!("<</S ({})>>", "a".repeat(300)));
+    let b_at = pdf.position();
+    pdf.obj(11, "<</B 1>>");
+    for n in 100..3100 {
+        pdf.open_obj(n, "(");
+    }
+    let file = pdf.finish();
+    let file = TestPdf::replace(
+        &file,
+        &format!("{b_at:010} 00000 n"),
+        &format!("{:010} 00000 n", a_at + 30),
+    );
+    let mut document = open(file);
+    for n in 100..3100 {
+        document.get(n);
+    }
+    assert!(document.get(11).is_some());
+    let a = document.get(10).expect("object 10 reads");
+    assert!(a.as_dict().is_some_and(|d| d.get("S").is_some()));
+}

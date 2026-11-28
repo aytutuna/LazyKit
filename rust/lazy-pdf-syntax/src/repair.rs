@@ -30,6 +30,7 @@ impl Document {
     pub(crate) fn ensure_scan(&mut self) -> Arc<Scan> {
         if self.scan.is_none() {
             self.scan = Some(Arc::new(self.run_scan()));
+            *self.object_starts.borrow_mut() = None;
         }
         self.scan.clone().unwrap()
     }
@@ -180,6 +181,7 @@ impl Document {
         self.start_xref = 0;
         self.xref_is_stream = false;
         self.entries.clear();
+        *self.object_starts.borrow_mut() = None;
         self.objects.clear();
         self.object_streams.clear();
         self.bad_object_streams.clear();

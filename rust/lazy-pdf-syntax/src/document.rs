@@ -142,8 +142,8 @@ pub struct Document {
     pub(crate) length_repaired: HashSet<usize>,
     /// Bytes read by object parses, over the document's life.
     pub(crate) parsed_bytes: Cell<usize>,
-    /// The offsets of the listed objects, ascending, and how many entries there were when it was made.
-    pub(crate) object_starts: std::cell::RefCell<(usize, Vec<u64>)>,
+    /// The offsets of the listed objects, ascending; made on use and dropped when an entry or the scan changes.
+    pub(crate) object_starts: std::cell::RefCell<Option<Vec<u64>>>,
 
     pub(crate) pages: Option<Arc<Vec<Page>>>,
     pub(crate) pages_walked: bool,
