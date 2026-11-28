@@ -25,7 +25,8 @@ adb push "$ca" "/data/local/tmp/$name"
 adb shell "mkdir -p /data/misc/user/0/cacerts-added && cp /data/local/tmp/$name /data/misc/user/0/cacerts-added/$name && chmod 644 /data/misc/user/0/cacerts-added/$name && chown system:system /data/misc/user/0/cacerts-added/$name && restorecon /data/misc/user/0/cacerts-added/$name"
 status=0
 ./gradlew :linktests:connectedDebugAndroidTest -PlinkOut="$out" \
-  -Pandroid.testInstrumentationRunnerArguments.relayUrl="${1:-https://10.0.2.2:8788/relay/v1}" --console=plain || status=$?
+  -Pandroid.testInstrumentationRunnerArguments.relayUrl="${1:-https://10.0.2.2:8788/relay/v1}" \
+  -Pandroid.testInstrumentationRunnerArguments.mailSink="${MAIL_SINK:-http://10.0.2.2:8790}" --console=plain || status=$?
 # Gradle only says that tests failed; the reasons are in the result files.
 if [ "$status" != 0 ]; then
   find linktests/build/outputs/androidTest-results -name '*.xml' -exec grep -h -A12 '<failure' {} + || true

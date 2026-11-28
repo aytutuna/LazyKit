@@ -1,66 +1,99 @@
 using System.Security.Cryptography;
-using System.Text;
 using uniffi.lazy_link_ffi;
 
 namespace LazyLink.RelayTests;
 
-// The desktop proof the relay asks of a computer: a key this install made, signing the group and the challenge.
-internal sealed class InstallKey : AppAttester
-{
-    private readonly ECDsa key = ECDsa.Create(ECCurve.NamedCurves.nistP256);
-    public int Calls;
-
-    public Task<AppProof> Attest(string group, string challenge)
-    {
-        Interlocked.Increment(ref Calls);
-        var message = Encoding.UTF8.GetBytes($"lazy relay install v1\0{group}\0{challenge}");
-        var point = key.ExportParameters(false).Q;
-        byte[] publicKey = [4, .. point.X!, .. point.Y!];
-        return Task.FromResult<AppProof>(new AppProof.Desktop(publicKey, key.SignData(message, HashAlgorithmName.SHA256)));
-    }
-}
-
 public class RelayTests
 {
     // The development relay under `wrangler dev --local-protocol https`, whose certificate authority is in the Windows
-    // root store; the script that runs the tests expects both.
-    private static readonly Uri Url = new(Environment.GetEnvironmentVariable("RELAY_URL") ?? throw new InvalidOperationException("RELAY_URL is not set"));
-    private static string Base => Url.ToString().TrimEnd('/');
+    // root store, and its mail sink; the script that runs the tests expects both.
+    private static readonly string Base = (Environment.GetEnvironmentVariable("RELAY_URL") ?? throw new InvalidOperationException("RELAY_URL is not set")).TrimEnd('/');
+    private static readonly string AccountBase = Base.Replace("/relay/", "/account/");
+    private static readonly string Sink = Environment.GetEnvironmentVariable("MAIL_SINK") ?? "http://127.0.0.1:8790";
+    private const string Password = "correct horse battery";
+
     private static string NewId() => Convert.ToHexString(RandomNumberGenerator.GetBytes(16)).ToLowerInvariant();
     private static string NewRoom() => Convert.ToHexString(RandomNumberGenerator.GetBytes(32)).ToLowerInvariant();
-    private static Relay NewRelay(string? group = null, AppAttester? attester = null) =>
-        new(Base, group ?? NewId(), NewId(), attester);
+    private static Login Who(string device) => new("lazysend", device, null);
+
+    // The newest code the service mailed to an address, read from the dev sink.
+    private static async Task<string> CodeFor(string email)
+    {
+        using var http = new HttpClient();
+        for (int i = 0; i < 50; i++)
+        {
+            var res = await http.GetAsync($"{Sink}/code?to={Uri.EscapeDataString(email)}");
+            if (res.IsSuccessStatusCode) return (await res.Content.ReadAsStringAsync()).Trim();
+            await Task.Delay(100);
+        }
+        throw new TimeoutException($"no mail came for {email}");
+    }
+
+    private sealed record Person(string Email, string Device, Session Session)
+    {
+        public Relay RelayFor(string group, string? device = null, Session? session = null, AppAttester? attester = null) =>
+            new(Base, group, device ?? Device, (session ?? Session).Token, attester);
+    }
+
+    // A new account, signed up through the service with the code from the dev sink.
+    private static async Task<Person> SignUp()
+    {
+        string email = $"{NewId()[..12]}@example.com";
+        string device = NewId();
+        var account = new Account(AccountBase, null);
+        await account.Signup(email, new Bot.Turnstile("dev"));
+        var session = await account.ConfirmSignup(email, await CodeFor(email), Password, Who(device));
+        return new Person(email, device, session);
+    }
+
+    private static async Task<Session> SignIn(string email, string device) =>
+        await new Account(AccountBase, null).SigninPassword(email, Password, Who(device));
 
     [Fact]
-    public async Task GroupCallsRunOverRustTls()
+    public async Task ASignedInAccountClaimsAGroupAndSeesItsAllowance()
     {
-        var status = await NewRelay().Status();
-        Assert.Equal(0UL, status.Used);
-        Assert.Equal(5_000_000_000UL, status.Cap);
-        Assert.False(status.Capped);
+        var person = await SignUp();
+        var relay = person.RelayFor(NewId());
+        var claimed = await relay.Claim(GroupPlatform.Desktop);
+        Assert.Equal(36, claimed.AccountToken.Length);
+        var status = await relay.Status();
+        Assert.Equal(0UL, status.used);
+        Assert.Equal(5_000_000_000UL, status.cap);
+        Assert.False(status.capped);
+        Assert.Contains("\"email\":\"" + person.Email + "\"", person.Session.AccountJson);
     }
 
     [Fact]
-    public async Task ANewGroupNeedsItsProofAndNothingFlowsWithout()
+    public async Task WrongPasswordsAndMissingSessionsAreRefusedByName()
     {
-        await Assert.ThrowsAsync<RelayFailure.AttestationRequired>(() => NewRelay().Connect(NewRoom()));
-        await Assert.ThrowsAsync<RelayFailure.AttestationRequired>(() => NewRelay().RegisterPush(PushPlatform.Fcm, "token"));
+        var person = await SignUp();
+        await Assert.ThrowsAsync<AccountFailure.WrongCredentials>(() =>
+            new Account(AccountBase, null).SigninPassword(person.Email, "not the password", Who(NewId())));
+        string group = NewId();
+        await Assert.ThrowsAsync<RelayFailure.SignIn>(() => new Relay(Base, group, person.Device, "", null).Status());
+    }
+
+    [Fact]
+    public async Task APhoneGroupNeedsItsProofAndNothingFlowsWithout()
+    {
+        var relay = (await SignUp()).RelayFor(NewId());
+        await relay.Claim(GroupPlatform.Apple);
+        await Assert.ThrowsAsync<RelayFailure.AttestationRequired>(() => relay.Connect(NewRoom()));
+        await Assert.ThrowsAsync<RelayFailure.AttestationRequired>(() => relay.RegisterPush(PushPlatform.Fcm, "token"));
     }
 
     [Fact]
     public async Task TwoDevicesTalkThroughTheRelay()
     {
+        var person = await SignUp();
         string group = NewId();
         string room = NewRoom();
-        var hostKey = new InstallKey();
-        var host = await NewRelay(group, hostKey).Host(room);
-        Assert.Equal(1, hostKey.Calls);
+        await person.RelayFor(group).Claim(GroupPlatform.Desktop);
+        var host = await person.RelayFor(group).Host(room);
 
-        var guestKey = new InstallKey();
-        var guestSide = await NewRelay(group, guestKey).Connect(room);
+        string laptop = NewId();
+        var guestSide = await person.RelayFor(group, laptop, await SignIn(person.Email, laptop)).Connect(room);
         var hostSide = await host.Accept();
-        // The group is verified already, so the second device is not asked again.
-        Assert.Equal(0, guestKey.Calls);
 
         byte[] up = RandomNumberGenerator.GetBytes(300_000);
         byte[] down = RandomNumberGenerator.GetBytes(200_000);
@@ -91,11 +124,14 @@ public class RelayTests
     }
 
     [Fact]
-    public async Task AnotherGroupCannotUseTheRoom()
+    public async Task AnotherAccountCannotUseTheGroup()
     {
-        string room = NewRoom();
-        var host = await NewRelay(NewId(), new InstallKey()).Host(room);
-        await Assert.ThrowsAsync<RelayFailure.WrongGroup>(() => NewRelay(NewId(), new InstallKey()).Connect(room));
-        GC.KeepAlive(host);
+        var mine = await SignUp();
+        string group = NewId();
+        await mine.RelayFor(group).Claim(GroupPlatform.Desktop);
+        var other = await SignUp();
+        await Assert.ThrowsAsync<RelayFailure.WrongAccount>(() => other.RelayFor(group).Status());
+        // A session made for another device does not speak for this one.
+        await Assert.ThrowsAsync<RelayFailure.WrongDevice>(() => mine.RelayFor(group, NewId()).Host(NewRoom()));
     }
 }

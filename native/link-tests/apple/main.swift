@@ -1,8 +1,8 @@
-import CryptoKit
 import Foundation
 
-// Runs the relay client, TLS and all, from Swift against a development relay whose certificate authority is in the system
-// keychain; scripts/link-swift.sh builds the bindings and passes RELAY_URL.
+// Runs the account and relay clients, TLS and all, from Swift against a development relay whose certificate authority is
+// in the system keychain, with its mail sink for the codes; scripts/link-swift.sh builds the bindings and passes
+// RELAY_URL and MAIL_SINK.
 
 var failures: [String] = []
 
@@ -10,70 +10,116 @@ func check(_ condition: Bool, _ message: @autoclosure () -> String) {
     if !condition { failures.append(message()) }
 }
 
-// The desktop proof the relay asks of a computer: a key this install made, signing the group and the challenge.
-final class InstallKey: AppAttester, @unchecked Sendable {
-    private let key = P256.Signing.PrivateKey()
-    private let lock = NSLock()
-    private var count = 0
-    var calls: Int { lock.withLock { count } }
-
-    func attest(group: String, challenge: String) async throws -> AppProof {
-        lock.withLock { count += 1 }
-        var message = Data("lazy relay install v1".utf8)
-        message.append(0)
-        message.append(Data(group.utf8))
-        message.append(0)
-        message.append(Data(challenge.utf8))
-        let signature = try key.signature(for: message)
-        return .desktop(publicKey: key.publicKey.x963Representation, signature: signature.rawRepresentation)
-    }
-}
-
-let base = ProcessInfo.processInfo.environment["RELAY_URL"]!
+let env = ProcessInfo.processInfo.environment
+let base = env["RELAY_URL"]!
+let accountBase = base.replacingOccurrences(of: "/relay/", with: "/account/")
+let sink = env["MAIL_SINK"] ?? "http://127.0.0.1:8790"
+let password = "correct horse battery"
 
 func newId() -> String { (0..<16).map { _ in String(format: "%02x", UInt8.random(in: 0...255)) }.joined() }
 func newRoom() -> String { newId() + newId() }
-func relay(group: String? = nil, attester: AppAttester? = nil) throws -> Relay {
-    try Relay(base: base, group: group ?? newId(), device: newId(), attester: attester)
+func who(_ device: String) -> Login { Login(app: "lazysend", device: device, label: nil) }
+
+// The newest code the service mailed to an address, read from the dev sink.
+func codeFor(_ email: String) async throws -> String {
+    var allowed = CharacterSet.urlQueryAllowed
+    allowed.remove(charactersIn: "+&=")
+    let url = URL(string: "\(sink)/code?to=\(email.addingPercentEncoding(withAllowedCharacters: allowed)!)")!
+    for _ in 0..<50 {
+        let (data, response) = try await URLSession.shared.data(from: url)
+        if (response as? HTTPURLResponse)?.statusCode == 200 {
+            return String(decoding: data, as: UTF8.self).trimmingCharacters(in: .whitespacesAndNewlines)
+        }
+        try await Task.sleep(nanoseconds: 100_000_000)
+    }
+    throw LinkError.Unexpected(reason: "no mail came for \(email)")
 }
 
-func groupCalls() async {
+struct Person {
+    let email: String
+    let device: String
+    let session: Session
+
+    func relay(_ group: String, device: String? = nil, session: Session? = nil, attester: AppAttester? = nil) throws -> Relay {
+        try Relay(base: base, group: group, device: device ?? self.device, session: (session ?? self.session).token, attester: attester)
+    }
+}
+
+// A new account, signed up through the service with the code from the dev sink.
+func signUp() async throws -> Person {
+    let email = "\(newId().prefix(12))@example.com"
+    let device = newId()
+    let account = try Account(base: accountBase, session: nil)
+    try await account.signup(email: email, botCheck: .turnstile(token: "dev"))
+    let session = try await account.confirmSignup(email: email, code: try await codeFor(email), password: password, who: who(device))
+    return Person(email: email, device: device, session: session)
+}
+
+func signIn(_ email: String, _ device: String) async throws -> Session {
+    try await Account(base: accountBase, session: nil).signinPassword(email: email, password: password, who: who(device))
+}
+
+func claimAndStatus() async {
     do {
-        let s = try await relay().status()
+        let person = try await signUp()
+        let relay = try person.relay(newId())
+        let claimed = try await relay.claim(platform: .desktop)
+        check(claimed.accountToken.count == 36, "the account token comes with the claim")
+        let s = try await relay.status()
         check(s.used == 0 && s.cap == 5_000_000_000 && !s.capped, "a fresh group is empty and under the cap")
+        check(person.session.accountJson.contains("\"email\":\"\(person.email)\""), "the session carries the account")
     } catch {
-        check(false, "status: \(error)")
+        check(false, "claim and status: \(error)")
     }
 }
 
-func proofIsRequired() async {
+func refusedByName() async {
     do {
-        _ = try await relay().connect(room: newRoom())
-        check(false, "a room was opened without a proof")
-    } catch RelayFailure.AttestationRequired {
+        let person = try await signUp()
+        do {
+            _ = try await Account(base: accountBase, session: nil).signinPassword(email: person.email, password: "not the password", who: who(newId()))
+            check(false, "a wrong password was accepted")
+        } catch AccountFailure.WrongCredentials {
+        }
+        do {
+            _ = try await Relay(base: base, group: newId(), device: person.device, session: "", attester: nil).status()
+            check(false, "a request without a session was answered")
+        } catch RelayFailure.SignIn {
+        }
     } catch {
-        check(false, "connect without proof: \(error)")
+        check(false, "refused by name: \(error)")
     }
+}
+
+func phoneGroupNeedsItsProof() async {
     do {
-        try await relay().registerPush(platform: .fcm, token: "token")
-        check(false, "a push token was kept without a proof")
-    } catch RelayFailure.AttestationRequired {
+        let relay = try await signUp().relay(newId())
+        _ = try await relay.claim(platform: .apple)
+        do {
+            _ = try await relay.connect(room: newRoom())
+            check(false, "a room was opened without a proof")
+        } catch RelayFailure.AttestationRequired {
+        }
+        do {
+            try await relay.registerPush(platform: .fcm, token: "token")
+            check(false, "a push token was kept without a proof")
+        } catch RelayFailure.AttestationRequired {
+        }
     } catch {
-        check(false, "push without proof: \(error)")
+        check(false, "phone group: \(error)")
     }
 }
 
 func twoDevices() async {
     do {
+        let person = try await signUp()
         let group = newId()
         let room = newRoom()
-        let hostKey = InstallKey()
-        let hosting = try await relay(group: group, attester: hostKey).host(room: room)
-        check(hostKey.calls == 1, "the first device proves itself once")
-        let guestKey = InstallKey()
-        let guestSide = try await relay(group: group, attester: guestKey).connect(room: room)
+        _ = try await person.relay(group).claim(platform: .desktop)
+        let hosting = try await person.relay(group).host(room: room)
+        let laptop = newId()
+        let guestSide = try await person.relay(group, device: laptop, session: try await signIn(person.email, laptop)).connect(room: room)
         let hostSide = try await hosting.accept()
-        check(guestKey.calls == 0, "a verified group is not asked again")
 
         let up = Data((0..<300_000).map { _ in UInt8.random(in: 0...255) })
         let down = Data((0..<200_000).map { _ in UInt8.random(in: 0...255) })
@@ -108,25 +154,33 @@ func twoDevices() async {
     }
 }
 
-func otherGroup() async {
+func otherAccount() async {
     do {
-        let room = newRoom()
-        let hosting = try await relay(attester: InstallKey()).host(room: room)
+        let mine = try await signUp()
+        let group = newId()
+        _ = try await mine.relay(group).claim(platform: .desktop)
+        let other = try await signUp()
         do {
-            _ = try await relay(attester: InstallKey()).connect(room: room)
-            check(false, "another group joined the room")
-        } catch RelayFailure.WrongGroup {
+            _ = try await other.relay(group).status()
+            check(false, "another account used the group")
+        } catch RelayFailure.WrongAccount {
         }
-        _ = hosting
+        // A session made for another device does not speak for this one.
+        do {
+            _ = try await mine.relay(group, device: newId()).host(room: newRoom())
+            check(false, "a session was used on another device")
+        } catch RelayFailure.WrongDevice {
+        }
     } catch {
-        check(false, "other group: \(error)")
+        check(false, "other account: \(error)")
     }
 }
 
-await groupCalls()
-await proofIsRequired()
+await claimAndStatus()
+await refusedByName()
+await phoneGroupNeedsItsProof()
 await twoDevices()
-await otherGroup()
+await otherAccount()
 
 if failures.isEmpty {
     print("ok")

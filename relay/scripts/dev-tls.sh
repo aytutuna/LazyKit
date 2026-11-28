@@ -3,11 +3,14 @@
 # a certificate authority made here (relay/.dev-tls/ca.pem), which the test machine has to trust: the relay client
 # judges certificates through the system's trust store, so the scripts that run the native tests install it first
 # (certutil on Windows, security on macOS, the user certificate store on an Android emulator).
-#   dev-tls.sh [port] [bind address]
+# The account service runs too, on the dev mail sink (scripts/dev-mail.mjs, MAIL_SINK for the tests) and a bot check
+# that accepts "dev", as dev-account.sh sets it up.
+#   dev-tls.sh [port] [bind address] [mail sink port]
 set -euo pipefail
 
 port="${1:-8788}"
 ip="${2:-127.0.0.1}"
+sink="${3:-8790}"
 cd "$(dirname "$0")/.."
 certs="$PWD/.dev-tls"
 log="${RELAY_LOG:-$PWD/wrangler-tls.log}"
@@ -26,10 +29,12 @@ if [ ! -f "$certs/server.pem" ]; then
     -extfile "$certs/server.ext" -out "$certs/server.pem"
 fi
 
+node scripts/dev-mail.mjs "$sink" "$ip" &
 npx wrangler dev --local --local-protocol https --https-key-path "$certs/server.key" --https-cert-path "$certs/server.pem" \
-  --ip "$ip" --port "$port" --inspector-port "$((port + 1000))" > "$log" 2>&1 &
+  --ip "$ip" --port "$port" --inspector-port "$((port + 1000))" \
+  --var ACCOUNT_KEY:dev-account-key ID_KEY:dev-id-key PASSWORD_STAGES:1 "DEV_MAIL_URL:http://127.0.0.1:$sink/" DEV_TURNSTILE:1 > "$log" 2>&1 &
 for _ in $(seq 90); do
-  if curl -sfk -m 5 "https://127.0.0.1:$port/relay/v1/group/$(printf 'a%.0s' $(seq 32))" > /dev/null; then
+  if curl -sfk -m 5 -X POST -d '{}' "https://127.0.0.1:$port/account/v1/nonce" > /dev/null; then
     exit 0
   fi
   sleep 1
