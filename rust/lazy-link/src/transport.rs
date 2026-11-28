@@ -26,6 +26,10 @@ impl std::error::Error for TransportError {}
 /// Opens connections with the system's TLS: SChannel on Windows, Network.framework on Apple
 /// systems, Android's own sockets, the browser on the web. `server_name` is what the certificate
 /// must be valid for; the system checks it against its trust store, unless the app is pinning.
+///
+/// The caller may give up on a `connect` (a timeout) without cancelling it: the call still runs
+/// to its end and the connection it returns is closed on the caller's side. A transport should
+/// bound its own connect time, and must not assume the future is dropped.
 #[async_trait]
 pub trait Transport: Send + Sync {
     async fn connect(

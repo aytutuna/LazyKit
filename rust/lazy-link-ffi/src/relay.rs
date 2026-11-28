@@ -16,6 +16,9 @@ use tokio::sync::{Mutex, Notify};
 /// for `server_name`. Each connection is named by a number the transport makes up. A read and
 /// a write on one connection may be in flight together. (UniFFI cannot yet hand a foreign
 /// object back from a foreign async call, so the connections stay on the app's side.)
+///
+/// A `connect` the caller has given up on (a timeout) is not cancelled: it returns its number as
+/// usual and Rust then calls `close` on it. Bound the connect time in the transport itself.
 #[uniffi::export(with_foreign)]
 #[async_trait]
 pub trait SecureTransport: Send + Sync {

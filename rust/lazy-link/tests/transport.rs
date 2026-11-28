@@ -194,3 +194,34 @@ async fn a_stalled_connection_is_given_up_on() {
     ));
     assert!(started.elapsed() <= Duration::from_secs(16));
 }
+
+#[tokio::test(start_paused = true)]
+async fn a_connection_that_arrives_after_the_deadline_is_closed() {
+    struct Late(EchoTransport);
+    #[async_trait]
+    impl Transport for Late {
+        async fn connect(
+            &self,
+            host: &str,
+            port: u16,
+            name: &str,
+        ) -> Result<Arc<dyn Connection>, TransportError> {
+            tokio::time::sleep(Duration::from_secs(60)).await;
+            self.0.connect(host, port, name).await
+        }
+    }
+    let (inner, closed) = echo(None);
+    let relay = Relay::new(
+        "https://alazy.app/relay/v1",
+        &random_id(),
+        &random_id(),
+        Arc::new(Late(inner)),
+    );
+    assert!(matches!(
+        relay.status().await,
+        Err(RelayError::Transport(_))
+    ));
+    assert!(!closed.load(Ordering::SeqCst));
+    tokio::time::sleep(Duration::from_secs(120)).await;
+    assert!(closed.load(Ordering::SeqCst), "the late connection was left open");
+}

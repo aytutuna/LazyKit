@@ -447,9 +447,15 @@ impl Relay {
         }
     }
 
+    // The connect runs as its own task: when the caller times out and goes away, a connection
+    // that the app completes later still ends up here and is dropped, which closes it.
     async fn dial(&self) -> Result<DuplexStream, RelayError> {
-        transport::open(&*self.transport, &self.host, self.port, &self.host, None)
+        let transport = self.transport.clone();
+        let host = self.host.clone();
+        let port = self.port;
+        tokio::spawn(async move { transport::open(&*transport, &host, port, &host, None).await })
             .await
+            .map_err(|e| RelayError::Transport(e.to_string()))?
             .map_err(|e| RelayError::Transport(e.0))
     }
 
