@@ -340,3 +340,58 @@ fn subset_is_the_golden_file() {
     let font = common::golden_bytes("programs/synthetic.ttf");
     check("programs/subset-output.txt", &subset_dump(&font));
 }
+
+fn embedded_dump(data: &[u8]) -> String {
+    let mut out = String::new();
+    let cases: Vec<(&str, Vec<u8>, Vec<&str>)> = vec![
+        ("latin", data.to_vec(), vec!["AB\u{C0} \u{11F}\u{130}"]),
+        ("missing", data.to_vec(), vec!["A\u{4E2D}\u{1F600}B", "\t"]),
+        ("shared", data.to_vec(), vec!["\u{131}\u{11F}"]),
+        ("empty", data.to_vec(), vec![]),
+        ("forbidden", with_fs_type(data, 2), vec!["A"]),
+        ("whole", with_fs_type(data, 0x100), vec!["AB\u{C0}"]),
+        ("garbage", vec![0; 200], vec!["A"]),
+    ];
+    for (label, font, texts) in cases {
+        let (built, status) = lazy_pdf_fonts::build(&font, &texts, 0);
+        out += &format!("embed {label} {status:?}\n");
+        let Some(e) = built else { continue };
+        out += &format!(
+            "  base {} cff {} subset {} dw {} program {}\n",
+            e.base_font,
+            b(e.is_cff),
+            b(e.is_subset),
+            e.default_width,
+            e.program.len()
+        );
+        hex_lines(&mut out, &e.program);
+        let widths: Vec<String> = e
+            .widths
+            .iter()
+            .map(|w| format!("{}[{}]", w.first_cid, join(&w.widths, |x| x.to_string())))
+            .collect();
+        out += &format!("  widths {}\n", widths.join(" "));
+        let d = &e.descriptor;
+        out += &format!(
+            "  descriptor flags {} bbox {} italic {} ascent {} descent {} cap {} stemV {}\n",
+            d.flags,
+            join(&d.font_bbox, |x| x.to_string()),
+            n(d.italic_angle),
+            d.ascent,
+            d.descent,
+            d.cap_height,
+            d.stem_v
+        );
+        out += &format!("  codes {}\n", pairs(&e.codes));
+        out += &format!("  missing {}\n", join(&e.missing, |x| x.to_string()));
+        out += &format!("  encode {}\n", common::hex(&e.encode(&texts.concat())));
+        out += &format!("  toUnicode {}\n", pairs(&e.to_unicode()));
+    }
+    out
+}
+
+#[test]
+fn embedded_font_is_the_golden_file() {
+    let font = common::golden_bytes("programs/synthetic.ttf");
+    check("programs/embedded-output.txt", &embedded_dump(&font));
+}

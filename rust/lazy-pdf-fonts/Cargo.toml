@@ -7,7 +7,6 @@ license-file.workspace = true
 publish.workspace = true
 
 [dependencies]
+sha2 = "0.10"
 lazy-pdf-syntax = { path = "../lazy-pdf-syntax" }
 
-[dev-dependencies]
-sha2 = "0.10"
