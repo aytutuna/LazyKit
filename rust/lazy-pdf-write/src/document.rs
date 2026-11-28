@@ -242,7 +242,7 @@ pub fn make(pages: &[PageInput], options: &Options) -> Vec<u8> {
         .collect();
     w.write_object(
         2,
-        &format!(
+        format!(
             "<</Type /Pages /Kids [{}] /Count {}>>",
             kids.join(" "),
             pages.len()
@@ -256,7 +256,7 @@ pub fn make(pages: &[PageInput], options: &Options) -> Vec<u8> {
     let title = options.title.as_deref().map(pdfa::clean_title);
     w.write_object(
         info_object,
-        &pdfa::info_dictionary(title.as_deref(), &date, &options.producer),
+        pdfa::info_dictionary(title.as_deref(), &date, &options.producer),
     );
     if archival {
         w.write_stream(
@@ -332,7 +332,7 @@ fn write_page(
     };
     w.write_object(
         page_object,
-        &format!(
+        format!(
             "<</Type /Page /Parent 2 0 R /MediaBox [0 0 {} {}] /Resources <</XObject <</Im{index} {image_object} 0 R{mask_resource}>>{font_resource}>> /Contents {contents_object} 0 R>>",
             num(place.page_width),
             num(place.page_height)
@@ -343,9 +343,9 @@ fn write_page(
         Image::G4(g4) => &g4.data,
         Image::Mixed { background, .. } => background,
     };
-    w.write_stream(image_object, &image_entries(page, data), data);
+    w.write_stream(image_object, image_entries(page, data), data);
     if let Image::Mixed { mask, .. } = &page.image {
-        w.write_stream(mask_object, &mask_entries(mask), &mask.data);
+        w.write_stream(mask_object, mask_entries(mask), &mask.data);
     }
     let contents = content_stream(index, &place, &page.ocr_lines, codes, mask_object > 0);
     if page_has_text {
@@ -405,13 +405,13 @@ fn write_text_font(w: &mut ObjectWriter, first: usize, codes: &Codes) {
     let name = glyphless::FONT_NAME;
     w.write_object(
         first,
-        &format!(
+        format!(
             "<</Type /Font /Subtype /Type0 /BaseFont /{name} /Encoding /Identity-H /DescendantFonts [{cid_font} 0 R] /ToUnicode {to_unicode} 0 R>>"
         ),
     );
     w.write_object(
         cid_font,
-        &format!(
+        format!(
             "<</Type /Font /Subtype /CIDFontType2 /BaseFont /{name} /CIDSystemInfo <</Registry {} /Ordering {} /Supplement 0>> /FontDescriptor {descriptor} 0 R /DW {} /CIDToGIDMap {cid_to_gid} 0 R>>",
             ascii_string("Adobe"),
             ascii_string("Identity"),
@@ -420,7 +420,7 @@ fn write_text_font(w: &mut ObjectWriter, first: usize, codes: &Codes) {
     );
     w.write_object(
         descriptor,
-        &format!(
+        format!(
             "<</Type /FontDescriptor /FontName /{name} /Flags 5 /FontBBox [0 0 {} {}] /ItalicAngle 0 /Ascent {} /Descent -1 /CapHeight {} /StemV 80 /FontFile2 {program} 0 R>>",
             glyphless::GLYPH_WIDTH,
             glyphless::UNITS_PER_EM,
@@ -431,7 +431,7 @@ fn write_text_font(w: &mut ObjectWriter, first: usize, codes: &Codes) {
     let font = glyphless::program();
     w.write_stream(
         program,
-        &format!("/Length1 {} /Filter /FlateDecode", font.len()),
+        format!("/Length1 {} /Filter /FlateDecode", font.len()),
         &zlib_fixed(font),
     );
     w.write_stream(
