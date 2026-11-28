@@ -75,7 +75,7 @@ impl Filters for TestFilters {
         match filter {
             b"FlateDecode" | b"Fl" => {
                 miniz_oxide::inflate::decompress_to_vec_zlib_with_limit(data, max_size)
-                    .map_err(|e| DecodeError::Damaged(format!("{e:?}")))
+                    .map_err(|e| DecodeError::Damaged(format!("{:?}", e.status)))
             }
             other => Err(DecodeError::Unsupported(format!(
                 "The /{} filter is not supported.",

@@ -723,6 +723,40 @@ fn jbig2_globals_are_not_inflated_again_for_each_image() {
 }
 
 #[test]
+fn an_unfiltered_jbig2_globals_stream_is_held_to_the_limit() {
+    let mut pdf = TestPdf::with_header(
+        "%PDF-1.5
+",
+    );
+    pdf.obj(1, "<</Type /Catalog /Pages 2 0 R>>")
+        .obj(2, "<</Type /Pages /Kids [] /Count 0>>");
+    pdf.stream_with(3, "", &vec![0u8; 33 << 20], None, true);
+    pdf.stream_with(
+        10,
+        "/Width 8 /Height 8 /Filter /JBIG2Decode /DecodeParms <</JBIG2Globals 3 0 R>>",
+        b"x",
+        None,
+        true,
+    );
+    let file = [
+        pdf.finish_without_xref(),
+        latin(
+            "trailer
+<</Root 1 0 R>>
+",
+        ),
+    ]
+    .concat();
+    let mut document = open(file);
+    let image = document.get(10).unwrap();
+    let Object::Stream(stream) = &*image else {
+        panic!("not a stream");
+    };
+    let error = document.stream_data(stream).unwrap_err();
+    assert!(error.detail.contains("too large"), "{}", error.detail);
+}
+
+#[test]
 fn the_deepest_allowed_nesting_and_page_tree_fit_a_1_mb_stack() {
     std::thread::Builder::new()
         .stack_size(1 << 20)
@@ -920,4 +954,34 @@ fn streams_that_inflate_twice_are_not_decoded_for_a_rewrite() {
         .filter(|w| *w == twice.as_slice())
         .count();
     assert_eq!(found, 10);
+}
+
+#[test]
+fn a_rebuild_does_not_decode_every_object_stream_in_full() {
+    let mut data = b"900 0 ".to_vec();
+    data.resize(40 << 20, b' ');
+    let packed = deflate(&data);
+    let mut pdf = TestPdf::with_pages(1);
+    for n in 20..70 {
+        pdf.stream_with(
+            n,
+            "/Type /ObjStm /N 1 /First 6 /Filter /FlateDecode",
+            &packed,
+            None,
+            true,
+        );
+    }
+    let started = Instant::now();
+    let mut document = open(pdf.finish_without_xref());
+    assert!(document.xref_rebuilt());
+    assert_eq!(document.pages().len(), 1);
+    assert!(
+        document
+            .repairs()
+            .iter()
+            .any(|r| r.starts_with("Object stream") && r.contains("not")),
+        "{:?}",
+        document.repairs().len()
+    );
+    must_finish_within(Duration::from_secs(5), started);
 }

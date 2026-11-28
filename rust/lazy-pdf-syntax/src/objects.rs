@@ -14,6 +14,9 @@ const MAX_OBJECT_STREAM_SIZE: usize = 64 << 20;
 /// All the object streams a document may decode in its life, however often the cache drops them, on top of eight
 /// times the file's own size: a big file with a cache too small for it decodes the same streams over and over.
 const MAX_DECODED_OBJECT_STREAM_BYTES: usize = 1 << 30;
+/// Object streams decoded for the first time, on top of 32 times the file's size: a scan that finds many small
+/// streams of spaces must not inflate each of them to the full size.
+const MAX_FIRST_OBJECT_STREAM_BYTES: usize = 64 << 20;
 /// Reading an object can need another (a stream's /Length, an object stream); a longer chain is a trap.
 const MAX_LOAD_DEPTH: usize = 32;
 const MAX_FLATTENED_NODES: usize = 4096;
@@ -419,9 +422,28 @@ impl Document {
             ));
             return None;
         }
-        let data = match self.stream_data_limited(stream, MAX_OBJECT_STREAM_SIZE, false) {
+        let fresh = !self.decoded_object_streams.contains(&number);
+        let mut cap = MAX_OBJECT_STREAM_SIZE;
+        if fresh {
+            let room = MAX_FIRST_OBJECT_STREAM_BYTES
+                .saturating_add(self.data.len().saturating_mul(32))
+                .saturating_sub(self.first_object_stream_bytes);
+            if room == 0 {
+                self.add_repair(format!(
+                    "Object stream {number} was not read: the file's object streams decode to too much."
+                ));
+                return None;
+            }
+            cap = cap.min(room);
+        }
+        let data = match self.stream_data_limited(stream, cap, false) {
             Ok(data) => data,
             Err(e) => {
+                // A decode cut short by the shared budget did its work: charge it, or a scan finding many
+                // streams pays the whole remainder for each of them.
+                if fresh && cap < MAX_OBJECT_STREAM_SIZE {
+                    self.first_object_stream_bytes += cap;
+                }
                 self.bad_object_streams.insert(number);
                 self.add_repair(format!(
                     "Object stream {number} could not be read ({}).",
@@ -433,6 +455,8 @@ impl Document {
         // Only a decode of a stream already decoded once counts, so one pass over a big file never reaches the cap.
         if !self.decoded_object_streams.insert(number) {
             self.object_stream_bytes += data.len();
+        } else {
+            self.first_object_stream_bytes += data.len();
         }
         let mut header = Lexer::new(&data, 0);
         let mut offsets = HashMap::new();

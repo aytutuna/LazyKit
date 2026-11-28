@@ -6,7 +6,6 @@ use std::sync::Arc;
 use crate::document::{Document, EntryKind, MAX_OBJECT_NUMBER};
 use crate::error::ReadError;
 use crate::object::{Dict, Name, Object};
-use crate::streams::DEFAULT_MAX_SIZE;
 use crate::writer::{ObjectWriter, XrefEntry, digest16, id_pair, write_stream, write_table};
 use crate::xref::MAX_SECTIONS;
 
