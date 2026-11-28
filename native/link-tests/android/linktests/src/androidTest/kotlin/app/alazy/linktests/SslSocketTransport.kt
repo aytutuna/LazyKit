@@ -25,22 +25,27 @@ class SslSocketTransport(private val acceptAnyCertificate: Boolean) : SecureTran
 
     val open get() = sockets.size
 
-    private val context: SSLContext = SSLContext.getInstance("TLS").apply {
-        val trustAll = object : X509TrustManager {
-            override fun checkClientTrusted(chain: Array<X509Certificate>, authType: String) {}
-            override fun checkServerTrusted(chain: Array<X509Certificate>, authType: String) {}
-            override fun getAcceptedIssuers() = emptyArray<X509Certificate>()
-        }
-        init(null, if (acceptAnyCertificate) arrayOf<TrustManager>(trustAll) else null, SecureRandom())
+    private val trustAll = object : X509TrustManager {
+        override fun checkClientTrusted(chain: Array<X509Certificate>, authType: String) {}
+        override fun checkServerTrusted(chain: Array<X509Certificate>, authType: String) {}
+        override fun getAcceptedIssuers() = emptyArray<X509Certificate>()
     }
 
-    override suspend fun connect(host: String, port: UShort, serverName: String): ULong = withContext(Dispatchers.IO) {
+    private fun context(trusting: Boolean): SSLContext = SSLContext.getInstance("TLS").apply {
+        init(null, if (trusting) arrayOf<TrustManager>(trustAll) else null, SecureRandom())
+    }
+
+    private val strict = context(false)
+    private val lenient = context(true)
+
+    override suspend fun connect(host: String, port: UShort, serverName: String, pinned: Boolean): ULong = withContext(Dispatchers.IO) {
         val plain = Socket()
         try {
             plain.connect(InetSocketAddress(host, port.toInt()), 15_000)
-            val ssl = context.socketFactory.createSocket(plain, serverName, port.toInt(), true) as SSLSocket
+            val trusting = acceptAnyCertificate || pinned
+            val ssl = (if (trusting) lenient else strict).socketFactory.createSocket(plain, serverName, port.toInt(), true) as SSLSocket
             ssl.startHandshake()
-            if (!acceptAnyCertificate && !HttpsURLConnection.getDefaultHostnameVerifier().verify(serverName, ssl.session)) {
+            if (!trusting && !HttpsURLConnection.getDefaultHostnameVerifier().verify(serverName, ssl.session)) {
                 throw IOException("the certificate is not for $serverName")
             }
             val id = last.incrementAndGet().toULong()

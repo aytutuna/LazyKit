@@ -31,6 +31,7 @@ impl Transport for Tcp {
         host: &str,
         port: u16,
         _server_name: &str,
+        _pinned: bool,
     ) -> Result<Arc<dyn Connection>, TransportError> {
         let (read, write) = TcpStream::connect((host, port))
             .await
@@ -143,6 +144,7 @@ impl Transport for Replies {
         host: &str,
         port: u16,
         server_name: &str,
+        _pinned: bool,
     ) -> Result<Arc<dyn Connection>, TransportError> {
         self.connects
             .lock()

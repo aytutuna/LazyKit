@@ -13,7 +13,9 @@ use tokio::io::{AsyncReadExt, AsyncWriteExt, ReadHalf, WriteHalf};
 use tokio::sync::{Mutex, Notify};
 
 /// Opens connections with the system's TLS and checks the certificate against its trust store
-/// for `server_name`. Each connection is named by a number the transport makes up. A read and
+/// for `server_name`, except when `pinned` is set: then the peer has a self-made certificate,
+/// the trust store must not judge it and Rust checks the public key against the pin. (The relay
+/// never asks for a pinned connection.) Each connection is named by a number the transport makes up. A read and
 /// a write on one connection may be in flight together. (UniFFI cannot yet hand a foreign
 /// object back from a foreign async call, so the connections stay on the app's side.)
 ///
@@ -22,8 +24,13 @@ use tokio::sync::{Mutex, Notify};
 #[uniffi::export(with_foreign)]
 #[async_trait]
 pub trait SecureTransport: Send + Sync {
-    async fn connect(&self, host: String, port: u16, server_name: String)
-    -> Result<u64, LinkError>;
+    async fn connect(
+        &self,
+        host: String,
+        port: u16,
+        server_name: String,
+        pinned: bool,
+    ) -> Result<u64, LinkError>;
     /// Up to `max` bytes; an empty answer means the other end closed.
     async fn read(&self, connection: u64, max: u32) -> Result<Vec<u8>, LinkError>;
     /// Sends all of `data`.
@@ -79,10 +86,11 @@ impl Transport for Foreign {
         host: &str,
         port: u16,
         server_name: &str,
+        pinned: bool,
     ) -> Result<Arc<dyn Connection>, TransportError> {
         let id = self
             .0
-            .connect(host.into(), port, server_name.into())
+            .connect(host.into(), port, server_name.into(), pinned)
             .await
             .map_err(failed)?;
         Ok(Arc::new(ForeignConnection {
@@ -414,7 +422,9 @@ pub async fn probe_connection(
     server_name: String,
     pin: Option<Vec<u8>>,
 ) -> Result<Vec<u8>, LinkError> {
-    let id = transport.connect(host, port, server_name).await?;
+    let id = transport
+        .connect(host, port, server_name, pin.is_some())
+        .await?;
     let spki = transport.peer_spki(id);
     let checked = match &pin {
         Some(pin) => transport::check_pin(spki.as_deref(), pin).map_err(|e| LinkError::Invalid {

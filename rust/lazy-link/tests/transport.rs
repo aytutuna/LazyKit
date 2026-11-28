@@ -33,6 +33,7 @@ impl Transport for EchoTransport {
         _: &str,
         _: u16,
         _: &str,
+        _: bool,
     ) -> Result<Arc<dyn Connection>, TransportError> {
         Ok(Arc::new(Echo {
             spki: self.spki.clone(),
@@ -177,6 +178,7 @@ async fn a_stalled_connection_is_given_up_on() {
             _: &str,
             _: u16,
             _: &str,
+            _: bool,
         ) -> Result<Arc<dyn Connection>, TransportError> {
             std::future::pending().await
         }
@@ -205,9 +207,10 @@ async fn a_connection_that_arrives_after_the_deadline_is_closed() {
             host: &str,
             port: u16,
             name: &str,
+            pinned: bool,
         ) -> Result<Arc<dyn Connection>, TransportError> {
             tokio::time::sleep(Duration::from_secs(60)).await;
-            self.0.connect(host, port, name).await
+            self.0.connect(host, port, name, pinned).await
         }
     }
     let (inner, closed) = echo(None);
@@ -227,4 +230,37 @@ async fn a_connection_that_arrives_after_the_deadline_is_closed() {
         closed.load(Ordering::SeqCst),
         "the late connection was left open"
     );
+}
+
+#[tokio::test]
+async fn only_a_pinned_open_asks_for_a_pinned_connection() {
+    struct Spy(Mutex<Vec<bool>>, EchoTransport);
+    #[async_trait]
+    impl Transport for Spy {
+        async fn connect(
+            &self,
+            host: &str,
+            port: u16,
+            name: &str,
+            pinned: bool,
+        ) -> Result<Arc<dyn Connection>, TransportError> {
+            self.0.lock().unwrap().push(pinned);
+            self.1.connect(host, port, name, pinned).await
+        }
+    }
+    let spki = b"key".to_vec();
+    let (inner, _) = echo(Some(&spki));
+    let spy = Arc::new(Spy(Mutex::default(), inner));
+    open(&*spy, "h", 1, "h", None).await.unwrap();
+    open(&*spy, "h", 1, "h", Some(&spki_fingerprint(&spki)))
+        .await
+        .unwrap();
+    let relay = Relay::new(
+        "https://alazy.app/relay/v1",
+        &random_id(),
+        &random_id(),
+        spy.clone(),
+    );
+    let _ = relay.status().await;
+    assert_eq!(*spy.0.lock().unwrap(), [false, true, false]);
 }

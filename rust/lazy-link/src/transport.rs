@@ -25,7 +25,10 @@ impl std::error::Error for TransportError {}
 
 /// Opens connections with the system's TLS: SChannel on Windows, Network.framework on Apple
 /// systems, Android's own sockets, the browser on the web. `server_name` is what the certificate
-/// must be valid for; the system checks it against its trust store, unless the app is pinning.
+/// must be valid for; the system checks it against its trust store. With `pinned` set the peer
+/// is a device with a self-made certificate: the system must not judge the chain (it would
+/// refuse it) and [`open`] checks the public key against the pin instead. The relay never
+/// asks for a pinned connection.
 ///
 /// The caller may give up on a `connect` (a timeout) without cancelling it: the call still runs
 /// to its end and the connection it returns is closed on the caller's side. A transport should
@@ -37,6 +40,7 @@ pub trait Transport: Send + Sync {
         host: &str,
         port: u16,
         server_name: &str,
+        pinned: bool,
     ) -> Result<Arc<dyn Connection>, TransportError>;
 }
 
@@ -62,7 +66,9 @@ pub async fn open(
     server_name: &str,
     pin: Option<&[u8]>,
 ) -> Result<DuplexStream, TransportError> {
-    let conn = transport.connect(host, port, server_name).await?;
+    let conn = transport
+        .connect(host, port, server_name, pin.is_some())
+        .await?;
     if let Some(pin) = pin
         && let Err(e) = check_pin(conn.peer_spki().as_deref(), pin)
     {
@@ -86,6 +92,8 @@ pub fn check_pin(spki: Option<&[u8]>, pin: &[u8]) -> Result<(), TransportError> 
     }
 }
 
+// TODO: the phone link needs half-close (a request body ends with a write shutdown while the
+// reply is still coming); today the end of the pipe's write side closes the whole connection.
 // Two tasks carry bytes between the connection and the pipe's far end; they end when either side does.
 fn pump(conn: Arc<dyn Connection>) -> DuplexStream {
     let (near, far) = tokio::io::duplex(CHUNK * 4);

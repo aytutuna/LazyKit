@@ -17,13 +17,13 @@ internal sealed class SslTransport(bool acceptAnyCertificate) : SecureTransport
 
     public int Open => conns.Count;
 
-    public async Task<ulong> Connect(string host, ushort port, string serverName)
+    public async Task<ulong> Connect(string host, ushort port, string serverName, bool pinned)
     {
         var tcp = new TcpClient();
         try
         {
             await tcp.ConnectAsync(host, port);
-            var ssl = new SslStream(tcp.GetStream(), false, (_, _, _, errors) => acceptAnyCertificate || errors == SslPolicyErrors.None);
+            var ssl = new SslStream(tcp.GetStream(), false, (_, _, _, errors) => acceptAnyCertificate || pinned || errors == SslPolicyErrors.None);
             await ssl.AuthenticateAsClientAsync(serverName);
             ulong id = (ulong)Interlocked.Increment(ref last);
             conns[id] = new Conn(tcp, ssl);

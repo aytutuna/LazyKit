@@ -62,7 +62,7 @@ final class NetworkTransport: SecureTransport, @unchecked Sendable {
 
     private func find(_ id: UInt64) -> Connection? { lock.withLock { connections[id] } }
 
-    func connect(host: String, port: UInt16, serverName: String) async throws -> UInt64 {
+    func connect(host: String, port: UInt16, serverName: String, pinned: Bool) async throws -> UInt64 {
         let tls = NWProtocolTLS.Options()
         let box = Box()
         sec_protocol_options_set_tls_server_name(tls.securityProtocolOptions, serverName)
@@ -72,7 +72,7 @@ final class NetworkTransport: SecureTransport, @unchecked Sendable {
                     box.certificate = SecCertificateCopyData(sec_certificate_copy_ref(secCert).takeRetainedValue()) as Data
                 }
             }
-            if self.acceptAny {
+            if self.acceptAny || pinned {
                 complete(true)
             } else {
                 complete(SecTrustEvaluateWithError(sec_trust_copy_ref(trust).takeRetainedValue(), nil))
