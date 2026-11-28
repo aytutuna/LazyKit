@@ -26,5 +26,7 @@ declare namespace Cloudflare {
     TURNSTILE_HOSTNAMES?: string;
     RESEND_API_KEY?: string;
     MAIL_FROM?: string;
+    DEV_MAIL_URL?: string;
+    DEV_TURNSTILE?: string;
   }
 }

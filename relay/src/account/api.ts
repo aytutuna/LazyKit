@@ -7,6 +7,7 @@ import { AccountService, type AccountPort, type AddressPort, type Directory, typ
 import { parseAttestation, verifyAttestation } from "../attest";
 import { NotConfiguredError } from "../services";
 import { stagesOf } from "./deps";
+import { devTurnstile } from "./dev";
 import { cloudflareTurnstile } from "./turnstile";
 
 const startLimit = new RateLimiter(10, 3_600_000);
@@ -86,7 +87,7 @@ async function botCheck(env: Cloudflare.Env, svc: AccountService, body: Record<s
       return out === "ok" && (await svc.spendNonce(p.nonce)) ? undefined : fail("bot check failed", 403);
     }
     if (typeof body.turnstile !== "string" || body.turnstile === "") return fail("bot check needed", 403);
-    return (await (services().turnstile ?? cloudflareTurnstile(env)).verify(body.turnstile, ip, action)) ? undefined : fail("bot check failed", 403);
+    return (await (services().turnstile ?? (env.DEV_TURNSTILE ? devTurnstile : cloudflareTurnstile(env))).verify(body.turnstile, ip, action)) ? undefined : fail("bot check failed", 403);
   } catch (e) {
     if (e instanceof NotConfiguredError) return fail("not configured", 501);
     throw e;
