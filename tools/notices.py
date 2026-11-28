@@ -18,6 +18,23 @@ their own section. The file is made by tools/notices.py from rust/Cargo.lock and
 UniFFI (MPL-2.0) is used unmodified; its source is at https://github.com/mozilla/uniffi-rs.
 """
 
+# What the apps are built for. A crate that no build for these reaches (a dependency of another system, a feature
+# that is off) does not ship, so it has no place in the notices.
+TARGETS = [
+    "x86_64-pc-windows-msvc", "aarch64-pc-windows-msvc", "aarch64-apple-darwin", "x86_64-apple-darwin",
+    "aarch64-apple-ios", "aarch64-apple-ios-sim", "aarch64-linux-android", "x86_64-linux-android",
+]
+# The web part has no TLS of its own: the browser does it, so it is looked at alone.
+WASM = ["-p", "lazy-link-wasm", "--target", "wasm32-unknown-unknown"]
+
+# Licence files that sit deeper than a crate's top folder and belong to code it bundles.
+BUNDLED = {
+    "aws-lc-sys": [
+        "aws-lc/third_party/jitterentropy/jitterentropy-library/LICENSE",
+        "aws-lc/third_party/s2n-bignum/LICENSE",
+    ],
+}
+
 LICENCE_FILE = re.compile(r"(LICEN[CS]E|COPYING|NOTICE|UNLICENSE)", re.I)
 
 NATIVE = """ONNX Runtime {ort} (MIT), the library the scanner loads, from the Microsoft.ML.OnnxRuntime NuGet package
@@ -109,7 +126,12 @@ def licence_texts(metadata, fallback=FALLBACK):
     for p in used_packages(metadata):
         if p["id"] in members:
             continue
-        files = read_files(Path(p["manifest_path"]).parent, lambda n: LICENCE_FILE.match(n))
+        folder = Path(p["manifest_path"]).parent
+        files = read_files(folder, lambda n: LICENCE_FILE.match(n))
+        for rel in BUNDLED.get(p["name"], []):
+            extra = folder / rel
+            if extra.is_file():
+                files.append((rel, extra.read_text(encoding="utf-8", errors="replace")))
         extra = fallback / f"{p['name']}-{p['version']}"
         if not files and extra.is_dir():
             files = read_files(extra, lambda n: n != "SOURCE")
@@ -150,15 +172,37 @@ def render(metadata, pins_text, texts=None):
     return "\n".join(lines).rstrip("\n") + "\n"
 
 
+def shipped(root):
+    """Metadata whose packages are the ones the apps' builds link: what `cargo tree` shows for the normal dependencies
+    of each target. (`cargo metadata` joins features of test-only dependencies into the same graph, so it shows
+    crates, ring among them, that no build links.)"""
+    manifest = str(root / "rust" / "Cargo.toml")
+    out = subprocess.run(
+        ["cargo", "metadata", "--format-version", "1", "--locked", "--all-features", "--manifest-path", manifest],
+        check=True, capture_output=True, text=True,
+    ).stdout
+    metadata = json.loads(out)
+    linked = set()
+    for scope in [["--workspace", "--target", t] for t in TARGETS] + [WASM]:
+        tree = subprocess.run(
+            ["cargo", "tree", "--locked", "--all-features", *scope, "-e", "normal", "--prefix", "none",
+             "--format", "{p}", "--manifest-path", manifest],
+            check=True, capture_output=True, text=True,
+        ).stdout
+        for line in tree.splitlines():
+            parts = line.split()
+            if len(parts) >= 2 and parts[1].startswith("v"):
+                linked.add((parts[0], parts[1][1:]))
+    members = set(metadata["workspace_members"])
+    packages = [p for p in metadata["packages"] if p["id"] not in members and (p["name"], p["version"]) in linked]
+    return {"packages": packages, "workspace_members": metadata["workspace_members"]}
+
+
 def main(argv):
     check = "--check" in argv
     args = [a for a in argv[1:] if a != "--check"]
     root = Path(args[0]) if args else Path(__file__).resolve().parent.parent
-    out = subprocess.run(
-        ["cargo", "metadata", "--format-version", "1", "--locked", "--all-features", "--manifest-path", str(root / "rust" / "Cargo.toml")],
-        check=True, capture_output=True, text=True,
-    ).stdout
-    metadata = json.loads(out)
+    metadata = shipped(root)
     try:
         texts = licence_texts(metadata)
     except MissingTexts as err:
