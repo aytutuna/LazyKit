@@ -82,6 +82,11 @@ impl Filters for TestFilters {
                 }
                 status => DecodeError::Damaged(format!("{status:?}")),
             }),
+            // Inflates, then fails, as a codec does that rejects its parameters late.
+            b"FlateFail" => {
+                let _ = miniz_oxide::inflate::decompress_to_vec_zlib_with_limit(data, max_size);
+                Err(DecodeError::Damaged("The parameters do not fit.".into()))
+            }
             other => Err(DecodeError::Unsupported(format!(
                 "The /{} filter is not supported.",
                 String::from_utf8_lossy(other)

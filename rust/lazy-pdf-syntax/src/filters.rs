@@ -33,8 +33,8 @@ pub enum DecodeError {
 ///   this crate rely on it: a decode that hits its limit is charged in full.
 /// - `Problem::Unsupported` (an unknown filter, an image codec in the chain) is `DecodeError::Unsupported`.
 ///
-/// `max_size` is passed through as the filter layer's limit. The document layer charges a failed decode for the
-/// bytes the earlier stages of the chain produced, so a failure costs the same whatever its kind.
+/// `max_size` is passed through as the filter layer's limit. A failed decode is charged for the bytes the
+/// earlier stages produced, or for what its raw bytes could expand to if that is more, whatever the error says.
 pub trait Filters: Send + Sync {
     /// One stage of a filter chain: `filter` as the file names it (abbreviations included), the stage's
     /// `/DecodeParms` entries, the data in. The result may not pass `max_size` bytes. With `strict` a Flate

@@ -18,9 +18,11 @@ const MAX_DECODED_OBJECT_STREAM_BYTES: usize = 1 << 30;
 /// streams of spaces must not inflate each of them to the full size.
 const MAX_FIRST_OBJECT_STREAM_BYTES: usize = 64 << 20;
 /// Reading an object can need another (a stream's /Length, an object stream); a longer chain is a trap.
+const MAX_LOAD_DEPTH: usize = 32;
 /// How far past a listed offset an object's header is looked for.
 const HEADER_WINDOW: usize = 128;
-const MAX_LOAD_DEPTH: usize = 32;
+/// What a stream's byte may expand to at most when a failed decode is charged: deflate's 1032 to 1, with room.
+const MAX_EXPANSION: usize = 2731;
 const MAX_FLATTENED_NODES: usize = 4096;
 /// What parses that fail may read in all: an unclosed string runs to the end of the data, and every object listed
 /// in front of one would pay for that again.
@@ -461,8 +463,18 @@ impl Document {
             Ok(data) => data,
             Err(e) => {
                 // What the filters had produced before the failure was work done, whatever the error.
+                // A codec may fail late, after inflating a lot from a few bytes, so a failure counts for at
+                // least what its raw bytes could expand to.
                 if fresh {
-                    let work = if e.too_large { cap.max(e.work) } else { e.work };
+                    let floor = self
+                        .raw_length(stream)
+                        .saturating_mul(MAX_EXPANSION)
+                        .min(cap);
+                    let work = if e.too_large {
+                        cap.max(e.work)
+                    } else {
+                        e.work.max(floor)
+                    };
                     self.first_object_stream_bytes += work;
                 }
                 self.bad_object_streams.insert(number);
