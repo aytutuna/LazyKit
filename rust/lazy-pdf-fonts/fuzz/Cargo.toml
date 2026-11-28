@@ -35,4 +35,11 @@ test = false
 doc = false
 bench = false
 
+[[bin]]
+name = "cmap"
+path = "fuzz_targets/cmap.rs"
+test = false
+doc = false
+bench = false
+
 [workspace]
