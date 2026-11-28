@@ -13,8 +13,8 @@ use std::time::Duration;
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt, DuplexStream, ReadBuf};
 
 const CHUNK: usize = 16 * 1024;
-/// A connection that has delivered nothing for this long is dead; the relay's own pings come every
-/// 30 seconds, so a live one never stays quiet this long.
+/// A connection that has delivered nothing for this long is dead: the client pings every 30
+/// seconds and the relay answers each ping, so a live one never stays quiet this long.
 const IDLE_READ: Duration = Duration::from_secs(90);
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -136,9 +136,10 @@ fn pump(conn: Arc<dyn Connection>) -> TransportStream {
                 }
             }
         }
-        // A reader that is gone leaves a connection nobody is waiting on; closing frees it.
-        reading.close().await;
+        // The pipe ends first, so the reader sees the error at once even if closing the connection
+        // has to wait behind a write that is stuck; closing then frees a connection nobody uses.
         let _ = to_pipe.shutdown().await;
+        reading.close().await;
     });
     tokio::spawn(async move {
         let mut buf = vec![0u8; CHUNK];

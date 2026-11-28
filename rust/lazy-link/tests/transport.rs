@@ -220,6 +220,10 @@ impl Connection for Breaks {
     }
 
     async fn close(&self) {
+        if self.quiet {
+            // Closing waits behind a stuck write, as a real connection's can.
+            std::future::pending::<()>().await;
+        }
         self.closed.store(true, Ordering::SeqCst);
     }
 }
@@ -256,7 +260,7 @@ async fn a_broken_connection_reads_as_an_error_not_as_the_end() {
 }
 
 #[tokio::test(start_paused = true)]
-async fn a_connection_that_goes_quiet_is_given_up_on_and_closed() {
+async fn a_connection_that_goes_quiet_is_given_up_on_even_when_it_cannot_close() {
     let closed = Arc::new(AtomicBool::new(false));
     let mut s = open(&BreaksTransport(true, closed.clone()), "h", 1, "h")
         .await
@@ -264,5 +268,4 @@ async fn a_connection_that_goes_quiet_is_given_up_on_and_closed() {
     let mut got = [0u8; 1];
     let err = s.read(&mut got).await.unwrap_err();
     assert!(err.to_string().contains("went quiet"), "{err}");
-    assert!(closed.load(Ordering::SeqCst), "a dead connection is closed");
 }
