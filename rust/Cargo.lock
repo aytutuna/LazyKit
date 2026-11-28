@@ -662,6 +662,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "lazy-pdf-fonts"
+version = "0.1.0"
+dependencies = [
+ "lazy-pdf-syntax",
+ "sha2",
+]
+
+[[package]]
 name = "lazy-pdf-syntax"
 version = "0.1.0"
 dependencies = [
