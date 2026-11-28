@@ -273,6 +273,9 @@ impl Document {
                     }
                 })?;
         }
+        if data.len() > limit {
+            return Err(ReadError::damaged("A JBIG2 globals stream is too large."));
+        }
         if globals.number != 0 {
             let held: usize = self.globals.values().map(|d| d.len()).sum();
             if held + data.len() > MAX_CACHED_GLOBALS {
