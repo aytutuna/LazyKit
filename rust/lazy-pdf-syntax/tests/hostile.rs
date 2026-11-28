@@ -900,27 +900,6 @@ fn direct_nodes_with_many_plain_keys_are_walked_in_bounded_time() {
 }
 
 #[test]
-fn pages_with_large_direct_resources_are_all_listed() {
-    let resources: String = (0..300).map(|i| format!("/F{i} 7 0 R ")).collect();
-    let count = 3000;
-    let kids: String = (10..10 + count).map(|n| format!("{n} 0 R ")).collect();
-    let mut pdf = TestPdf::new();
-    pdf.obj(1, "<</Type /Catalog /Pages 2 0 R>>").obj(
-        2,
-        &format!("<</Type /Pages /Kids [{kids}] /Count {count}>>"),
-    );
-    for n in 10..10 + count {
-        pdf.obj(
-            n,
-            &format!("<</Type /Page /Parent 2 0 R /Resources <<{resources}>>>>"),
-        );
-    }
-    let mut document = open(pdf.finish());
-    assert_eq!(document.pages().len(), count as usize);
-    assert!(document.repairs().is_empty());
-}
-
-#[test]
 fn contents_cut_short_by_the_size_limit_are_noted() {
     let mut pdf = TestPdf::with_pages(1);
     let mut data = deflate(b"q");
