@@ -352,6 +352,7 @@ const MAX_LOOKUPS: usize = 4096;
 const MAX_CACHED_FONTS: usize = 512;
 const MAX_CACHED_MASKS: usize = 256;
 const MAX_FAILED_FORMS: usize = 4096;
+const MAX_CACHED_DICTS: usize = 4096;
 const COLOR_SPACE_COST: i64 = 1 << 14;
 
 impl Key {
@@ -430,6 +431,7 @@ pub struct ContentInterpreter<'a> {
     resources: Vec<Option<Arc<Dict>>>,
     lookups: Lookups,
     form_resources: HashMap<u32, Option<Arc<Dict>>>,
+    ref_dicts: HashMap<u32, Option<Arc<Dict>>>,
     failed_forms: HashSet<u32>,
     soft_masks: HashMap<usize, (Arc<Object>, Option<Arc<Dict>>)>,
     overflow_marker: Option<Arc<MarkedContent>>,
@@ -466,6 +468,7 @@ impl<'a> ContentInterpreter<'a> {
             resources: Vec::new(),
             lookups: HashMap::new(),
             form_resources: HashMap::new(),
+            ref_dicts: HashMap::new(),
             failed_forms: HashSet::new(),
             soft_masks: HashMap::new(),
             overflow_marker: None,
@@ -678,6 +681,23 @@ impl<'a> ContentInterpreter<'a> {
         }
     }
 
+    // The dictionary an indirect reference names, one copy for everything that refers to it.
+    fn indirect_dict(&mut self, entry: &Object) -> Option<Arc<Dict>> {
+        let Object::Ref(r) = entry else { return None };
+        if let Some(known) = self.ref_dicts.get(&r.number) {
+            return known.clone();
+        }
+        let found = match resolved(self.doc, entry).as_deref() {
+            Some(Object::Dict(d)) => Some(Arc::new(d.clone())),
+            _ => None,
+        };
+        if self.ref_dicts.len() >= MAX_CACHED_DICTS {
+            self.ref_dicts.clear();
+        }
+        self.ref_dicts.insert(r.number, found.clone());
+        found
+    }
+
     fn find_resource(&mut self, category: &str, name: &str) -> Option<Arc<Object>> {
         lookup_resource(self.doc, &self.resources, &mut self.lookups, category, name)
             .map(|(_, v)| v)
@@ -786,6 +806,25 @@ impl<'a> ContentInterpreter<'a> {
             self.context.state.font_size = size;
         }
         let doc = &mut *self.doc;
+        if g.contains_key("SMask") {
+            let id = Arc::as_ptr(&entry) as usize;
+            let mask = match g.get("SMask") {
+                Some(shared @ Object::Ref(_)) => self.indirect_dict(shared),
+                _ => match self.soft_masks.get(&id) {
+                    Some((_, known)) => known.clone(),
+                    None => {
+                        let mask = self.doc.dict_of(g, "SMask").map(Arc::new);
+                        if self.soft_masks.len() >= MAX_CACHED_MASKS {
+                            self.soft_masks.clear();
+                        }
+                        self.soft_masks.insert(id, (entry.clone(), mask.clone()));
+                        mask
+                    }
+                },
+            };
+            self.context.state.soft_mask = mask;
+        }
+        let doc = &mut *self.doc;
         let state = &mut self.context.state;
         if let Some(v) = doc.number_of(g, "CA") {
             state.stroke_alpha = v.clamp(0.0, 1.0);
@@ -801,21 +840,6 @@ impl<'a> ContentInterpreter<'a> {
         }
         if let Some(Object::Name(mode)) = blend.as_deref() {
             state.blend_mode = mode.text();
-        }
-        if g.contains_key("SMask") {
-            let id = Arc::as_ptr(&entry) as usize;
-            let mask = match self.soft_masks.get(&id) {
-                Some((_, known)) => known.clone(),
-                None => {
-                    let mask = doc.dict_of(g, "SMask").map(Arc::new);
-                    if self.soft_masks.len() >= MAX_CACHED_MASKS {
-                        self.soft_masks.clear();
-                    }
-                    self.soft_masks.insert(id, (entry.clone(), mask.clone()));
-                    mask
-                }
-            };
-            state.soft_mask = mask;
         }
     }
 
@@ -1521,15 +1545,21 @@ impl<'a> ContentInterpreter<'a> {
         let matrix = inner.ctm;
         self.context.state = inner;
         self.reset_path();
-        let resources = match self.form_resources.get(&stream.number) {
-            Some(known) if stream.number != 0 => known.clone(),
-            _ => {
-                let found = self.doc.dict_of(&stream.dict, "Resources").map(Arc::new);
-                if stream.number != 0 {
-                    self.form_resources.insert(stream.number, found.clone());
+        let resources = match stream.dict.get("Resources") {
+            Some(shared @ Object::Ref(_)) => self.indirect_dict(shared),
+            _ => match self.form_resources.get(&stream.number) {
+                Some(known) if stream.number != 0 => known.clone(),
+                _ => {
+                    let found = self.doc.dict_of(&stream.dict, "Resources").map(Arc::new);
+                    if stream.number != 0 {
+                        if self.form_resources.len() >= MAX_CACHED_DICTS {
+                            self.form_resources.clear();
+                        }
+                        self.form_resources.insert(stream.number, found.clone());
+                    }
+                    found
                 }
-                found
-            }
+            },
         };
         self.resources.push(resources);
         self.context.forms.push(form.clone());
