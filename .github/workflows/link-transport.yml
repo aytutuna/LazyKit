@@ -86,7 +86,9 @@ jobs:
         with:
           workspaces: rust
           key: link-transport-android
+      # In rust/, where rust-toolchain.toml picks the toolchain the targets belong to.
       - run: rustup target add aarch64-linux-android x86_64-linux-android
+        working-directory: rust
       - uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
         with:
           path: ~/.cargo/bin/cargo-ndk
