@@ -1,19 +1,14 @@
 import { env, exports } from "cloudflare:workers";
 import { beforeEach } from "vitest";
-import { accountName } from "../src/account/account";
-import type { Mail } from "../src/account/email";
-import { useServices, type PublishedKey, type Services } from "../src/services";
+import { accountName } from "../src/account/core/account";
+import type { Mail } from "../src/account/core/email";
+import { useServices, type Services } from "../src/services";
+import { jwtKit } from "./core/jwt";
 
 export const sent: Mail[] = [];
 export const codeIn = (m: Mail) => /\b(\d{6})\b/.exec(m.text)![1];
 
-const b64u = (b: Uint8Array | string) =>
-  btoa(typeof b === "string" ? b : String.fromCharCode(...b)).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
-
-const rsa = async () => crypto.subtle.generateKey({ name: "RSASSA-PKCS1-v1_5", modulusLength: 2048, publicExponent: new Uint8Array([1, 0, 1]), hash: "SHA-256" }, true, ["sign", "verify"]);
-const good = await rsa();
-const other = await rsa();
-const published: PublishedKey = { ...(await crypto.subtle.exportKey("jwk", good.publicKey)), kid: "k1" };
+const kit = await jwtKit();
 
 // A new person for every test, since Durable Object storage outlives a test.
 let people = 0;
@@ -26,7 +21,7 @@ export function fakes(extra: Partial<Services> = {}): void {
   Object.assign(who, { email: `ada${people}@example.com`, other: `grace${people}@example.com`, apple: `apple-sub-${people}`, google: `google-sub-${people}` });
   useServices({
     mailer: { send: async (m) => void sent.push(m) },
-    keys: { get: async (_p, kid) => (kid === "k1" ? published : undefined) },
+    keys: kit.keys,
     ...extra,
   });
 }
@@ -41,11 +36,7 @@ export async function idToken(provider: "apple" | "google", claims: Record<strin
       ? { iss: "https://appleid.apple.com", aud: APPLE_AUD, sub: who.apple, email: who.email, email_verified: "true" }
       : { iss: "https://accounts.google.com", aud: "test-google-client", sub: who.google, email: who.email, email_verified: true };
   const payload = { ...base, nonce: NONCE, iat: now, exp: now + 600, ...claims };
-  const head = b64u(JSON.stringify({ alg: opts.alg ?? "RS256", kid: opts.kid ?? "k1" }));
-  const body = b64u(JSON.stringify(payload));
-  const key = (opts.wrongKey ? other : good).privateKey;
-  const sig = new Uint8Array(await crypto.subtle.sign("RSASSA-PKCS1-v1_5", key, new TextEncoder().encode(`${head}.${body}`)));
-  return `${head}.${body}.${b64u(sig)}`;
+  return kit.sign(payload, opts);
 }
 
 export const account = (path: string, method = "GET", body?: unknown, token?: string, headers: Record<string, string> = {}) =>

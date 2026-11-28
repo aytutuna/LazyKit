@@ -1,8 +1,8 @@
 import { env, exports } from "cloudflare:workers";
 import { runDurableObjectAlarm, runInDurableObject } from "cloudflare:test";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { accountName, identityName } from "../src/account/account";
-import { MailFailedError, MailNotConfiguredError } from "../src/account/email";
+import { accountName, identityName } from "../src/account/core/account";
+import { MailFailedError, MailNotConfiguredError } from "../src/account/core/email";
 import { useServices } from "../src/services";
 import { DEVICE_A, NONCE, account, codeIn, fakes, idToken, sent, signUp, who } from "./helpers";
 

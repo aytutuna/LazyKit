@@ -1,7 +1,7 @@
 import { env, exports } from "cloudflare:workers";
 import { runInDurableObject } from "cloudflare:test";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { accountName } from "../src/account/account";
+import { accountName } from "../src/account/core/account";
 import { WEEKLY_CAP } from "../src/group";
 import { purchaseKey } from "../src/purchase";
 import { useServices } from "../src/services";

@@ -5,7 +5,7 @@ import { useServices } from "../src/services";
 import { WEEKLY_CAP } from "../src/group";
 import { CLOSE_CAPPED, MAX_BUFFERED, MAX_FRAME, MAX_STREAMS } from "../src/room";
 import { weekOf } from "../src/week";
-import { accountName } from "../src/account/account";
+import { accountName } from "../src/account/core/account";
 import { groupSession } from "./helpers";
 
 declare const __BIG__: boolean;

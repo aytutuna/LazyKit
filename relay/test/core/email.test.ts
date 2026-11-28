@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { normalizeEmail } from "../src/account/email";
+import { normalizeEmail } from "../../src/account/core/email";
 
 describe("email addresses", () => {
   it("folds case, width and surrounding space into one spelling", () => {
