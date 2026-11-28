@@ -86,7 +86,7 @@ describe("sign-up", () => {
     await rig.flush();
     expect(rig.mail).toHaveLength(before + 1);
     expect(lastMail().subject).toBe("You already have a Lazy account");
-    expect(lastMail().text).not.toMatch(/\d{6}/);
+    expect(lastMail().text).not.toMatch(/[0-9]{6}/);
   });
 
   it("forgets a sign-up nobody confirmed, but not a newer one", async () => {
@@ -553,6 +553,16 @@ describe("Apple and Google", () => {
     expect(lastMail().subject).toBe("A sign-in method was added to your Lazy account");
     const again = await social("google", {}, {}, { ...OTHER, device: "c".repeat(32) });
     expect(again.ok).toBe(true);
+  });
+
+  it("does not spend a link code that is entered on another device", async () => {
+    await signUp();
+    await social("google");
+    await rig.flush();
+    const code = codeIn(lastMail());
+    expect((await rig.service.confirmLink(email, code, { ...LOGIN, device: "d".repeat(32) })).ok).toBe(false);
+    expect((await rig.service.confirmLink(email, code, { ...LOGIN, app: "lazyprint" })).ok).toBe(false);
+    expect((await rig.service.confirmLink(email, code, LOGIN)).ok).toBe(true);
   });
 
   it("does not link when the code is for another purpose or is guessed", async () => {

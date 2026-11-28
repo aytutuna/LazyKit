@@ -233,10 +233,11 @@ export class AccountService {
   async confirmLink(email: unknown, code: unknown, login: Login, caller = ""): Promise<Entered> {
     const a = await this.address(email);
     if (!a) return { ok: false, why: normalizeEmail(email) ? "not-configured" : "bad-email" };
-    const taken = await a.port.takeCode("link", code, a.canonical, caller);
+    // The code finishes the sign-in that asked for it, on that device and nowhere else; entered
+    // anywhere else it is not spent.
+    const taken = await a.port.takeCode("link", code, a.canonical, caller, { device: login.device, app: login.app });
     const link = taken.ok ? (taken.extra as { id: string; provider: string; app: string; device: string } | undefined) : undefined;
-    // The code finishes the sign-in that asked for it, on that device and nowhere else.
-    if (!taken.ok || !taken.account || !link || link.device !== login.device || link.app !== login.app) return { ok: false, why: "bad" };
+    if (!taken.ok || !taken.account || !link) return { ok: false, why: "bad" };
     const identity = this.dir.identity(link.id);
     const account = this.dir.account(taken.account);
     await identity.bind(taken.account);

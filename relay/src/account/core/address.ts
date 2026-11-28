@@ -224,7 +224,8 @@ export class AddressCore {
   // and the address three hundred wrong codes a day. Tries are counted before the compare. A guess at
   // an address with no live code does the same hashing and the same two writes, so that is not a way to
   // tell which addresses have codes or accounts.
-  async takeCode(purpose: Purpose, code: unknown, canonical: string, caller: string, now = this.clock()): Promise<Taken> {
+  // `only` names what the code was made for (the device that asked, say): a right code from anywhere else counts as a wrong try and stays unspent.
+  async takeCode(purpose: Purpose, code: unknown, canonical: string, caller: string, only?: Record<string, string>, now = this.clock()): Promise<Taken> {
     if (!this.deps.codeKey()) return { ok: false };
     if (this.codeCallers.full(caller, now, CODE_FAILS_CALLER) || windowFull(this.s.code, now, DAY, CODE_FAILS_TOTAL)) return { ok: false };
     const c = this.s.codes[purpose];
@@ -241,7 +242,8 @@ export class AddressCore {
     await this.save();
     const guess = typeof code === "string" && /^[0-9]{6}$/.test(code) ? code : "000000";
     const same = equal(bytes(await this.hash(purpose, canonical, guess)), bytes(live ? c.hash : "-"));
-    const good = Boolean(live) && same && guess === code;
+    const fits = !only || Object.entries(only).every(([k, v]) => (c?.extra as Record<string, unknown> | undefined)?.[k] === v);
+    const good = Boolean(live) && same && guess === code && fits;
     if (good) delete this.s.codes[purpose];
     else {
       this.codeCallers.add(caller, now);
