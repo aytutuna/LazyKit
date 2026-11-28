@@ -155,3 +155,24 @@ fn many_prefix_bindings_are_read_in_linear_time() {
     assert_eq!(document.pdfa_part(), Some(1));
     assert!(started.elapsed().as_secs() < 10);
 }
+
+#[test]
+fn a_part_behind_long_white_space_is_read() {
+    let xmp = format!(
+        "<x:xmpmeta xmlns:x=\"adobe:ns:meta/\"><rdf:RDF xmlns:rdf=\"http://www.w3.org/1999/02/22-rdf-syntax-ns#\"><rdf:Description {ID}><pdfaid:part>
+{}2</pdfaid:part></rdf:Description></rdf:RDF></x:xmpmeta>",
+        " ".repeat(300)
+    );
+    assert_eq!(with_metadata(&xmp).pdfa_part(), Some(2));
+}
+
+#[test]
+fn the_section_offsets_are_listed_unless_the_table_was_rebuilt() {
+    let pdf = TestPdf::with_pages(1);
+    let document = open(pdf.finish());
+    assert_eq!(document.section_offsets(), [pdf.position()]);
+    let broken = TestPdf::with_pages(1).finish_with("/Root 1 0 R", 0, "999999");
+    let document = open(broken);
+    assert!(document.xref_rebuilt());
+    assert!(document.section_offsets().is_empty());
+}

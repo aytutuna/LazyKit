@@ -394,6 +394,16 @@ impl Document {
         self.xref_rebuilt
     }
 
+    /// Where each cross-reference section of the file starts, newest first; empty after a rebuild, when the file's own
+    /// sections cannot be told.
+    pub fn section_offsets(&self) -> &[u64] {
+        if self.xref_rebuilt {
+            &[]
+        } else {
+            &self.sections
+        }
+    }
+
     /// The first object number not used: the trailer's /Size, or one past the highest listed when that is more.
     pub fn next_object_number(&self) -> u32 {
         self.next_object_number

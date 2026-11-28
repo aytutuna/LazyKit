@@ -45,6 +45,11 @@ fn collect(stack: &mut [Open], chunk: &str) {
         .iter_mut()
         .filter(|o| o.part.is_some() || o.conformance.is_some())
     {
+        let chunk = if open.text.is_empty() {
+            chunk.trim_start()
+        } else {
+            chunk
+        };
         let mut take = chunk.len().min(MAX_VALUE.saturating_sub(open.text.len()));
         while !chunk.is_char_boundary(take) {
             take -= 1;
