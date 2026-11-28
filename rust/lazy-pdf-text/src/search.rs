@@ -154,6 +154,12 @@ impl TextSearch {
             } else {
                 query.to_string()
             };
+            // The text is folded the way plain search folds it, so a dotted capital I in the pattern is an i.
+            let folded = if options.match_case {
+                folded
+            } else {
+                folded.replace('\u{130}', "i")
+            };
             if folded.chars().count() > MAX_PATTERN {
                 return Err(BadPattern("too long".into()));
             }

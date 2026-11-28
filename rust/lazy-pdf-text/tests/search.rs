@@ -103,3 +103,14 @@ fn a_search_stops_at_its_limits() {
     };
     assert!(search.matches_limited(&page, false, &cancel).cancelled);
 }
+
+#[test]
+fn regex_mode_folds_the_dotted_capital_i_like_plain_mode() {
+    let options = TextSearchOptions {
+        regex: true,
+        ..TextSearchOptions::default()
+    };
+    let page = page(&["istanbul"]);
+    let found = TextSearch::find(&page, "\u{130}stanbul", &options).unwrap();
+    assert_eq!(found.len(), 1);
+}
