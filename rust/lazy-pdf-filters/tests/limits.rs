@@ -191,3 +191,27 @@ fn jbig2_adaptive_pixel_may_lie_after_the_pixel_it_codes() {
         assert!(jbig2(&data, 0, 0).is_ok());
     }
 }
+
+#[test]
+fn bad_predictor_parameters_fail_before_the_data_is_inflated() {
+    let packed = lazy_pdf_filters::encode::flate(&vec![0u8; 1 << 20], 6);
+    let mut parms = Params::new();
+    parms
+        .set("Predictor", Value::Int(12))
+        .set("Colors", Value::Int(100_000));
+    let filter = [Filter::new("FlateDecode", Some(parms))];
+    let e = decode(&packed, &filter, 1 << 10).unwrap_err();
+    assert_eq!(e.problem, Problem::Damaged);
+    assert_eq!(e.message, "A predictor with 100000 colors.");
+}
+
+#[test]
+fn bad_predictor_parameters_on_data_that_decodes_to_nothing_stay_empty() {
+    let packed = lazy_pdf_filters::encode::flate(b"", 6);
+    let mut parms = Params::new();
+    parms
+        .set("Predictor", Value::Int(12))
+        .set("Colors", Value::Int(100_000));
+    let filter = [Filter::new("FlateDecode", Some(parms))];
+    assert_eq!(decode(&packed, &filter, 1 << 10).unwrap(), b"");
+}

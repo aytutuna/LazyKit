@@ -100,6 +100,22 @@ pub fn uses(filters: &[Filter], name: &str) -> bool {
     filters.iter().any(|f| f.name == name)
 }
 
+/// What `decode` gives, with the predictor undone. Parameters that cannot be used fail before the data is
+/// decoded, except that data decoding to nothing stays empty, as in the reference.
+fn predicted(
+    parms: Option<&Params>,
+    max_size: u64,
+    decode: impl Fn(u64) -> Result<Vec<u8>>,
+) -> Result<Vec<u8>> {
+    if let Err(error) = flate::check_predictor(parms) {
+        return match decode(1) {
+            Ok(empty) if empty.is_empty() => Ok(empty),
+            _ => Err(error),
+        };
+    }
+    flate::predict(decode(max_size)?, parms)
+}
+
 pub fn run(data: &[u8], filters: &[Filter], options: &Options) -> Result<Decoded> {
     let max_size = options.max_size;
     let mut data = data.to_vec();
@@ -107,11 +123,13 @@ pub fn run(data: &[u8], filters: &[Filter], options: &Options) -> Result<Decoded
         let parms = filter.parms.as_ref();
         match filter.name.as_str() {
             "FlateDecode" | "Fl" => {
-                data = flate::predict(flate::inflate(&data, max_size, options.strict)?, parms)?;
+                data = predicted(parms, max_size, |limit| {
+                    flate::inflate(&data, limit, options.strict)
+                })?;
             }
             "LZWDecode" | "LZW" => {
                 let early = params::int(parms, "EarlyChange", 1) != 0;
-                data = flate::predict(lzw::decode(&data, early, max_size)?, parms)?;
+                data = predicted(parms, max_size, |limit| lzw::decode(&data, early, limit))?;
             }
             "ASCIIHexDecode" | "AHx" => data = ascii::decode_hex(&data, max_size)?,
             "ASCII85Decode" | "A85" => data = ascii::decode_85(&data, max_size)?,

@@ -112,9 +112,31 @@ fn inflate_from(data: &[u8], max_size: u64, strict: bool) -> Result<(Vec<u8>, En
 /// Undoes a /Predictor (ISO 32000-1 7.4.4.4): 2 (TIFF) or 10-15 (PNG, each row with its own filter
 /// byte), at 1, 2, 4, 8 or 16 bits per component. A last row cut short is kept as far as it goes.
 pub fn predict(mut data: Vec<u8>, parms: Option<&Params>) -> Result<Vec<u8>> {
-    let predictor = params::int(parms, "Predictor", 1);
-    if predictor <= 1 || data.is_empty() {
+    if data.is_empty() {
         return Ok(data);
+    }
+    let Some((predictor, colors, bits, columns)) = check_predictor(parms)? else {
+        return Ok(data);
+    };
+    // A row longer than the data is one short row; this keeps a bad /Columns from allocating.
+    let row_bits = colors as u64 * bits as u64 * columns as u64;
+    let row_length = (row_bits.div_ceil(8)).min(data.len() as u64) as usize;
+    if predictor == 2 {
+        predict_tiff(&mut data, row_length, colors, bits, columns);
+        Ok(data)
+    } else {
+        let pixel = (colors * bits).div_ceil(8).min(row_length);
+        Ok(predict_png(&data, row_length, pixel))
+    }
+}
+
+/// The predictor, colors, bits per component and columns the parameters ask for, none when there is no
+/// predictor, or an error when they cannot be used. Checked before a stream is decoded, so that bad parameters
+/// do not cost an inflate.
+pub fn check_predictor(parms: Option<&Params>) -> Result<Option<(i32, usize, usize, usize)>> {
+    let predictor = params::int(parms, "Predictor", 1);
+    if predictor <= 1 {
+        return Ok(None);
     }
     let colors = params::int(parms, "Colors", 1).max(1);
     if colors > MAX_COLORS {
@@ -134,17 +156,12 @@ pub fn predict(mut data: Vec<u8>, parms: Option<&Params>) -> Result<Vec<u8>> {
             "Predictor {predictor} is not supported."
         )));
     }
-    let (colors, bits, columns) = (colors as usize, bits as usize, columns as usize);
-    // A row longer than the data is one short row; this keeps a bad /Columns from allocating.
-    let row_bits = colors as u64 * bits as u64 * columns as u64;
-    let row_length = (row_bits.div_ceil(8)).min(data.len() as u64) as usize;
-    if predictor == 2 {
-        predict_tiff(&mut data, row_length, colors, bits, columns);
-        Ok(data)
-    } else {
-        let pixel = (colors * bits).div_ceil(8).min(row_length);
-        Ok(predict_png(&data, row_length, pixel))
-    }
+    Ok(Some((
+        predictor,
+        colors as usize,
+        bits as usize,
+        columns as usize,
+    )))
 }
 
 fn predict_tiff(data: &mut [u8], row_length: usize, colors: usize, bits: usize, columns: usize) {
