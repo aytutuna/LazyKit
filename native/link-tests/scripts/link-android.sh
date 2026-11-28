@@ -15,5 +15,11 @@ cargo ndk -t arm64-v8a -t x86_64 -P 26 -o "$out/jniLibs" build --locked -p lazy-
 cargo run --locked -q -p uniffi-bindgen -- generate --library "$out/jniLibs/arm64-v8a/liblazy_link_ffi.so" --language kotlin --out-dir "$out/kotlin" --no-format
 
 cd "$root/native/link-tests/android"
+status=0
 ./gradlew :linktests:connectedDebugAndroidTest -PlinkOut="$out" \
-  -Pandroid.testInstrumentationRunnerArguments.relayUrl="${1:-https://10.0.2.2:8788/relay/v1}" --console=plain
+  -Pandroid.testInstrumentationRunnerArguments.relayUrl="${1:-https://10.0.2.2:8788/relay/v1}" --console=plain || status=$?
+# Gradle only says that tests failed; the reasons are in the result files.
+if [ "$status" != 0 ]; then
+  find linktests/build/outputs/androidTest-results -name '*.xml' -exec grep -h -A12 '<failure' {} + || true
+fi
+exit "$status"
