@@ -15,7 +15,6 @@ const PASSWORD_WINDOW_MS = 15 * MINUTE;
 const PASSWORD_FAILS_CALLER = 10;
 const PASSWORD_SLOW_AFTER = 40;
 const PASSWORD_FAILS_TOTAL = 400;
-const SWEEP_MS = 3_600_000;
 const UNDO_MS = 7 * DAY;
 
 export type Purpose = "signup" | "signin" | "link" | "email" | "emailold" | "undo";
@@ -70,7 +69,8 @@ export class AddressCore {
 
   private async save(): Promise<void> {
     await this.store.put(this.s);
-    await this.store.scheduleIfNone(this.clock() + SWEEP_MS);
+    const next = this.nextWake();
+    if (next !== undefined) await this.store.wakeBy(next);
   }
 
   account(): string | undefined {
@@ -279,13 +279,23 @@ export class AddressCore {
     if (windowIdle(this.s.code, now, DAY)) this.s.misses = undefined;
     this.codeCallers.prune(now);
     this.passwordCallers.prune(now);
-    const quiet = this.s.sends.length === 0 && Object.keys(this.s.codes).length === 0 && windowIdle(this.s.code, now, DAY) && windowIdle(this.s.password, now, PASSWORD_WINDOW_MS);
-    if (quiet && !this.s.account) {
+    if (this.nextWake() === undefined && !this.s.account) {
       this.s = fresh();
       await this.store.erase();
       return;
     }
     await this.store.put(this.s);
-    await this.store.scheduleIfNone(now + SWEEP_MS);
+    const next = this.nextWake();
+    if (next !== undefined) await this.store.wakeBy(next);
+  }
+
+  // The first moment something kept here runs out; nothing to wake for when nothing will.
+  private nextWake(): number | undefined {
+    const times: number[] = [];
+    for (const c of Object.values(this.s.codes)) times.push(c.expires);
+    if (this.s.sends.length > 0) times.push(Math.min(...this.s.sends) + DAY);
+    if (this.s.code.count > 0) times.push(this.s.code.since + DAY);
+    if (this.s.password.count > 0) times.push(this.s.password.since + PASSWORD_WINDOW_MS);
+    return times.length > 0 ? Math.min(...times) + 1 : undefined;
   }
 }

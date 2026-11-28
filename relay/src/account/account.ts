@@ -7,8 +7,9 @@ export const durableStore = <T>(ctx: DurableObjectState): Store<T> => ({
   get: () => ctx.storage.get<T>("s"),
   put: (v) => ctx.storage.put("s", v),
   erase: () => ctx.storage.deleteAll(),
-  scheduleIfNone: async (at) => {
-    if ((await ctx.storage.getAlarm()) === null) await ctx.storage.setAlarm(at);
+  wakeBy: async (at) => {
+    const booked = await ctx.storage.getAlarm();
+    if (booked === null || booked > at) await ctx.storage.setAlarm(at);
   },
   cancel: () => ctx.storage.deleteAlarm(),
 });

@@ -18,8 +18,8 @@ export class MemoryStore<T> implements Store<T> {
   async erase() {
     this.value = undefined;
   }
-  async scheduleIfNone(at: number) {
-    this.alarm ??= at;
+  async wakeBy(at: number) {
+    if (this.alarm === undefined || this.alarm > at) this.alarm = at;
   }
   async cancel() {
     this.alarm = undefined;

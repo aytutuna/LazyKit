@@ -3,8 +3,8 @@ export interface Store<T> {
   get(): Promise<T | undefined>;
   put(value: T): Promise<void>;
   erase(): Promise<void>;
-  // Asks for a sweep at that time unless one is already booked.
-  scheduleIfNone(at: number): Promise<void>;
+  // Asks for a sweep by that time: set if none is booked or the booked one is later.
+  wakeBy(at: number): Promise<void>;
   cancel(): Promise<void>;
 }
 

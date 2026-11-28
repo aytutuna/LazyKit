@@ -73,7 +73,14 @@ export class AccountCore {
 
   private async save(): Promise<void> {
     await this.store.put(this.s!);
-    await this.store.scheduleIfNone(this.clock() + DAY);
+    const next = this.nextWake();
+    if (next !== undefined) await this.store.wakeBy(next);
+  }
+
+  // When the first session lapses; no wake while there is none to lapse.
+  private nextWake(): number | undefined {
+    const times = this.s!.sessions.map((x) => Math.min(x.seen + SESSION_IDLE_MS, x.created + SESSION_MAX_MS));
+    return times.length > 0 ? Math.min(...times) + 1 : undefined;
   }
 
   // Tells the person by mail that something about their sign-in changed; a failure to send is ignored.
@@ -253,7 +260,6 @@ export class AccountCore {
     if (!s) return;
     const now = this.clock();
     s.sessions = s.sessions.filter((x) => now - x.seen <= SESSION_IDLE_MS && now - x.created <= SESSION_MAX_MS);
-    await this.store.put(s);
-    await this.store.scheduleIfNone(now + DAY);
+    await this.save();
   }
 }

@@ -123,16 +123,30 @@ describe("second review findings", () => {
     expect(answers).toContain("limited");
   });
 
-  it.fails("Q10 a bound address wakes every hour forever", async () => {
+  it("Q10 a bound address and an account wake only when something runs out", async () => {
     const rig = memoryService();
     await signUp(rig, "own10@example.com");
     const a = [...rig.addresses.values()][0];
+    const sentAt = a.store.value!.sends[0];
     for (let i = 0; i < 5; i++) {
       rig.clock.now += 3_600_000;
       a.store.alarm = undefined;
       await (a.core as any).sweep();
-      expect(a.store.alarm).toBeUndefined();
+      expect(a.store.alarm).toBe(sentAt + 86_400_000 + 1);
     }
+    rig.clock.now += 86_400_000;
+    a.store.alarm = undefined;
+    await (a.core as any).sweep();
+    expect(a.store.alarm).toBeUndefined();
+    expect(a.store.value!.account).toBeDefined();
+    const acct = [...rig.accounts.values()][0];
+    expect(acct.store.alarm).toBeGreaterThan(rig.clock.now);
+    rig.clock.now += 31 * 86_400_000;
+    await (acct.core as any).sweep();
+    expect(acct.store.value!.sessions).toEqual([]);
+    acct.store.alarm = undefined;
+    await (acct.core as any).sweep();
+    expect(acct.store.alarm).toBeUndefined();
   });
 
   it("Q11 one nonce signs in two different identities", async () => {
