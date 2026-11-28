@@ -11,7 +11,8 @@ crate-type = ["cdylib", "staticlib", "lib"]
 
 [dependencies]
 async-trait = "0.1"
-lazy-link = { path = "../lazy-link" }
+lazy-link = { path = "../lazy-link", features = ["relay"] }
 sha2 = "0.10"
 thiserror = "2"
-uniffi = { workspace = true }
+tokio = { version = "1.54.1", features = ["sync", "io-util", "macros"] }
+uniffi = { workspace = true, features = ["tokio"] }

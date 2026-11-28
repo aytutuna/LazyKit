@@ -4,6 +4,7 @@
 use std::sync::Arc;
 
 mod proof;
+mod relay;
 
 uniffi::setup_scaffolding!();
 

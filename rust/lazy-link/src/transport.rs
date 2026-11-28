@@ -59,18 +59,27 @@ pub async fn open(
     pin: Option<&[u8]>,
 ) -> Result<DuplexStream, TransportError> {
     let conn = transport.connect(host, port, server_name).await?;
-    if let Some(pin) = pin {
-        let spki = conn.peer_spki().ok_or_else(|| {
-            TransportError("the system gave no certificate to check the pin against".into())
-        })?;
-        if !bool::from(spki_fingerprint(&spki).as_slice().ct_eq(pin)) {
-            conn.close().await;
-            return Err(TransportError(
-                "the server's certificate is not the pinned one".into(),
-            ));
-        }
+    if let Some(pin) = pin
+        && let Err(e) = check_pin(conn.peer_spki().as_deref(), pin)
+    {
+        conn.close().await;
+        return Err(e);
     }
     Ok(pump(conn))
+}
+
+/// Fails unless `spki`, a certificate's public key in DER, hashes to `pin`.
+pub fn check_pin(spki: Option<&[u8]>, pin: &[u8]) -> Result<(), TransportError> {
+    let spki = spki.ok_or_else(|| {
+        TransportError("the system gave no certificate to check the pin against".into())
+    })?;
+    if bool::from(spki_fingerprint(spki).as_slice().ct_eq(pin)) {
+        Ok(())
+    } else {
+        Err(TransportError(
+            "the server's certificate is not the pinned one".into(),
+        ))
+    }
 }
 
 // Two tasks carry bytes between the connection and the pipe's far end; they end when either side does.

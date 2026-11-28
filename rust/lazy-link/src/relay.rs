@@ -848,6 +848,11 @@ impl RelayStream {
     pub fn close_code(&self) -> Option<u16> {
         self.close.get().copied()
     }
+
+    /// The cell [`close_code`](Self::close_code) reads, for a caller that has split the stream.
+    pub fn close_cell(&self) -> Arc<OnceLock<u16>> {
+        self.close.clone()
+    }
 }
 
 impl Drop for RelayStream {
