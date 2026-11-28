@@ -1,5 +1,7 @@
 #![allow(dead_code)]
 
+pub mod cff_builder;
+
 use std::path::PathBuf;
 
 use lazy_pdf_fonts::Outline;

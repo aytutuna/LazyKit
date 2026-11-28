@@ -112,3 +112,21 @@ pub fn put_u32(d: &mut [u8], o: usize, v: u32) {
 pub fn to_int32(v: f64) -> i64 {
     v as i32 as i64
 }
+
+/// `double.TryParse` for the characters a number is written with.
+pub fn parse_double(text: &str) -> Option<f64> {
+    let body = text.trim_matches(|c: char| c == ' ' || ('\t'..='\r').contains(&c));
+    if body.is_empty() || !body.chars().all(|c| "+-.0123456789eE".contains(c)) {
+        return None;
+    }
+    body.parse().ok()
+}
+
+/// Swift min and max on doubles: a NaN first argument stays.
+pub fn fmin(a: f64, b: f64) -> f64 {
+    if b < a { b } else { a }
+}
+
+pub fn fmax(a: f64, b: f64) -> f64 {
+    if b > a { b } else { a }
+}
