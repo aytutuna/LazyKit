@@ -25,6 +25,11 @@ impl Collector {
         self.objects.len()
     }
 
+    /// Drops the objects numbered above `count`: what a failed piece of work allocated.
+    pub fn truncate(&mut self, count: usize) {
+        self.objects.truncate(count);
+    }
+
     pub fn count(&self) -> usize {
         self.objects.len()
     }

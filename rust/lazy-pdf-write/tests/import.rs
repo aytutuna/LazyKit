@@ -137,7 +137,12 @@ fn a_page_becomes_a_form_with_its_content() {
     assert!(dict.contains("/Subtype /Form"), "{dict}");
     assert!(dict.contains("/BBox [0 0 612 792]"), "{dict}");
     assert!(content.contains("0 0.6 0 rg 0 0 612 792 re f"), "{content}");
-    assert!(content.starts_with("q\n") && content.contains("\nQ\n"));
+    assert!(
+        content.trim()
+            == "0 0.6 0 rg 0 0 612 792 re f
+1 1 0 rg 0 692 612 100 re f",
+        "{content}"
+    );
 }
 
 #[test]
@@ -304,4 +309,185 @@ fn a_reference_loop_in_the_resources_is_copied_once() {
     let mut out = new_out();
     import_page(&mut document, &mut Copier::new(), 0, None, &mut out).unwrap();
     assert_eq!(out.count(), 5);
+}
+
+/// A file of binary objects (numbers from 1) with a correct table.
+fn file_bytes(objects: &[Vec<u8>]) -> Vec<u8> {
+    let mut out = b"%PDF-1.4\n".to_vec();
+    let mut offsets = Vec::new();
+    for (i, body) in objects.iter().enumerate() {
+        offsets.push(out.len());
+        out.extend(format!("{} 0 obj\n", i + 1).bytes());
+        out.extend(body);
+        out.extend(b"\nendobj\n");
+    }
+    let start = out.len();
+    out.extend(format!("xref\n0 {}\n0000000000 65535 f \n", objects.len() + 1).bytes());
+    for offset in offsets {
+        out.extend(format!("{offset:010} 00000 n \n").bytes());
+    }
+    out.extend(
+        format!(
+            "trailer\n<< /Size {} /Root 1 0 R >>\nstartxref\n{start}\n%%EOF\n",
+            objects.len() + 1
+        )
+        .bytes(),
+    );
+    out
+}
+
+/// A document of `pages` pages; page `i` has the resources of object `resources[i]`, a font dictionary naming `fonts[i]`
+/// objects of its own (or shared, when two pages name the same resources object).
+fn crowded(fonts_in_resources: &[usize], shared: bool) -> Vec<u8> {
+    let pages = fonts_in_resources.len();
+    let mut objects: Vec<Vec<u8>> = vec![
+        b"<< /Type /Catalog /Pages 2 0 R >>".to_vec(),
+        Vec::new(),
+        stream_bytes("", "0 g"),
+    ];
+    let kids: Vec<String> = (0..pages).map(|i| format!("{} 0 R", 4 + i)).collect();
+    objects[1] = format!(
+        "<< /Type /Pages /Kids [{}] /Count {pages} >>",
+        kids.join(" ")
+    )
+    .into_bytes();
+    // Objects 4.. are the pages, then one resources object per page (one in all when shared), then the fonts.
+    let resource_count = if shared { 1 } else { pages };
+    let first_resources = 4 + pages;
+    let mut next_font = first_resources + resource_count;
+    for i in 0..pages {
+        let resources = first_resources + if shared { 0 } else { i };
+        objects.push(
+            format!("<< /Type /Page /Parent 2 0 R /MediaBox [0 0 100 100] /Resources {resources} 0 R /Contents 3 0 R >>")
+                .into_bytes(),
+        );
+    }
+    let mut font_objects = Vec::new();
+    for r in 0..resource_count {
+        let count = fonts_in_resources[r];
+        let names: Vec<String> = (0..count)
+            .map(|f| format!("/F{f} {} 0 R", next_font + f))
+            .collect();
+        objects.push(format!("<< /Font << {} >> >>", names.join(" ")).into_bytes());
+        for _ in 0..count {
+            font_objects.push(b"<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>".to_vec());
+        }
+        next_font += count;
+    }
+    objects.extend(font_objects);
+    file_bytes(&objects)
+}
+
+fn stream_bytes(entries: &str, data: &str) -> Vec<u8> {
+    stream(entries, data).into_bytes()
+}
+
+#[test]
+fn a_failed_import_leaves_nothing_dangling() {
+    // Two pages share one resources object that reaches more than a page may.
+    let mut document = open(crowded(&[100_500], true));
+    let mut out = new_out();
+    let mut copier = Copier::new();
+    let before = out.count();
+    for _ in 0..2 {
+        let error = import_page(&mut document, &mut copier, 0, None, &mut out).unwrap_err();
+        assert_eq!(error, ImportError::TooLarge);
+        assert_eq!(
+            out.count(),
+            before,
+            "what the failed import allocated is gone"
+        );
+    }
+}
+
+#[test]
+fn the_limits_are_for_one_page_not_the_whole_sheet() {
+    // Each page reaches 60,000 objects of its own: the second import alone is within the limit.
+    let mut document = open(crowded(&[60_000, 60_000], false));
+    let mut out = new_out();
+    let mut copier = Copier::new();
+    import_page(&mut document, &mut copier, 0, None, &mut out).unwrap();
+    import_page(&mut document, &mut copier, 1, None, &mut out).unwrap();
+    assert!(out.count() > 120_000);
+}
+
+#[test]
+fn a_single_content_stream_is_copied_as_stored() {
+    let compressed = lazy_pdf_filters::encode::flate(b"0 0 1 rg 0 0 50 50 re f", 6);
+    let mut stream_object = format!(
+        "<< /Filter /FlateDecode /Length {} >>\nstream\n",
+        compressed.len()
+    )
+    .into_bytes();
+    stream_object.extend(&compressed);
+    stream_object.extend(b"\nendstream");
+    let pdf = file_bytes(&[
+        b"<< /Type /Catalog /Pages 2 0 R >>".to_vec(),
+        b"<< /Type /Pages /Kids [3 0 R] /Count 1 >>".to_vec(),
+        b"<< /Type /Page /Parent 2 0 R /MediaBox [0 0 100 100] /Contents 4 0 R >>".to_vec(),
+        stream_object,
+    ]);
+    let mut document = open(pdf);
+    let mut out = new_out();
+    let form = import_page(&mut document, &mut Copier::new(), 0, None, &mut out).unwrap();
+    let (dict, content) = content_of(&form, out);
+    assert!(dict.contains("/Filter /FlateDecode"), "{dict}");
+    assert_eq!(content, "0 0 1 rg 0 0 50 50 re f");
+}
+
+#[test]
+fn pages_naming_one_flate_bomb_cost_its_expansion_once() {
+    // 40 MB of blanks in a few kilobytes, named through an array so that it has to be decoded.
+    let bomb = lazy_pdf_filters::encode::flate(&vec![b' '; 40 << 20], 6);
+    let mut stream_object = format!(
+        "<< /Filter /FlateDecode /Length {} >>\nstream\n",
+        bomb.len()
+    )
+    .into_bytes();
+    stream_object.extend(&bomb);
+    stream_object.extend(b"\nendstream");
+    let page =
+        b"<< /Type /Page /Parent 2 0 R /MediaBox [0 0 100 100] /Contents [4 0 R] >>".to_vec();
+    let pdf = file_bytes(&[
+        b"<< /Type /Catalog /Pages 2 0 R >>".to_vec(),
+        b"<< /Type /Pages /Kids [3 0 R 5 0 R 6 0 R] /Count 3 >>".to_vec(),
+        page.clone(),
+        stream_object,
+        page.clone(),
+        page,
+    ]);
+    let mut document = open(pdf);
+    let mut out = new_out();
+    let mut copier = Copier::new();
+    import_page(&mut document, &mut copier, 0, None, &mut out).unwrap();
+    for index in [1, 2] {
+        let error = import_page(&mut document, &mut copier, index, None, &mut out).unwrap_err();
+        assert_eq!(error, ImportError::TooLarge);
+    }
+}
+
+#[test]
+fn an_annotation_with_states_takes_the_first_when_none_is_chosen_and_names_do_not_collide() {
+    let [catalog, pages] = catalog_and_pages("3 0 R", 1);
+    let on = stream(
+        "/Type /XObject /Subtype /Form /BBox [0 0 10 10]",
+        "0 g 0 0 10 10 re f",
+    );
+    let pdf = file(&[
+        &catalog,
+        &pages,
+        "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 100 100] /Resources << /XObject << /LpAnnot0 6 0 R >> >> /Annots [4 0 R] >>",
+        "<< /Type /Annot /Subtype /Widget /Rect [0 0 10 10] /F 4 /AP << /N << /On 5 0 R >> >> >>",
+        &on,
+        "<< /Type /XObject /Subtype /Form /BBox [0 0 1 1] /Length 0 >>\nstream\n\nendstream",
+    ]);
+    let mut document = open(pdf);
+    let mut out = new_out();
+    let form = import_page(&mut document, &mut Copier::new(), 0, None, &mut out).unwrap();
+    let (dict, content) = content_of(&form, out);
+    assert!(content.contains("/LpAnnot0_ Do"), "{content}");
+    assert!(
+        dict.contains("/LpAnnot0 ") && dict.contains("/LpAnnot0_ "),
+        "{dict}"
+    );
 }

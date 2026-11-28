@@ -16,8 +16,6 @@ const MAX_BYTES: usize = 256 << 20;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum ImportError {
-    /// The file is encrypted; its streams cannot be read here.
-    Encrypted,
     /// The document has no such page.
     NoPage,
     /// The page reaches more than a page should.
@@ -27,7 +25,6 @@ pub enum ImportError {
 impl std::fmt::Display for ImportError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.write_str(match self {
-            ImportError::Encrypted => "The PDF is encrypted.",
             ImportError::NoPage => "The PDF has no such page.",
             ImportError::TooLarge => "The page reaches too much to copy.",
         })
@@ -98,7 +95,14 @@ pub struct Form {
 pub struct Copier {
     map: HashMap<u32, usize>,
     queue: Vec<(u32, usize)>,
+    /// What the import in progress added to `map`, to take back if it fails.
+    journal: Vec<u32>,
+    /// Where the output stood when the import in progress began.
+    start: usize,
+    /// Raw bytes the import in progress has copied.
     bytes: usize,
+    /// Content decoded for all the pages so far.
+    decoded: usize,
 }
 
 impl Copier {
@@ -112,6 +116,7 @@ impl Copier {
         }
         let new = out.alloc();
         self.map.insert(number, new);
+        self.journal.push(number);
         self.queue.push((number, new));
         new
     }
@@ -143,7 +148,7 @@ impl Copier {
     /// Copies everything reached so far.
     fn drain(&mut self, document: &mut Document, out: &mut Collector) -> Result<(), ImportError> {
         while let Some((source, target)) = self.queue.pop() {
-            if out.count() > MAX_OBJECTS {
+            if out.count() - self.start > MAX_OBJECTS {
                 return Err(ImportError::TooLarge);
             }
             let object = document.get(source);
@@ -255,7 +260,12 @@ fn annotation_content(
             && let Object::Dict(states) = &*resolved
         {
             let state = document.name_of(annot, "AS");
-            appearance = match state.and_then(|s| states.get_bytes(&s).cloned()) {
+            // Without /AS the first state stands.
+            let chosen = match state {
+                Some(s) => states.get_bytes(&s).cloned(),
+                None => states.entries().first().map(|(_, v)| v.clone()),
+            };
+            appearance = match chosen {
                 Some(found) => found,
                 None => continue,
             };
@@ -303,7 +313,10 @@ fn annotation_content(
             rect.left - min_x * sx,
             rect.bottom - min_y * sy,
         ];
-        let name = format!("LpAnnot{n}");
+        let mut name = format!("LpAnnot{n}");
+        while xobjects.contains_key(&name) {
+            name.push('_');
+        }
         let target = copier.target(number, out);
         xobjects.add(Name::new(&name), Object::reference(target as u32, 0));
         content.push_str(&format!("q {} cm /{name} Do Q\n", matrix_text(a)));
@@ -311,8 +324,15 @@ fn annotation_content(
     content
 }
 
+/// How much content decoding one source may cost in all: a share of the file's own size, so one stream named by
+/// thousands of pages does not cost its full expansion each time.
+fn decoded_limit(document: &Document) -> usize {
+    (16 << 20) + 8 * document.length()
+}
+
 /// Page `index` of `document` as a form in `out`. `part` is the area shown, `(x, y, width, height)` in points on the page
-/// as it is shown (y down, after its /Rotate); None is all of it.
+/// as it is shown (y down, after its /Rotate); None is all of it. The limits are for this page alone. A page that fails
+/// leaves `out` and `copier` as they were.
 pub fn import_page(
     document: &mut Document,
     copier: &mut Copier,
@@ -320,9 +340,27 @@ pub fn import_page(
     part: Option<(f64, f64, f64, f64)>,
     out: &mut Collector,
 ) -> Result<Form, ImportError> {
-    if document.is_encrypted() {
-        return Err(ImportError::Encrypted);
+    copier.journal.clear();
+    copier.start = out.count();
+    copier.bytes = 0;
+    let made = import_inner(document, copier, index, part, out);
+    if made.is_err() {
+        for number in copier.journal.drain(..) {
+            copier.map.remove(&number);
+        }
+        copier.queue.clear();
+        out.truncate(copier.start);
     }
+    made
+}
+
+fn import_inner(
+    document: &mut Document,
+    copier: &mut Copier,
+    index: usize,
+    part: Option<(f64, f64, f64, f64)>,
+    out: &mut Collector,
+) -> Result<Form, ImportError> {
     let pages = document.pages();
     let page = pages.get(index).ok_or(ImportError::NoPage)?;
     let geo = geometry(document, page);
@@ -342,10 +380,45 @@ pub fn import_page(
         resources.insert("XObject", Object::Dict(xobjects));
     }
 
-    let mut content = b"q\n".to_vec();
-    content.extend(page.contents(document));
-    content.extend(b"\nQ\n");
-    content.extend(annotations.as_bytes());
+    // One content stream and nothing to add: the form takes the stream as it is stored, with its filters.
+    let page_dict = page.dict(document);
+    let single = match page_dict.get("Contents") {
+        Some(Object::Ref(r)) if annotations.is_empty() => match document.get(r.number).as_deref() {
+            Some(Object::Stream(stream)) => Some(stream.clone()),
+            _ => None,
+        },
+        _ => None,
+    };
+    let (data, stored_entries) = match single {
+        Some(stream) => {
+            let data = document.raw_data(&stream);
+            copier.bytes += data.len();
+            if copier.bytes > MAX_BYTES {
+                return Err(ImportError::TooLarge);
+            }
+            let mut kept = Dict::new();
+            for key in ["Filter", "DecodeParms"] {
+                if let Some(value) = stream.dict.get(key) {
+                    kept.add(Name::new(key), copier.rewrite(value, out));
+                }
+            }
+            let mut text = Vec::new();
+            kept.write_to(&mut text);
+            (data, text[2..text.len() - 2].to_vec())
+        }
+        None => {
+            if copier.decoded >= decoded_limit(document) {
+                return Err(ImportError::TooLarge);
+            }
+            let page_content = page.contents(document);
+            copier.decoded += page_content.len();
+            let mut content = b"q\n".to_vec();
+            content.extend(page_content);
+            content.extend(b"\nQ\n");
+            content.extend(annotations.as_bytes());
+            (flate(&content, 6), b"/Filter /FlateDecode".to_vec())
+        }
+    };
 
     // The part, back in the page's own space, within its crop box.
     let (x1, y1) = geo.from_shown(part.0, part.1);
@@ -363,9 +436,10 @@ pub fn import_page(
     )
     .into_bytes();
     entries.extend(resource_text);
-    entries.extend(b" /Filter /FlateDecode");
+    entries.push(b' ');
+    entries.extend(stored_entries);
     let object = out.alloc();
-    out.set_stream(object, entries, flate(&content, 6));
+    out.set_stream(object, entries, data);
     copier.drain(document, out)?;
     Ok(Form {
         object,
