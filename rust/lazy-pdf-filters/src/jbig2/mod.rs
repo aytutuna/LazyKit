@@ -885,6 +885,10 @@ impl Decoder {
         }
         self.default_pixel = (flags >> 2) & 1;
         let rows = if self.height_known { height } else { 0 };
+        // Without the size of the picture from outside, the page's own size ties the budget instead.
+        if self.height_known && !self.in_globals && (self.fit_width <= 0 || self.fit_height <= 0) {
+            self.budget.for_page(width * height);
+        }
         let mut page = Bitmap::new(width, rows, &mut self.budget)?;
         self.rows = rows as usize;
         if self.default_pixel != 0 {

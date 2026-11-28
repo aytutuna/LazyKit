@@ -55,6 +55,11 @@ impl Budget {
         }
     }
 
+    /// The picture is not known from outside: the page the stream itself declares stands in for it.
+    pub fn for_page(&mut self, page_pixels: i64) {
+        self.fit(page_pixels);
+    }
+
     /// With the pixels of the picture the page is fitted to, what a decode may make is a multiple of
     /// that and a little more: a dictionary that says 1 by 1 does not get a page of millions of
     /// pixels made for it and cut down.
