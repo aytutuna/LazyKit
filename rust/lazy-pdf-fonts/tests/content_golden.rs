@@ -169,7 +169,12 @@ fn font_lines(rest: &str) -> Vec<String> {
         .chars()
         .filter_map(|c| c.to_digit(16).map(|d| d as u8))
         .collect();
-    let input: Vec<u8> = digits.chunks_exact(2).map(|p| p[0] << 4 | p[1]).collect();
+    let input: Vec<u8> = digits
+        .as_chunks::<2>()
+        .0
+        .iter()
+        .map(|p| p[0] << 4 | p[1])
+        .collect();
     for c in font.decode(&input) {
         lines.push(format!(
             "char code={} len={} cid={} w={} u={} space={} va={} ox={} oy={}",
