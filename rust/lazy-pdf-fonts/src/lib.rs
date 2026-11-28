@@ -4,6 +4,8 @@
 mod bytes;
 mod names;
 mod outline;
+mod tounicode;
 
 pub use names::{cff_strings, mac_glyphs, standard_encoding, standard_encoding_sids};
 pub use outline::{Bounds, Outline, OutlineOp, Segment};
+pub use tounicode::{OutOfRange, write_to_unicode};
