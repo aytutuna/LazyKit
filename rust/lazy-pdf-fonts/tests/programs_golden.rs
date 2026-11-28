@@ -3,8 +3,8 @@ mod common;
 use common::cff_builder::{self, Part};
 use common::{b, check, golden, n, outline, s};
 use lazy_pdf_fonts::{
-    Bounds, CffFont, SubsetStatus, TrueTypeFont, cff_strings, mac_glyphs, standard_encoding,
-    standard_encoding_sids, subset,
+    Bounds, CffFont, SubsetStatus, TrueTypeFont, Type1Font, cff_strings, mac_glyphs,
+    standard_encoding, standard_encoding_sids, subset,
 };
 
 fn standard_names_dump() -> String {
@@ -49,7 +49,9 @@ fn join<T>(items: impl IntoIterator<Item = T>, f: impl Fn(T) -> String) -> Strin
 
 fn unhex(text: &str) -> Vec<u8> {
     text.as_bytes()
-        .chunks_exact(2)
+        .as_chunks::<2>()
+        .0
+        .iter()
         .map(|c| u8::from_str_radix(std::str::from_utf8(c).unwrap(), 16).unwrap_or(0))
         .collect()
 }
@@ -394,4 +396,144 @@ fn embedded_dump(data: &[u8]) -> String {
 fn embedded_font_is_the_golden_file() {
     let font = common::golden_bytes("programs/synthetic.ttf");
     check("programs/embedded-output.txt", &embedded_dump(&font));
+}
+
+fn type1_dump() -> String {
+    use common::type1_builder::{GLYPH_NAMES, Wrapper, build};
+    let mut out = String::new();
+    let variants = [
+        (Wrapper::Binary, "Binary", 4, false),
+        (Wrapper::Hex, "Hex", 4, false),
+        (Wrapper::Pfb, "Pfb", 4, false),
+        (Wrapper::Binary, "Binary", 4, true),
+        (Wrapper::Binary, "Binary", 0, false),
+        (Wrapper::Hex, "Hex", -1, true),
+    ];
+    for (wrapper, label, len_iv, bar) in variants {
+        let Some(f) = Type1Font::parse(&build(wrapper, len_iv, bar)) else {
+            return "unreadable\n".into();
+        };
+        out += &format!(
+            "font {label} {len_iv} {} name {} matrix {} bounds {}\n",
+            b(bar),
+            f.font_name,
+            join(f.font_matrix, n),
+            bounds(f.font_bounds)
+        );
+        let codes: Vec<String> = (0..256)
+            .filter(|&c| f.built_in_encoding[c].is_some())
+            .map(|c| format!("{c}:{}", f.built_in_encoding[c].as_deref().unwrap_or("")))
+            .collect();
+        out += &format!("  encoding {}\n", codes.join(","));
+        let _ = GLYPH_NAMES;
+        for name in f.glyph_names.iter().map(String::as_str).chain(["missing"]) {
+            out += &format!(
+                "  glyph {name} has {} width {} {}\n",
+                b(f.has_glyph(name)),
+                n(f.width(name)),
+                outline(f.outline(name).as_ref())
+            );
+        }
+    }
+    out
+}
+
+#[test]
+fn type1_is_the_golden_file() {
+    check("programs/type1-output.txt", &type1_dump());
+}
+
+// The damage is a fixed linear congruential sequence, so both sides break the same bytes.
+fn damage(source: &[u8], round: u32) -> Vec<u8> {
+    let mut state = 1000 + round;
+    let mut next = || {
+        state = state.wrapping_mul(1664525).wrapping_add(1013904223);
+        state >> 8
+    };
+    let mut data = source.to_vec();
+    for _ in 0..(1 + round % 6) {
+        let at = (next() % data.len() as u32) as usize;
+        data[at] = (next() & 0xFF) as u8;
+    }
+    data
+}
+
+fn damaged_dump(sfnt: &[u8]) -> String {
+    use common::type1_builder::{Wrapper, build};
+    let mut out = String::new();
+    for round in 0..300 {
+        let Some(f) = TrueTypeFont::parse(&damage(sfnt, round), 0) else {
+            out += &format!("ttf {round} null\n");
+            continue;
+        };
+        let (mut segments, mut advances) = (0, 0);
+        for g in 0..f.glyph_count.min(64) {
+            segments += f.outline(g).map_or(0, |o| o.segments.len());
+            advances += f.advance(g);
+        }
+        out += &format!(
+            "ttf {round} glyphs {} upem {} ascent {} cap {} segments {segments} advances {advances} ps {} A {} E {} name {}\n",
+            f.glyph_count,
+            f.units_per_em,
+            f.ascent,
+            f.cap_height,
+            s(f.post_script_name().as_deref()),
+            f.glyph_for_code_point(0x41),
+            f.glyph_for_code_point(0xC0),
+            s(f.glyph_name(3).as_deref())
+        );
+    }
+    let sources = [
+        ("cff", cff_builder::name_keyed(None)),
+        ("cid", cff_builder::cid_keyed(None, None)),
+    ];
+    for (label, source) in &sources {
+        for round in 0..300 {
+            let Some(f) = CffFont::parse(&damage(source, round)) else {
+                out += &format!("{label} {round} null\n");
+                continue;
+            };
+            let (mut segments, mut widths) = (0, 0.0);
+            for g in 0..f.glyph_count().min(16) {
+                segments += f.outline(g).map_or(0, |o| o.segments.len());
+                widths += f.width(g);
+            }
+            out += &format!(
+                "{label} {round} glyphs {} cid {} name {} segments {segments} widths {} matrix {} g1 {} c500 {}\n",
+                f.glyph_count(),
+                b(f.is_cid),
+                f.name,
+                n(widths),
+                join(f.font_matrix, n),
+                s(f.glyph_name(1).as_deref()),
+                f.glyph_for_cid(500)
+            );
+        }
+    }
+    let type1 = build(Wrapper::Binary, 4, false);
+    for round in 0..300 {
+        let Some(f) = Type1Font::parse(&damage(&type1, round)) else {
+            out += &format!("type1 {round} null\n");
+            continue;
+        };
+        let (mut segments, mut widths) = (0, 0.0);
+        for name in &f.glyph_names {
+            segments += f.outline(name).map_or(0, |o| o.segments.len());
+            widths += f.width(name);
+        }
+        out += &format!(
+            "type1 {round} name {} glyphs {} segments {segments} widths {} A {}\n",
+            f.font_name,
+            f.glyph_names.len(),
+            n(widths),
+            s(f.built_in_encoding[65].as_deref())
+        );
+    }
+    out
+}
+
+#[test]
+fn damaged_fonts_are_the_golden_file() {
+    let font = common::golden_bytes("programs/synthetic.ttf");
+    check("programs/damaged-output.txt", &damaged_dump(&font));
 }

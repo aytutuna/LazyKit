@@ -20,8 +20,8 @@ pub fn mac_glyphs() -> &'static [&'static str] {
 fn standard_sids() -> [usize; 256] {
     let mut sids = [0usize; 256];
     let mut range = |from: usize, to: usize, sid: usize| {
-        for c in from..=to {
-            sids[c] = sid + c - from;
+        for (i, slot) in sids[from..=to].iter_mut().enumerate() {
+            *slot = sid + i;
         }
     };
     range(32, 126, 1);

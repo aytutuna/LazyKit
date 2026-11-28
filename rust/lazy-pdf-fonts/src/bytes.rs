@@ -9,10 +9,6 @@ impl<'a> Span<'a> {
         self.0.len() as i64
     }
 
-    pub fn is_empty(self) -> bool {
-        self.0.is_empty()
-    }
-
     /// The window `count` bytes long from `offset`, cut to what the span holds.
     pub fn slice(self, offset: i64, count: i64) -> Span<'a> {
         let o = offset.clamp(0, self.len());

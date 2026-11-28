@@ -22,6 +22,18 @@ pub struct Segment {
     pub y2: f64,
 }
 
+impl Segment {
+    const ZERO: Segment = Segment {
+        op: OutlineOp::Close,
+        x: 0.0,
+        y: 0.0,
+        x1: 0.0,
+        y1: 0.0,
+        x2: 0.0,
+        y2: 0.0,
+    };
+}
+
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct Bounds {
     pub x_min: f64,
@@ -41,9 +53,38 @@ impl Outline {
         self.segments.is_empty()
     }
 
-    fn push(&mut self, op: OutlineOp, x: f64, y: f64, x1: f64, y1: f64, x2: f64, y2: f64) {
+    pub fn move_to(&mut self, x: f64, y: f64) {
         self.segments.push(Segment {
-            op,
+            op: OutlineOp::Move,
+            x,
+            y,
+            ..Segment::ZERO
+        });
+    }
+
+    pub fn line_to(&mut self, x: f64, y: f64) {
+        self.segments.push(Segment {
+            op: OutlineOp::Line,
+            x,
+            y,
+            ..Segment::ZERO
+        });
+    }
+
+    pub fn quad_to(&mut self, x1: f64, y1: f64, x: f64, y: f64) {
+        self.segments.push(Segment {
+            op: OutlineOp::Quad,
+            x,
+            y,
+            x1,
+            y1,
+            ..Segment::ZERO
+        });
+    }
+
+    pub fn cubic_to(&mut self, x1: f64, y1: f64, x2: f64, y2: f64, x: f64, y: f64) {
+        self.segments.push(Segment {
+            op: OutlineOp::Cubic,
             x,
             y,
             x1,
@@ -53,24 +94,8 @@ impl Outline {
         });
     }
 
-    pub fn move_to(&mut self, x: f64, y: f64) {
-        self.push(OutlineOp::Move, x, y, 0.0, 0.0, 0.0, 0.0);
-    }
-
-    pub fn line_to(&mut self, x: f64, y: f64) {
-        self.push(OutlineOp::Line, x, y, 0.0, 0.0, 0.0, 0.0);
-    }
-
-    pub fn quad_to(&mut self, x1: f64, y1: f64, x: f64, y: f64) {
-        self.push(OutlineOp::Quad, x, y, x1, y1, 0.0, 0.0);
-    }
-
-    pub fn cubic_to(&mut self, x1: f64, y1: f64, x2: f64, y2: f64, x: f64, y: f64) {
-        self.push(OutlineOp::Cubic, x, y, x1, y1, x2, y2);
-    }
-
     pub fn close(&mut self) {
-        self.push(OutlineOp::Close, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0);
+        self.segments.push(Segment::ZERO);
     }
 
     /// The box around the points, control points included, or none when the outline is empty.

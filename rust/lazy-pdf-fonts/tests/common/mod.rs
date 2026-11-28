@@ -1,6 +1,7 @@
 #![allow(dead_code)]
 
 pub mod cff_builder;
+pub mod type1_builder;
 
 use std::path::PathBuf;
 

@@ -165,7 +165,7 @@ fn build_glyphs(
             put_u16(&mut data, at as usize, new);
         }
         glyf.extend(&data);
-        while glyf.len() % 4 != 0 {
+        while !glyf.len().is_multiple_of(4) {
             glyf.push(0);
         }
     }

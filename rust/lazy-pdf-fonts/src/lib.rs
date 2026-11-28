@@ -10,6 +10,8 @@ mod outline;
 mod subset;
 mod tounicode;
 mod truetype;
+mod type1;
+mod type1_interp;
 
 pub use cff::CffFont;
 pub use embedded::{
@@ -20,3 +22,4 @@ pub use outline::{Bounds, Outline, OutlineOp, Segment};
 pub use subset::{SubsetResult, SubsetStatus, subset};
 pub use tounicode::{OutOfRange, write_to_unicode};
 pub use truetype::TrueTypeFont;
+pub use type1::Type1Font;
