@@ -5,7 +5,7 @@
   "routes": [{ "pattern": "alazy.app/relay/*", "zone_name": "alazy.app" }, { "pattern": "alazy.app/account/*", "zone_name": "alazy.app" }],
   "workers_dev": false,
   "preview_urls": false,
-  "observability": { "enabled": false, "logs": { "enabled": false, "invocation_logs": false } },
+  "observability": { "enabled": true, "logs": { "enabled": true, "invocation_logs": false } },
   // Team id and bundle id of every app that may use the relay; the Play packages are the same apps on Android.
   "vars": {
     "APPLE_APP_IDS": "8XT2U634Z4.com.lazyscan.lazyscan,8XT2U634Z4.com.lazyprint.lazyprint,8XT2U634Z4.com.lazypdf.lazypdf,8XT2U634Z4.com.lazysend.lazysend,8XT2U634Z4.com.lazymail.lazymail",
