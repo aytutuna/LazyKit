@@ -4,6 +4,7 @@ import { CallerCounts, DAY, MINUTE, bytes, emptyWindow, hmac, randomDigits, wind
 
 const CODE_MS = 10 * MINUTE;
 const SENDS_PER_WINDOW = 3;
+const SENDS_PER_DAY = 10;
 // Each caller gets a few tries, kept in memory; what is written down counts everyone together and
 // sits well above what a few networks could spend, so strangers cannot close the door on the owner.
 const TRIES_PER_CODE_CALLER = 3;
@@ -18,7 +19,7 @@ const SWEEP_MS = 3_600_000;
 const UNDO_MS = 7 * DAY;
 
 export type Purpose = "signup" | "signin" | "link" | "email" | "emailold" | "undo";
-export type Sent = "sent" | "limited" | "not-configured";
+export type Sent = "sent" | "limited" | "busy" | "not-configured";
 
 interface Code {
   hash: string;
@@ -91,11 +92,12 @@ export class AddressCore {
 
   // The window counts requests, not deliveries, and is recorded before the mail goes: parallel
   // requests cannot all pass it, and a refused mail cannot be told apart by a refund.
-  private reserveSend(now: number): boolean {
-    this.s.sends = this.s.sends.filter((t) => now - t < CODE_MS);
-    if (this.s.sends.length >= SENDS_PER_WINDOW) return false;
+  private async reserveSend(now: number): Promise<"ok" | "limited" | "busy"> {
+    this.s.sends = this.s.sends.filter((t) => now - t < DAY);
+    if (this.s.sends.length >= SENDS_PER_DAY || this.s.sends.filter((t) => now - t < CODE_MS).length >= SENDS_PER_WINDOW) return "limited";
     this.s.sends.push(now);
-    return true;
+    // The whole service has a day's allowance of mail too; asking counts, like the rest.
+    return this.deps.mailBudget && !(await this.deps.mailBudget()) ? "busy" : "ok";
   }
 
   private later(to: string, subject: string, text: string, undo: () => void = () => {}): void {
@@ -137,7 +139,8 @@ export class AddressCore {
   async requestSignup(typed: string, canonical: string, now = this.clock()): Promise<Sent> {
     if (!this.ready()) return "not-configured";
     await this.repair();
-    if (!this.reserveSend(now)) return "limited";
+    const slot = await this.reserveSend(now);
+    if (slot !== "ok") return slot;
     if (this.s.account && this.s.mailTo) {
       this.later(this.s.mailTo, "You already have a Lazy account", "Someone asked to create a Lazy account with this address, which already has one. Sign in instead; if you forgot your password, ask for a sign-in code. If it was not you, you can ignore this email.");
     } else {
@@ -150,7 +153,8 @@ export class AddressCore {
   async requestSignin(canonical: string, now = this.clock()): Promise<Sent> {
     if (!this.ready()) return "not-configured";
     await this.repair();
-    if (!this.reserveSend(now)) return "limited";
+    const slot = await this.reserveSend(now);
+    if (slot !== "ok") return slot;
     if (this.s.account && this.s.mailTo) await this.issue("signin", canonical, this.s.mailTo, now);
     else await this.hash("signin", canonical, "000000");
     await this.save();
@@ -161,7 +165,8 @@ export class AddressCore {
   async requestLink(canonical: string, identity: { id: string; provider: string }, now = this.clock()): Promise<Sent | "none"> {
     if (!this.s.account || !this.s.mailTo) return "none";
     if (!this.ready()) return "not-configured";
-    if (!this.reserveSend(now)) return "limited";
+    const slot = await this.reserveSend(now);
+    if (slot !== "ok") return slot;
     await this.issue("link", canonical, this.s.mailTo, now, identity);
     await this.save();
     return "sent";
@@ -170,7 +175,8 @@ export class AddressCore {
   // The new address of an account that is changing its email.
   async requestEmail(typed: string, canonical: string, account: string, now = this.clock()): Promise<Sent> {
     if (!this.ready()) return "not-configured";
-    if (!this.reserveSend(now)) return "limited";
+    const slot = await this.reserveSend(now);
+    if (slot !== "ok") return slot;
     if (this.s.account && this.s.mailTo) {
       this.later(this.s.mailTo, "A Lazy account tried to use this address", "Someone asked to use this address for another Lazy account, which already has one here. Nothing changed. If it was not you, you can ignore this email.");
     } else {
@@ -186,7 +192,8 @@ export class AddressCore {
   async requestOldCheck(canonical: string, account: string, now = this.clock()): Promise<Sent | "none"> {
     if (this.s.account !== account || !this.s.mailTo) return "none";
     if (!this.ready()) return "not-configured";
-    if (!this.reserveSend(now)) return "limited";
+    const slot = await this.reserveSend(now);
+    if (slot !== "ok") return slot;
     await this.issue("emailold", canonical, this.s.mailTo, now, account);
     await this.save();
     return "sent";
@@ -267,7 +274,7 @@ export class AddressCore {
   async sweep(): Promise<void> {
     const now = this.clock();
     await this.repair();
-    this.s.sends = this.s.sends.filter((t) => now - t < CODE_MS);
+    this.s.sends = this.s.sends.filter((t) => now - t < DAY);
     for (const k of Object.keys(this.s.codes) as Purpose[]) if (this.s.codes[k]!.expires <= now) delete this.s.codes[k];
     if (windowIdle(this.s.code, now, DAY)) this.s.misses = undefined;
     this.codeCallers.prune(now);

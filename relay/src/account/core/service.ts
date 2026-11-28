@@ -16,8 +16,12 @@ export type AddressPort = Async<Pick<AddressCore, "requestSignup" | "requestSign
 export type AccountPort = Async<Pick<AccountCore, "create" | "exists" | "addIdentity" | "open" | "verifyPassword" | "check" | "alive" | "sessions" | "revoke" | "setPassword" | "authorizeDelete" | "authorizeEmailChange" | "mailAddress" | "setEmail" | "me" | "identityIds" | "export" | "erase">>;
 export type IdentityPort = Async<Pick<IdentityCore, "account" | "bind" | "use" | "erase">>;
 
+export type OncePort = Async<{ take(until: number): boolean }>;
+
 export interface Directory {
   address(name: string): AddressPort;
+  // A value that may be spent once, named by a hash of it.
+  once(name: string): OncePort;
   account(id: string): AccountPort;
   identity(name: string): IdentityPort;
 }
@@ -44,7 +48,7 @@ export interface ServiceConfig {
   now?(): number;
 }
 
-export type Why = "bad" | "locked" | "refused" | "no-email" | "not-configured" | "bad-email" | "bad-password" | "bad-input" | "limited" | "link-code" | "unavailable" | "need-fresh";
+export type Why = "bad" | "locked" | "refused" | "no-email" | "not-configured" | "bad-email" | "bad-password" | "bad-input" | "limited" | "busy" | "link-code" | "unavailable" | "need-fresh";
 export type Entered = { ok: true; token: string; session: string; account: unknown } | { ok: false; why: Why };
 
 const ID = /^[0-9a-f]{32}$/;
@@ -156,6 +160,12 @@ export class AccountService {
     if (!this.cfg.nonceKey) return undefined;
     const body = `${toBase64Url(crypto.getRandomValues(new Uint8Array(18)))}.${this.clock() + NONCE_MS}`;
     return `${body}.${await hmac(this.cfg.nonceKey, `lazy nonce v1\0${body}`)}`;
+  }
+
+  // True once for a nonce this server issued and has not seen spent; for bot checks that ask for a proof bound to one.
+  async spendNonce(nonce: unknown): Promise<boolean> {
+    if (typeof nonce !== "string" || !(await this.nonceGood(nonce))) return false;
+    return this.dir.once(await sha256(`nonce:${nonce}`)).take(this.clock() + NONCE_MS + MINUTE);
   }
 
   private async nonceGood(nonce: string): Promise<boolean> {

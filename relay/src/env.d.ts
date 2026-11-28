@@ -9,6 +9,8 @@ declare namespace Cloudflare {
     QUOTAS: DurableObjectNamespace<import("./quota").Quota>;
     ACCOUNTS: DurableObjectNamespace<import("./account/account").Account>;
     IDENTITIES: DurableObjectNamespace<import("./account/identity").Identity>;
+    BUDGET: DurableObjectNamespace<import("./account/account").Budget>;
+    SPENT: DurableObjectNamespace<import("./account/account").Spent>;
     ADDRESSES: DurableObjectNamespace<import("./account/account").Address>;
     APPLE_APP_IDS?: string;
     APPLE_ATTEST_ENV?: string;
@@ -19,6 +21,8 @@ declare namespace Cloudflare {
     PASSWORD_STAGES?: string;
     ACCOUNT_KEY?: string;
     ID_KEY?: string;
+    MAIL_DAILY_CAP?: string;
+    TURNSTILE_SECRET?: string;
     RESEND_API_KEY?: string;
     MAIL_FROM?: string;
   }

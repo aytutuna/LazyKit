@@ -2,6 +2,7 @@ import { APPLE_ROOT, fromBase64 } from "./appattest";
 import type { IntegrityPayload } from "./integrity";
 import type { KeySource, PublishedKey } from "./account/core/oidc";
 import type { Mailer } from "./account/core/email";
+import type { Turnstile } from "./account/turnstile";
 
 export type Store = "apple" | "google" | "microsoft";
 export type Platform = "apns" | "fcm";
@@ -47,6 +48,8 @@ export interface Services {
   keys: KeySource;
   // Left unset, the account service sends through Resend with its own environment.
   mailer?: Mailer;
+  // Left unset, Cloudflare Turnstile is asked with the Worker's own secret.
+  turnstile?: Turnstile;
 }
 
 // The stores' receipt checks and the APNs and FCM clients need keys that are

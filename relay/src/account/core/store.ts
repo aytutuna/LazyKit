@@ -17,6 +17,8 @@ export interface Deps {
   defer(task: Promise<unknown>): void;
   // Rounds of password hashing, for work that has to take as long as the real thing.
   stages?(): number;
+  // Takes one of today's mails from the budget of the whole service; false once it is spent.
+  mailBudget?(): Promise<boolean>;
   // Whether an account still stands, for an address that names it.
   accountExists?(id: string): Promise<boolean>;
   now?(): number;

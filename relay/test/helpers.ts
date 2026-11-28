@@ -16,15 +16,24 @@ let people = 0;
 export const who = { email: "", other: "", apple: "", google: "" };
 
 // Mail goes to `sent` and the identity providers publish one key, k1.
+let base: Partial<Services> = {};
+
+// Changes some of the fakes for one test.
+export function tweak(over: Partial<Services>): void {
+  useServices({ ...base, ...over });
+}
+
 export function fakes(extra: Partial<Services> = {}): void {
   sent.length = 0;
   people++;
   Object.assign(who, { email: `ada${people}@example.com`, other: `grace${people}@example.com`, apple: `apple-sub-${people}`, google: `google-sub-${people}` });
-  useServices({
+  base = {
     mailer: { send: async (m) => void sent.push(m) },
     keys: kit.keys,
+    turnstile: { verify: async (token) => token === "ok-token" },
     ...extra,
-  });
+  };
+  useServices(base);
 }
 
 // Mail is sent after the answer, so a test waits for it.
@@ -35,10 +44,11 @@ export async function mailed(count: number): Promise<void> {
 
 export const APPLE_AUD = "com.lazyscan.lazyscan";
 
+// Requests that make the service send mail carry the bot check's token unless a test says otherwise.
 export const account = (path: string, method = "GET", body?: unknown, token?: string, headers: Record<string, string> = {}) =>
   exports.default.fetch(`https://alazy.app/account/v1/${path}`, {
     method,
-    body: body === undefined ? undefined : JSON.stringify(body),
+    body: body === undefined ? undefined : JSON.stringify((path === "signup" || path === "code") && body && !("turnstile" in (body as object)) && !("attest" in (body as object)) ? { turnstile: "ok-token", ...(body as object) } : body),
     headers: { ...(token ? { Authorization: `Bearer ${token}` } : {}), ...headers },
   });
 

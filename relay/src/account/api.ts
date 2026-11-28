@@ -3,8 +3,11 @@ import { RateLimiter, networkOf } from "../ratelimit";
 import { services } from "../services";
 import { relayData } from "../relay-data";
 import type { Sent } from "./core/address";
-import { AccountService, type AccountPort, type AddressPort, type Directory, type Entered, type IdentityPort } from "./core/service";
+import { AccountService, type AccountPort, type AddressPort, type Directory, type Entered, type IdentityPort, type OncePort } from "./core/service";
+import { parseAttestation, verifyAttestation } from "../attest";
+import { NotConfiguredError } from "../services";
 import { stagesOf } from "./deps";
+import { cloudflareTurnstile } from "./turnstile";
 
 const startLimit = new RateLimiter(10, 3_600_000);
 const signinLimit = new RateLimiter(30, 600_000);
@@ -18,6 +21,7 @@ const directory = (env: Cloudflare.Env): Directory => ({
   address: (name) => env.ADDRESSES.get(env.ADDRESSES.idFromName(name)) as unknown as AddressPort,
   account: (id) => env.ACCOUNTS.get(env.ACCOUNTS.idFromName(id)) as unknown as AccountPort,
   identity: (name) => env.IDENTITIES.get(env.IDENTITIES.idFromName(name)) as unknown as IdentityPort,
+  once: (name) => env.SPENT.get(env.SPENT.idFromName(name)) as unknown as OncePort,
 });
 
 // The account service on this Worker's Durable Objects. Other Lazy services in the Worker call
@@ -40,6 +44,7 @@ export const accountService = (env: Cloudflare.Env) =>
 const sentStatus = (sent: Sent | "bad-email"): Response =>
   sent === "sent" ? json({ sent: true }, 202)
   : sent === "limited" ? fail("too many codes, try again later", 429, { "Retry-After": "600" })
+  : sent === "busy" ? fail("mail is busy, try again later", 503, { "Retry-After": "3600" })
   : sent === "not-configured" ? fail("not configured", 501)
   : fail(sent, 400);
 
@@ -48,6 +53,7 @@ const entered = (r: Entered): Response => {
   switch (r.why) {
     case "locked": return fail("too many tries, try again later", 429, { "Retry-After": "900" });
     case "limited": return fail("too many codes, try again later", 429, { "Retry-After": "600" });
+    case "busy": return fail("mail is busy, try again later", 503, { "Retry-After": "3600" });
     case "bad-email": case "bad-password": case "bad-input": return fail(r.why, 400);
     case "not-configured": return fail("not configured", 501);
     case "no-email": return fail("the provider gave no verified email", 422);
@@ -64,6 +70,26 @@ const reauth = (r: "ok" | "bad" | "locked" | "need-fresh") =>
   : r === "locked" ? fail("too many tries, try again later", 429, { "Retry-After": "900" })
   : r === "need-fresh" ? fail("sign in again first", 403)
   : fail("current password is wrong", 401);
+
+// Requests that make the service send mail come from a person's app or browser: a Turnstile token,
+// or an App Attest or Play Integrity proof made for a nonce this server issued.
+async function botCheck(env: Cloudflare.Env, svc: AccountService, body: Record<string, unknown>, ip: string | null): Promise<Response | undefined> {
+  try {
+    const proof = body.attest;
+    if (proof && typeof proof === "object") {
+      const p = proof as Record<string, unknown>;
+      const parsed = parseAttestation(p);
+      if (!parsed || !(await svc.spendNonce(p.nonce))) return fail("bot check failed", 403);
+      const out = await verifyAttestation(env, p.nonce as string, parsed);
+      return out === "ok" ? undefined : out === "not-configured" ? fail("not configured", 501) : fail("bot check failed", 403);
+    }
+    if (typeof body.turnstile !== "string" || body.turnstile === "") return fail("bot check needed", 403);
+    return (await (services().turnstile ?? cloudflareTurnstile(env)).verify(body.turnstile, ip)) ? undefined : fail("bot check failed", 403);
+  } catch (e) {
+    if (e instanceof NotConfiguredError) return fail("not configured", 501);
+    throw e;
+  }
+}
 
 const FORM = ["POST signup", "POST code", "POST nonce", "POST signup/confirm", "POST signin/code", "POST signin", "POST apple", "POST google", "POST link/confirm", "POST email/undo"];
 
@@ -132,6 +158,8 @@ export async function accountApi(req: Request, env: Cloudflare.Env, path: string
   if (route === "POST signup" || route === "POST code") {
     const slow = limited(startLimit);
     if (slow) return slow;
+    const bot = await botCheck(env, svc, body, ip);
+    if (bot) return bot;
     return sentStatus(route === "POST signup" ? await svc.signup(body.email) : await svc.code(body.email));
   }
 

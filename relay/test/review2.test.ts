@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it } from "vitest";
 import { services, useServices } from "../src/services";
-import { account, codeIn, fakes, mailed, sent, signUp, who } from "./helpers";
+import { account, codeIn, fakes, mailed, sent, signUp, who , tweak } from "./helpers";
 
 afterEach(() => useServices());
 const PW = "correct horse battery";
@@ -11,7 +11,7 @@ describe("second review findings in workerd", () => {
     fakes();
     await signUp(who.email, PW);
     const mails: unknown[] = [];
-    useServices({ mailer: { send: async (m) => { await new Promise((r) => setTimeout(r, 30)); mails.push(m); } }, keys: services().keys });
+    tweak({ mailer: { send: async (m) => { await new Promise((r) => setTimeout(r, 30)); mails.push(m); } } });
     const rs = await Promise.all(Array.from({ length: 20 }, () => account("code", "POST", { email: who.email })));
     await new Promise((r) => setTimeout(r, 300));
     expect(mails.length).toBeLessThanOrEqual(3);

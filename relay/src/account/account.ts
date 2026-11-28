@@ -163,3 +163,34 @@ export class Address extends DurableObject<Cloudflare.Env> {
     await this.core.sweep();
   }
 }
+
+// Counts the mails the whole service has been asked to send today.
+export class Budget extends DurableObject<Cloudflare.Env> {
+  async take(limit: number, now = Date.now()): Promise<boolean> {
+    const day = new Date(now).toISOString().slice(0, 10);
+    const kept = await this.ctx.storage.get<{ day: string; count: number }>("s");
+    const count = kept?.day === day ? kept.count : 0;
+    if (count >= limit) return false;
+    await this.ctx.storage.put("s", { day, count: count + 1 });
+    if ((await this.ctx.storage.getAlarm()) === null) await this.ctx.storage.setAlarm(now + 2 * 86_400_000);
+    return true;
+  }
+
+  async alarm(): Promise<void> {
+    await this.ctx.storage.deleteAll();
+  }
+}
+
+// A value that may be used once, until the time it would have lapsed anyway.
+export class Spent extends DurableObject<Cloudflare.Env> {
+  async take(until: number): Promise<boolean> {
+    if ((await this.ctx.storage.get("s")) !== undefined) return false;
+    await this.ctx.storage.put("s", until);
+    await this.ctx.storage.setAlarm(until);
+    return true;
+  }
+
+  async alarm(): Promise<void> {
+    await this.ctx.storage.deleteAll();
+  }
+}

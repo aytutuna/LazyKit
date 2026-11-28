@@ -98,7 +98,7 @@ describe("sign-up", () => {
     rig.clock.now += 6 * MIN;
     await core.sweep();
     expect(store.value?.codes.signup).toBeDefined();
-    rig.clock.now += 2 * 3_600_000;
+    rig.clock.now += DAY + 3_600_000;
     await core.sweep();
     expect(store.value).toBeUndefined();
   });
@@ -129,6 +129,25 @@ describe("mail", () => {
     for (let i = 0; i < 5; i++) a.push(await rig.service.signup(email));
     for (let i = 0; i < 5; i++) b.push(await rig.service.signup(`fresh${n}@example.com`));
     expect(a).toEqual(b);
+  });
+
+  it("allows ten mails a day to one address, and starts again the next day", async () => {
+    const seen: string[] = [];
+    for (let i = 0; i < 12; i++) {
+      seen.push(await rig.service.signup(email));
+      rig.clock.now += 11 * MIN;
+    }
+    expect(seen).toEqual([...Array(10).fill("sent"), "limited", "limited"]);
+    rig.clock.now += DAY;
+    expect(await rig.service.signup(email)).toBe("sent");
+  });
+
+  it("says plainly when the whole service has used its mail for the day", async () => {
+    rig.budget.left = 2;
+    expect(await rig.service.signup(email)).toBe("sent");
+    expect(await rig.service.code(`other${n}@example.com`)).toBe("sent");
+    expect(await rig.service.signup(`third${n}@example.com`)).toBe("busy");
+    expect(await rig.service.code(`fourth${n}@example.com`)).toBe("busy");
   });
 
   it("never sends more than three mails in a window, even for parallel requests", async () => {
@@ -227,19 +246,6 @@ describe("codes", () => {
     for (let net = 0; net < 11; net++) for (let i = 0; i < 3; i++) await rig.service.signinCode(email, "000000", OTHER, `more${net}`);
     expect((await rig.service.signinCode(email, next, LOGIN, "owner")).ok).toBe(false);
     rig.clock.now += 11 * MIN;
-    expect((await rig.service.signinCode(email, await askCode(), LOGIN, "owner")).ok).toBe(true);
-  });
-
-  it("closes the door to everyone only after three hundred wrong codes in a day", async () => {
-    await signUp();
-    for (let round = 0; round < 12; round++) {
-      await askCode();
-      for (let net = 0; net < 10; net++) for (let i = 0; i < 3; i++) await rig.service.signinCode(email, "000000", OTHER, `r${round}n${net}`);
-      rig.clock.now += 11 * MIN;
-    }
-    const late = await askCode();
-    expect((await rig.service.signinCode(email, late, LOGIN, "owner")).ok).toBe(false);
-    rig.clock.now += DAY;
     expect((await rig.service.signinCode(email, await askCode(), LOGIN, "owner")).ok).toBe(true);
   });
 

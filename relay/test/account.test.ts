@@ -4,8 +4,8 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { identityName } from "../src/account/core/account";
 import { canonicalEmail } from "../src/account/core/email";
 import { hmac } from "../src/account/core/util";
-import { services, useServices } from "../src/services";
-import { DEVICE_A, account, inside, codeIn, fakes, idToken, mailed, newNonce, sent, signUp, who } from "./helpers";
+import { NotConfiguredError, services, useServices } from "../src/services";
+import { DEVICE_A, account, inside, codeIn, fakes, idToken, mailed, newNonce, sent, signUp, who , tweak } from "./helpers";
 
 const PASSWORD = "correct horse battery";
 const LOGIN = { app: "lazysend", device: DEVICE_A, label: "laptop" };
@@ -68,13 +68,13 @@ describe("sign-up over HTTP", () => {
   });
 
   it("says plainly that mail is not set up", async () => {
-    useServices({ mailer: { send: async () => {}, ready: () => false } });
+    tweak({ mailer: { send: async () => {}, ready: () => false } });
     expect((await account("signup", "POST", { email: EMAIL })).status).toBe(501);
     expect((await account("code", "POST", { email: EMAIL })).status).toBe(501);
   });
 
   it("answers 202 even when the mail service fails, and takes the code back but keeps the count", async () => {
-    useServices({ mailer: { send: async () => { throw new Error("refused"); } } });
+    tweak({ mailer: { send: async () => { throw new Error("refused"); } } });
     expect((await account("signup", "POST", { email: EMAIL })).status).toBe(202);
     await new Promise((r) => setTimeout(r, 50));
     const stub = await addressStub(EMAIL);
@@ -87,7 +87,7 @@ describe("sign-up over HTTP", () => {
 
   it("sends at most three mails for parallel code requests on one address", async () => {
     await signUp(EMAIL, PASSWORD);
-    useServices({ mailer: { send: async (m) => { await new Promise((r) => setTimeout(r, 30)); sent.push(m); } }, keys: services().keys });
+    tweak({ mailer: { send: async (m) => { await new Promise((r) => setTimeout(r, 30)); sent.push(m); } } });
     sent.length = 0;
     await Promise.all(Array.from({ length: 20 }, () => account("code", "POST", { email: EMAIL })));
     await new Promise((r) => setTimeout(r, 200));
@@ -106,6 +106,39 @@ describe("sign-up over HTTP", () => {
     const ghost = `ghost${who.apple}@example.com`;
     await account("signup", "POST", { email: ghost });
     expect(await statuses(ghost)).toEqual(await statuses(real));
+  });
+});
+
+describe("bot check over HTTP", () => {
+  it("wants a Turnstile token before it sends any mail", async () => {
+    const plain = (path: string, body: object) => exports.default.fetch(`https://alazy.app/account/v1/${path}`, { method: "POST", body: JSON.stringify(body) });
+    for (const path of ["signup", "code"]) {
+      expect((await plain(path, { email: EMAIL })).status).toBe(403);
+      expect((await plain(path, { email: EMAIL, turnstile: "" })).status).toBe(403);
+      expect((await plain(path, { email: EMAIL, turnstile: "forged" })).status).toBe(403);
+    }
+    expect((await plain("signup", { email: EMAIL, turnstile: "ok-token" })).status).toBe(202);
+    expect(sent).toHaveLength(1);
+  });
+
+  it("says plainly when Turnstile is not set up", async () => {
+    tweak({ turnstile: { verify: async () => { throw new NotConfiguredError("no secret"); } } });
+    expect((await account("signup", "POST", { email: EMAIL })).status).toBe(501);
+  });
+
+  it("takes an App Attest or Play Integrity proof for a nonce the server issued, once, instead of a token", async () => {
+    const make = (nonce: string) => ({ requestDetails: { requestPackageName: "com.lazysend.lazysend", nonce, timestampMillis: String(Date.now()) }, appIntegrity: { appRecognitionVerdict: "PLAY_RECOGNIZED", packageName: "com.lazysend.lazysend" }, deviceIntegrity: { deviceRecognitionVerdict: ["MEETS_DEVICE_INTEGRITY"] } });
+    tweak({ integrity: { decode: async () => make(current) } });
+    let current = await newNonce();
+    const proof = { nonce: current, platform: "google", token: "tok" };
+    const plain = (body: object) => exports.default.fetch("https://alazy.app/account/v1/signup", { method: "POST", body: JSON.stringify(body) });
+    expect((await plain({ email: EMAIL, attest: proof })).status).toBe(202);
+    expect((await plain({ email: who.other, attest: proof })).status).toBe(403);
+    current = "n".repeat(24) + ".1.0";
+    expect((await plain({ email: who.other, attest: { nonce: current, platform: "google", token: "tok" } })).status).toBe(403);
+    current = await newNonce();
+    tweak({ integrity: { decode: async () => make("another") } });
+    expect((await plain({ email: who.other, attest: { nonce: current, platform: "google", token: "tok" } })).status).toBe(403);
   });
 });
 
@@ -245,7 +278,7 @@ describe("sign in with Apple and Google over HTTP", () => {
 
   it("says 503 when the provider's keys cannot be fetched", async () => {
     const t = await idToken("apple");
-    useServices({ keys: { get: async () => { throw new Error("offline"); } } });
+    tweak({ keys: { get: async () => { throw new Error("offline"); } } });
     const r = await account("apple", "POST", { idToken: t.idToken, nonce: t.raw, ...LOGIN });
     expect([r.status, r.headers.get("Retry-After")]).toEqual([503, "30"]);
   });
