@@ -1,27 +1,30 @@
 import { DurableObject } from "cloudflare:workers";
+import { durableStore } from "./account";
+import { IdentityCore } from "./core/identity";
 
-// One per Apple or Google subject, named by a hash of provider and subject: which account it signs
-// into, and the hashes of tokens already used, so a stolen token cannot be played twice.
 export class Identity extends DurableObject<Cloudflare.Env> {
-  async account(): Promise<string | undefined> {
-    return this.ctx.storage.get<string>("account");
+  private core: IdentityCore;
+
+  constructor(ctx: DurableObjectState, env: Cloudflare.Env) {
+    super(ctx, env);
+    this.core = new IdentityCore(durableStore(ctx));
+    ctx.blockConcurrencyWhile(() => this.core.load());
   }
 
-  async bind(account: string): Promise<void> {
-    await this.ctx.storage.put("account", account);
+  account() {
+    return this.core.account();
   }
 
-  // True once for a token; the entry lives until the token would have expired anyway.
-  async use(tokenHash: string, exp: number, now = Date.now()): Promise<boolean> {
-    const used = (await this.ctx.storage.get<Record<string, number>>("used")) ?? {};
-    for (const [h, until] of Object.entries(used)) if (until <= now) delete used[h];
-    if (used[tokenHash]) return false;
-    used[tokenHash] = Math.max(exp * 1000 + 120_000, now + 120_000);
-    await this.ctx.storage.put("used", used);
-    return true;
+  bind(...a: Parameters<IdentityCore["bind"]>) {
+    return this.core.bind(...a);
   }
 
-  async erase(): Promise<void> {
-    await this.ctx.storage.deleteAll();
+  use(...a: Parameters<IdentityCore["use"]>) {
+    return this.core.use(...a);
   }
+
+  erase() {
+    return this.core.erase();
+  }
+
 }

@@ -1,9 +1,8 @@
-import { accountApi, sessionOf } from "./account/api";
+import { accountApi, accountService } from "./account/api";
 import { MAX_TOKEN } from "./group";
 import { parseAttestation, verifyAttestation } from "./attest";
 import { readJson, text } from "./http";
 import { RateLimiter } from "./ratelimit";
-import { relayData } from "./relay-data";
 import type { Platform, Store } from "./services";
 
 export { Room } from "./room";
@@ -12,6 +11,8 @@ export { Quota } from "./quota";
 export { Purchase } from "./purchase";
 export { Account } from "./account/account";
 export { Identity } from "./account/identity";
+
+const sessionOf = (req: Request, env: Cloudflare.Env) => accountService(env).session(req.headers.get("Authorization"));
 
 const ROOM_ID = /^[0-9a-f]{64}$/;
 const ID = /^[0-9a-f]{32}$/;
@@ -39,7 +40,7 @@ export default {
     }
 
     const a = ACCOUNT_PATH.exec(url.pathname);
-    if (a) return accountApi(req, env, a[1], ip, { relay: relayData });
+    if (a) return accountApi(req, env, a[1], ip);
 
     const g = /^\/relay\/v1\/group\/([^/]+)(?:\/(push|paid|challenge|attest)(?:\/([^/]+))?)?$/.exec(url.pathname);
     if (g) return groupApi(req, env, g[1], g[2], g[3]);

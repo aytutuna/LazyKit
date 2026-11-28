@@ -1,6 +1,7 @@
 import { APPLE_ROOT, fromBase64 } from "./appattest";
 import type { IntegrityPayload } from "./integrity";
-import type { Mailer } from "./account/email";
+import type { KeySource, PublishedKey } from "./account/core/oidc";
+import type { Mailer } from "./account/core/email";
 
 export type Store = "apple" | "google" | "microsoft";
 export type Platform = "apns" | "fcm";
@@ -35,13 +36,6 @@ export interface PushSender {
 export interface IntegrityDecoder {
   // Has Google decode a Play Integrity token; needs a service account the relay does not hold yet.
   decode(token: string): Promise<IntegrityPayload>;
-}
-
-export type PublishedKey = JsonWebKey & { kid?: string };
-
-export interface KeySource {
-  // The public key with this id from the identity provider's published set.
-  get(provider: "apple" | "google", kid: string): Promise<PublishedKey | undefined>;
 }
 
 export interface Services {

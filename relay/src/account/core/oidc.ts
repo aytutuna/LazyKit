@@ -1,7 +1,13 @@
 import { fromBase64Url, sha256 as sha256hex } from "./b64";
-import { services } from "../services";
 
 export type Provider = "apple" | "google";
+
+export type PublishedKey = JsonWebKey & { kid?: string };
+
+export interface KeySource {
+  // The public key with this id from the identity provider's published set.
+  get(provider: Provider, kid: string): Promise<PublishedKey | undefined>;
+}
 
 export class IdentityRejectedError extends Error {
   name = "IdentityRejectedError";
@@ -39,7 +45,7 @@ function part(s: string): Record<string, unknown> {
 // Checks an ID token as the provider documents it: signature against the published keys, issuer,
 // audience (one of our client ids), expiry, and the nonce the app made for this sign-in (given
 // as is or as its SHA-256, which is how Apple's apps pass it).
-export async function verifyIdToken(provider: Provider, token: string, nonce: string, audiences: string | undefined, now = Date.now()): Promise<Identity> {
+export async function verifyIdToken(provider: Provider, token: string, nonce: string, audiences: string | undefined, keys: KeySource, now = Date.now()): Promise<Identity> {
   const wanted = list(audiences);
   if (wanted.length === 0) throw new ProviderNotConfiguredError(`${provider} sign-in is not configured`);
   if (token.length > MAX_TOKEN) throw new IdentityRejectedError("token is too long");
@@ -48,7 +54,7 @@ export async function verifyIdToken(provider: Provider, token: string, nonce: st
   const header = part(pieces[0]);
   if (header.alg !== "RS256" || typeof header.kid !== "string") throw new IdentityRejectedError("token is not signed with RS256");
 
-  const jwk = await services().keys.get(provider, header.kid);
+  const jwk = await keys.get(provider, header.kid);
   if (!jwk) throw new IdentityRejectedError("unknown signing key");
   let signed: boolean;
   try {

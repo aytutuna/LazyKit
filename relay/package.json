@@ -4,7 +4,8 @@
   "type": "module",
   "scripts": {
     "test": "vitest run",
-    "dev": "wrangler dev"
+    "dev": "wrangler dev",
+    "test:core": "vitest run --config vitest.core.config.ts"
   },
   "devDependencies": {
     "@cloudflare/vitest-plugin": "^1.9.2",
