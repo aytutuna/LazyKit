@@ -134,7 +134,7 @@ impl Huffman {
             at += table.count[length];
         }
         table.by_length = vec![0; at];
-        let mut next = vec![0usize; MAX_PREFIX_LENGTH + 1];
+        let mut next = [0usize; MAX_PREFIX_LENGTH + 1];
         for (i, line) in lines.iter().enumerate() {
             let length = line.1;
             if length == 0 {
