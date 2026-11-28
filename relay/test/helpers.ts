@@ -52,7 +52,7 @@ export const APPLE_AUD = "com.lazyscan.lazyscan";
 export const account = (path: string, method = "GET", body?: unknown, token?: string, headers: Record<string, string> = {}) =>
   exports.default.fetch(`https://alazy.app/account/v1/${path}`, {
     method,
-    body: body === undefined ? undefined : JSON.stringify((path === "signup" || path === "code") && body && !("turnstile" in (body as object)) && !("attest" in (body as object)) ? { turnstile: "ok-token", ...(body as object) } : body),
+    body: body === undefined ? undefined : JSON.stringify(["signup", "code", "email", "password/code"].includes(path) && body && !("turnstile" in (body as object)) && !("attest" in (body as object)) ? { turnstile: "ok-token", ...(body as object) } : body),
     headers: { ...ipHeader, ...(token ? { Authorization: `Bearer ${token}` } : {}), ...headers },
   });
 

@@ -36,14 +36,16 @@ describe("second review findings in workerd", () => {
     expect(owner.status).toBe(200);
   });
 
-  it("email change tells the old address", async () => {
+  it("email change tells the old address before it moves", async () => {
     fakes();
     const t = await signUp(who.email, PW);
     const before = sent.length;
     expect((await account("email", "POST", { email: who.other, password: PW }, t)).status).toBe(202);
-    await mailed(before + 1);
-    expect((await account("email/confirm", "POST", { email: who.other, code: codeIn(sent[before]) }, t)).status).toBe(204);
-    await new Promise((r) => setTimeout(r, 200));
-    expect(sent.slice(before).map((m) => m.to)).toContain(who.email);
+    await mailed(before + 2);
+    const oldCode = codeIn(sent.slice(before).find((m) => m.to === who.email)!);
+    const newCode = codeIn(sent.slice(before).find((m) => m.to === who.other)!);
+    expect((await account("email/confirm", "POST", { email: who.other, code: newCode, oldCode }, t)).status).toBe(204);
+    await new Promise((r) => setTimeout(r, 100));
+    expect(sent.slice(before).filter((m) => m.to === who.email)).toHaveLength(2);
   });
 });

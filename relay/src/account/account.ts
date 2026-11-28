@@ -65,6 +65,10 @@ export class Account extends DurableObject<Cloudflare.Env> {
     return this.core.setPassword(...a);
   }
 
+  ask(...a: Parameters<AccountCore["ask"]>) {
+    return this.core.ask(...a);
+  }
+
   authorizeEmailChange(...a: Parameters<AccountCore["authorizeEmailChange"]>) {
     return this.core.authorizeEmailChange(...a);
   }
@@ -132,8 +136,8 @@ export class Address extends DurableObject<Cloudflare.Env> {
     return this.core.requestOldCheck(...a);
   }
 
-  issueUndo(...a: Parameters<AddressCore["issueUndo"]>) {
-    return this.core.issueUndo(...a);
+  notifyChange(...a: Parameters<AddressCore["notifyChange"]>) {
+    return this.core.notifyChange(...a);
   }
 
   takeCode(...a: Parameters<AddressCore["takeCode"]>) {

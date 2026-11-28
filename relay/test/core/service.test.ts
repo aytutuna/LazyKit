@@ -532,23 +532,32 @@ describe("Apple and Google", () => {
 
 describe("changing the email", () => {
   const to = (address: string) => rig.mail.filter((m) => m.to === address);
+  const lastTo = (address: string) => to(address)[to(address).length - 1];
+  const THIEF = { ...LOGIN, device: "c".repeat(32) };
 
-  it("takes a new session and the password, mails the old address with a way back, and ends the other sessions", async () => {
+  async function ask(s: NonNullable<Awaited<ReturnType<typeof rig.service.session>>>, from: string, next: string, password?: string) {
+    expect(await rig.service.changeEmail(s, next, password)).toBe("sent");
+    await rig.flush();
+    return { oldCode: codeIn(lastTo(from)), newCode: codeIn(lastTo(next)) };
+  }
+
+  it("takes a new session, the password and a code from each mailbox, tells both, and ends the other sessions", async () => {
     const a = await signUp();
     const other = await rig.service.signinPassword(email, PASSWORD, OTHER);
     const s = (await rig.service.session(header(a)))!;
     const next = `grace${n}@example.com`;
     expect(await rig.service.changeEmail(s, next, undefined)).toBe("bad");
     expect(await rig.service.changeEmail(s, next, "wrong password!")).toBe("bad");
-    expect(await rig.service.changeEmail(s, next, PASSWORD)).toBe("sent");
+    const { oldCode, newCode } = await ask(s, email, next, PASSWORD);
+    expect(await rig.service.confirmEmail(s, next, newCode, "x")).toBe("bad");
+    expect(await rig.service.confirmEmail(s, next, newCode, "x", "000000")).toBe("bad");
+    await ask(s, email, next, PASSWORD);
+    const codes = { oldCode: codeIn(lastTo(email)), newCode: codeIn(lastTo(next)) };
+    expect(oldCode).toMatch(/^[0-9]{6}$/);
+    expect(await rig.service.confirmEmail(s, next, codes.newCode, "x", codes.oldCode)).toBe("ok");
     await rig.flush();
-    expect(lastMail().to).toBe(next);
-    expect(await rig.service.confirmEmail(s, next, "000000", "stranger")).toBe("bad");
-    const before = to(email).length;
-    expect(await rig.service.confirmEmail(s, next, codeIn(lastMail()))).toBe("ok");
-    await rig.flush();
-    expect(to(email)).toHaveLength(before + 1);
-    expect(lastMail().text).toContain(`was changed to ${next}`);
+    expect(lastTo(email).text).toContain(`is being changed to ${next}`);
+    expect(lastTo(next).text).toContain(`which was ${email}`);
     expect(await rig.service.session(header(other))).toBeUndefined();
     expect(await rig.service.session(header(a))).toBeTruthy();
     expect((await rig.service.signinPassword(next, PASSWORD, OTHER)).ok).toBe(true);
@@ -557,97 +566,98 @@ describe("changing the email", () => {
     expect(rig.accounts.size).toBe(1);
   });
 
-  it("can be undone from the old address within a week, which signs every session out", async () => {
-    const a = await signUp();
-    const s = (await rig.service.session(header(a)))!;
-    const next = `grace${n}@example.com`;
-    await rig.service.changeEmail(s, next, PASSWORD);
+  it("is out of reach of a thief who has only the password: he cannot read the old mailbox", async () => {
+    const owner = await signUp();
+    const stolen = await rig.service.signinPassword(email, PASSWORD, THIEF, "far away");
+    const s = (await rig.service.session(header(stolen)))!;
+    const next = "thief@evil.test";
+    expect(await rig.service.changeEmail(s, next, PASSWORD)).toBe("sent");
     await rig.flush();
-    await rig.service.confirmEmail(s, next, codeIn(lastMail()));
-    await rig.flush();
-    const undo = codeIn(lastMail());
-    expect(await rig.service.undoEmail(email, "000000", "stranger")).toBe("bad");
-    expect(await rig.service.undoEmail(email, undo)).toBe("ok");
-    expect(await rig.service.session(header(a))).toBeUndefined();
-    expect((await rig.service.signinPassword(email, PASSWORD, OTHER)).ok).toBe(true);
-    expect((await rig.service.signinPassword(next, PASSWORD, OTHER)).ok).toBe(false);
-    expect(await rig.service.undoEmail(email, undo)).toBe("bad");
+    const newCode = codeIn(lastTo(next));
+    for (const guess of ["000000", "123456", undefined]) expect(await rig.service.confirmEmail(s, next, newCode, "far away", guess)).toBe("bad");
+    expect(await rig.service.me(s)).toMatchObject({ email });
+    expect(await rig.service.session(header(owner))).toBeTruthy();
+    expect(to(email).filter((m) => /is being changed/.test(m.text))).toHaveLength(0);
   });
 
-  it("cannot be undone after a week, or once someone else has the old address", async () => {
-    const first = await signUp();
-    const s = (await rig.service.session(header(first)))!;
-    const next = `grace${n}@example.com`;
-    await rig.service.changeEmail(s, next, PASSWORD);
-    await rig.flush();
-    await rig.service.confirmEmail(s, next, codeIn(lastMail()));
-    await rig.flush();
-    const undo = codeIn(lastMail());
-    await signUp(email, "somebody else entirely");
-    expect(await rig.service.undoEmail(email, undo)).toBe("bad");
-    rig.clock.now += 8 * DAY;
-    expect(await rig.service.undoEmail(email, undo)).toBe("bad");
-  });
-
-  it("makes an account without a password prove the current address as well", async () => {
+  it("asks an account without a password for both mailboxes too", async () => {
     const r = await social("apple");
     const s = (await rig.service.session(header(r)))!;
     const next = `grace${n}@example.com`;
-    expect(await rig.service.changeEmail(s, next)).toBe("sent");
-    await rig.flush();
-    const mails = rig.mail.slice(-2);
-    const newCode = codeIn(mails.find((m) => m.to === next)!);
-    const oldCode = codeIn(mails.find((m) => m.to === email)!);
-    expect(await rig.service.confirmEmail(s, next, newCode, "stranger")).toBe("bad");
-    expect(await rig.service.changeEmail(s, next)).toBe("sent");
-    await rig.flush();
-    const again = rig.mail.slice(-2);
-    expect(await rig.service.confirmEmail(s, next, codeIn(again.find((m) => m.to === next)!), "x", "000000")).toBe("bad");
+    const { oldCode, newCode } = await ask(s, email, next);
+    expect(await rig.service.confirmEmail(s, next, newCode, "x", "000000")).toBe("bad");
+    await ask(s, email, next);
+    expect(await rig.service.confirmEmail(s, next, codeIn(lastTo(next)), "x", codeIn(lastTo(email)))).toBe("ok");
     expect(oldCode).toMatch(/^[0-9]{6}$/);
-    await rig.service.changeEmail(s, next);
-    await rig.flush();
-    const third = rig.mail.slice(-2);
-    expect(await rig.service.confirmEmail(s, next, codeIn(third.find((m) => m.to === next)!), "x", codeIn(third.find((m) => m.to === email)!))).toBe("ok");
   });
 
-  it("stops a thief who has only the password: the old address is told and the owner can take it back", async () => {
-    const owner = await signUp();
-    const start = rig.mail.length;
-    const stolen = await rig.service.signinPassword(email, PASSWORD, OTHER, "far away");
-    const s = (await rig.service.session(header(stolen)))!;
-    expect(await rig.service.changeEmail(s, "thief@evil.test", PASSWORD)).toBe("sent");
-    await rig.flush();
-    expect(await rig.service.confirmEmail(s, "thief@evil.test", codeIn(lastMail()), "far away")).toBe("ok");
-    await rig.flush();
-    expect(rig.mail.slice(start).filter((m) => m.to === email)).toHaveLength(1);
-    expect(await rig.service.session(header(owner))).toBeUndefined();
-    expect(await rig.service.undoEmail(email, codeIn(rig.mail.slice(start).find((m) => m.to === email)!))).toBe("ok");
-    expect(await rig.service.session(header(stolen))).toBeUndefined();
-  });
-
-  it("is refused to a session that is not new", async () => {
+  it("is refused to a session that is not new, and asked for only three times a day", async () => {
     const a = await signUp();
-    rig.clock.now += 11 * MIN;
-    const old = (await rig.service.session(header(a)))!;
-    expect(await rig.service.changeEmail(old, `x${n}@example.com`, PASSWORD)).toBe("need-fresh");
-  });
-
-  it("does not take over an address that has an account, or overwrite a change waiting there", async () => {
-    const a = await signUp();
-    const b = await signUp(`grace${n}@example.com`, "somebody else entirely");
     const s = (await rig.service.session(header(a)))!;
-    expect(await rig.service.changeEmail(s, `grace${n}@example.com`, PASSWORD)).toBe("sent");
+    for (let i = 0; i < 3; i++) {
+      expect(await rig.service.changeEmail(s, `x${i}${n}@example.com`, PASSWORD)).toBe("sent");
+      rig.clock.now += 11 * MIN;
+    }
+    expect(await rig.service.changeEmail(s, `x9${n}@example.com`, PASSWORD)).toBe("limited");
+    rig.clock.now += DAY + MIN;
+    const old = (await rig.service.session(header(a)))!;
+    expect(await rig.service.changeEmail(old, `y${n}@example.com`, PASSWORD)).toBe("need-fresh");
+  });
+
+  it("lets nobody use up another address's mail or crowd its owner out", async () => {
+    const a = await signUp();
+    const other = await signUp(`grace${n}@example.com`, "somebody else entirely");
+    const s = (await rig.service.session(header(other)))!;
+    const [{ store }] = [...rig.addresses.values()].filter((x) => x.store.value?.account);
+    const before = [...rig.addresses.values()].map((x) => x.store.value?.sends.length);
+    for (let i = 0; i < 2; i++) expect(await rig.service.changeEmail(s, email, "somebody else entirely")).toBe("sent");
     await rig.flush();
-    expect(lastMail().text).not.toMatch(/d{6}/);
-    expect(await rig.service.confirmEmail(s, `grace${n}@example.com`, "123456")).toBe("bad");
-    const free = `free${n}@example.com`;
-    await rig.service.changeEmail(s, free, PASSWORD);
+    expect([...rig.addresses.values()].map((x) => x.store.value?.sends.length).slice(0, 1)).toEqual(before.slice(0, 1));
+    expect(store.value!.codes).toBeDefined();
+    expect(to(email).filter((m) => /\b[0-9]{6}\b/.test(m.text))).toHaveLength(1);
+    expect(a.ok).toBe(true);
+    expect(await rig.service.code(email)).toBe("sent");
+  });
+
+  it("does not stop the owner of a free address from getting a code because another account asked first", async () => {
+    const attacker = await signUp(`attacker${n}@evil.test`, "attacker password 1");
+    const owner = await signUp();
+    const free = `target${n}@example.com`;
+    const sx = (await rig.service.session(header(attacker)))!;
+    const sy = (await rig.service.session(header(owner)))!;
+    expect(await rig.service.changeEmail(sx, free, "attacker password 1")).toBe("sent");
     await rig.flush();
-    const mine = codeIn(lastMail());
-    const t = (await rig.service.session(header(b)))!;
-    expect(await rig.service.changeEmail(t, free, "somebody else entirely")).toBe("sent");
+    const xCode = codeIn(lastTo(free));
+    expect(await rig.service.changeEmail(sy, free, PASSWORD)).toBe("sent");
     await rig.flush();
-    expect(await rig.service.confirmEmail(s, free, mine)).toBe("ok");
+    expect(to(free)).toHaveLength(2);
+    const yOld = codeIn(lastTo(email));
+    expect(await rig.service.confirmEmail(sy, free, codeIn(lastTo(free)), "x", yOld)).toBe("ok");
+    expect(xCode).toMatch(/^[0-9]{6}$/);
+  });
+
+  it("does not change the email if the old address cannot be told", async () => {
+    const a = await signUp();
+    const s = (await rig.service.session(header(a)))!;
+    const next = `grace${n}@example.com`;
+    const { oldCode, newCode } = await ask(s, email, next, PASSWORD);
+    rig.mailer.fail = true;
+    expect(await rig.service.confirmEmail(s, next, newCode, "x", oldCode)).toBe("mail-failed");
+    rig.mailer.fail = false;
+    expect(await rig.service.me(s)).toMatchObject({ email });
+    expect((await rig.service.signinPassword(email, PASSWORD, OTHER)).ok).toBe(true);
+  });
+
+  it("does not take over an address that has an account", async () => {
+    const a = await signUp();
+    await signUp(`grace${n}@example.com`, "somebody else entirely");
+    const s = (await rig.service.session(header(a)))!;
+    const taken = `grace${n}@example.com`;
+    const before = rig.mail.length;
+    expect(await rig.service.changeEmail(s, taken, PASSWORD)).toBe("sent");
+    await rig.flush();
+    expect(rig.mail.slice(before).filter((m) => m.to === taken)).toHaveLength(0);
+    expect(await rig.service.confirmEmail(s, taken, "123456", "x", codeIn(lastTo(email)))).toBe("bad");
   });
 });
 

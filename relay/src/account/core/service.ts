@@ -12,8 +12,8 @@ type Async<T> = { [K in keyof T]: T[K] extends (...a: infer A) => infer R ? (...
 
 // What the service calls on one address, account or identity; a Durable Object stub, a database
 // row or the object itself all fit.
-export type AddressPort = Async<Pick<AddressCore, "requestSignup" | "requestSignin" | "requestLink" | "requestEmail" | "requestOldCheck" | "issueUndo" | "takeCode" | "bindAccount" | "unbind" | "account" | "passwordTry" | "passwordGood">>;
-export type AccountPort = Async<Pick<AccountCore, "create" | "exists" | "addIdentity" | "open" | "verifyPassword" | "check" | "alive" | "sessions" | "revoke" | "setPassword" | "authorizeDelete" | "authorizeEmailChange" | "mailAddress" | "setEmail" | "me" | "identityIds" | "export" | "erase">>;
+export type AddressPort = Async<Pick<AddressCore, "requestSignup" | "requestSignin" | "requestLink" | "requestEmail" | "requestOldCheck" | "notifyChange" | "takeCode" | "bindAccount" | "unbind" | "account" | "passwordTry" | "passwordGood">>;
+export type AccountPort = Async<Pick<AccountCore, "create" | "exists" | "addIdentity" | "open" | "verifyPassword" | "check" | "alive" | "sessions" | "revoke" | "setPassword" | "authorizeDelete" | "authorizeEmailChange" | "ask" | "mailAddress" | "setEmail" | "me" | "identityIds" | "export" | "erase">>;
 export type IdentityPort = Async<Pick<IdentityCore, "account" | "bind" | "claim" | "release" | "use" | "erase">>;
 
 export type OncePort = Async<{ take(until: number): boolean }>;
@@ -253,28 +253,27 @@ export class AccountService {
     return this.dir.account(s.account).setPassword(record, typeof current === "string" ? current : undefined, s.fresh, s.session);
   }
 
-  // The email is the way back into the account, so it takes a new session and the password (or, for
-  // an account without one, a code from the current address as well as one from the new address).
+  // The email is the way back into the account, so a change takes a new session, the password if
+  // there is one, and a code from each mailbox: the current address and the new one.
   async changeEmail(s: Checked, email: unknown, password?: unknown): Promise<Sent | "bad-email" | "need-fresh" | "bad" | "locked"> {
     if (!s.fresh) return "need-fresh";
     const a = await this.address(email);
     if (!a) return normalizeEmail(email) ? "not-configured" : "bad-email";
     const account = this.dir.account(s.account);
     const ok = await account.authorizeEmailChange(typeof password === "string" ? password : undefined);
-    if (ok === "bad" || ok === "locked") return ok;
-    const sent = await a.port.requestEmail(a.typed, a.canonical, s.account);
-    if (ok === "need-code" && sent === "sent") {
-      const old = await account.mailAddress();
-      const previous = old ? await this.address(old) : undefined;
-      if (!previous) return "bad";
-      return previous.port.requestOldCheck(previous.canonical, s.account).then((r) => (r === "none" ? "bad" : r));
-    }
-    return sent;
+    if (ok !== "ok") return ok;
+    if (!(await account.ask("email"))) return "limited";
+    const old = await account.mailAddress();
+    const previous = old ? await this.address(old) : undefined;
+    if (!previous) return "bad";
+    const asked = await previous.port.requestOldCheck(previous.canonical, s.account);
+    if (asked !== "sent") return asked === "none" ? "bad" : asked;
+    return a.port.requestEmail(a.typed, a.canonical, s.account);
   }
 
-  // The old address is mailed first, with a code that puts it back for a week; then the account
-  // moves and every other session ends.
-  async confirmEmail(s: Checked, email: unknown, code: unknown, caller = "", oldCode?: unknown): Promise<"ok" | "bad" | "bad-email" | "need-fresh"> {
+  // The old address is told before the account moves, and the change waits until that mail has gone;
+  // then every other session ends.
+  async confirmEmail(s: Checked, email: unknown, code: unknown, caller = "", oldCode?: unknown): Promise<"ok" | "bad" | "bad-email" | "need-fresh" | "mail-failed"> {
     if (!s.fresh) return "need-fresh";
     const a = await this.address(email);
     if (!a) return "bad-email";
@@ -282,13 +281,11 @@ export class AccountService {
     const old = await account.mailAddress();
     const previous = old ? await this.address(old) : undefined;
     if (!previous) return "bad";
-    const taken = await a.port.takeCode("email", code, a.canonical, caller);
+    const proof = await previous.port.takeCode("emailold", oldCode, previous.canonical, caller);
+    if (!proof.ok || proof.extra !== s.account) return "bad";
+    const taken = await a.port.takeCode(`email:${s.account}`, code, a.canonical, caller);
     if (!taken.ok || taken.extra !== s.account) return "bad";
-    if (!(await account.me())?.password) {
-      const proof = await previous.port.takeCode("emailold", oldCode, previous.canonical, caller);
-      if (!proof.ok || proof.extra !== s.account) return "bad";
-    }
-    await previous.port.issueUndo(previous.canonical, s.account, old!, taken.mailTo);
+    if (!(await previous.port.notifyChange(old!, `The email of your Lazy account is being changed to ${taken.mailTo}. If that was not you, change your password now and sign the other sessions out.`))) return "mail-failed";
     // The old address is let go first, so a stop half way leaves an address unbound, never one bound to nothing.
     if (previous.canonical !== a.canonical) await previous.port.unbind(s.account);
     if (!(await a.port.bindAccount(s.account, taken.mailTo))) {
@@ -296,23 +293,7 @@ export class AccountService {
       return "bad";
     }
     await account.setEmail(taken.mailTo, s.session);
-    return "ok";
-  }
-
-  // From the old address alone: puts it back and signs every session out.
-  async undoEmail(email: unknown, code: unknown, caller = ""): Promise<"ok" | "bad" | "bad-email"> {
-    const a = await this.address(email);
-    if (!a) return "bad-email";
-    const taken = await a.port.takeCode("undo", code, a.canonical, caller);
-    const id = taken.ok ? (taken.extra as string | undefined) : undefined;
-    if (!taken.ok || !id) return "bad";
-    const account = this.dir.account(id);
-    if (!(await account.exists())) return "bad";
-    const current = await account.mailAddress();
-    const now = current ? await this.address(current) : undefined;
-    if (!(await a.port.bindAccount(id, taken.mailTo))) return "bad";
-    if (now && now.canonical !== a.canonical) await now.port.unbind(id);
-    await account.setEmail(taken.mailTo);
+    await a.port.notifyChange(taken.mailTo, `This address is now the email of your Lazy account, which was ${old}.`);
     return "ok";
   }
 

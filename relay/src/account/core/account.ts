@@ -8,6 +8,7 @@ const SESSION_MAX_MS = 180 * DAY;
 const SEEN_REFRESH_MS = 3_600_000;
 const FRESH_MS = 10 * MINUTE;
 const MAX_SESSIONS = 20;
+const ASKS_PER_DAY = 3;
 const REAUTH_WINDOW_MS = 15 * MINUTE;
 const REAUTH_FAILS = 10;
 
@@ -33,6 +34,8 @@ export interface AccountState {
   identities: { id: string; provider: string }[];
   sessions: Session[];
   reauth: Window;
+  // When this account asked for mail that goes to an address, by kind, so asking is capped per account.
+  asks?: Record<string, number[]>;
 }
 
 export interface Login {
@@ -197,11 +200,23 @@ export class AccountCore {
     return this.checkPassword(password, now);
   }
 
-  // The email is the way back into the account, so even a new session shows the password; with
-  // none, the current address has to say yes by code.
-  async authorizeEmailChange(password: string | undefined, now = this.clock()): Promise<"ok" | "bad" | "locked" | "need-code"> {
+  // Even a new session shows the password, if the account has one.
+  async authorizeEmailChange(password: string | undefined, now = this.clock()): Promise<"ok" | "bad" | "locked"> {
     if (!this.s) return "bad";
-    return this.s.password ? this.checkPassword(password, now) : "need-code";
+    return this.s.password ? this.checkPassword(password, now) : "ok";
+  }
+
+  // A few requests a day for mail that goes to an address, counted when asked.
+  async ask(kind: string, now = this.clock()): Promise<boolean> {
+    const s = this.s;
+    if (!s) return false;
+    s.asks ??= {};
+    const mine = (s.asks[kind] ?? []).filter((t) => now - t < DAY);
+    if (mine.length >= ASKS_PER_DAY) return false;
+    mine.push(now);
+    s.asks[kind] = mine;
+    await this.save();
+    return true;
   }
 
   async setPassword(next: PasswordRecord, current: string | undefined, fresh: boolean, session: string, now = this.clock()): Promise<Reauth> {

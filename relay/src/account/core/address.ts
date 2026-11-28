@@ -15,9 +15,10 @@ const PASSWORD_WINDOW_MS = 15 * MINUTE;
 const PASSWORD_FAILS_CALLER = 10;
 const PASSWORD_SLOW_AFTER = 40;
 const PASSWORD_FAILS_TOTAL = 400;
-const UNDO_MS = 7 * DAY;
 
-export type Purpose = "signup" | "signin" | "link" | "email" | "emailold" | "undo";
+// A new-email code is kept per account that asked, so one account cannot crowd out another at an address.
+export type Purpose = "signup" | "signin" | "link" | "emailold" | `email:${string}`;
+const MAX_PENDING_EMAIL = 5;
 export type Sent = "sent" | "limited" | "busy" | "not-configured";
 
 interface Code {
@@ -173,22 +174,25 @@ export class AddressCore {
   }
 
   // The new address of an account that is changing its email.
+  // What the asking account may do is limited by its own daily count, not by this address's window,
+  // so another account cannot use up the mail this address's owner is allowed. An address that has an
+  // account of its own is never written to for someone else's change.
   async requestEmail(typed: string, canonical: string, account: string, now = this.clock()): Promise<Sent> {
     if (!this.ready()) return "not-configured";
-    const slot = await this.reserveSend(now);
-    if (slot !== "ok") return slot;
-    if (this.s.account && this.s.mailTo) {
-      this.later(this.s.mailTo, "A Lazy account tried to use this address", "Someone asked to use this address for another Lazy account, which already has one here. Nothing changed. If it was not you, you can ignore this email.");
-    } else {
-      // A change already waiting here for another account is not overwritten.
-      const waiting = this.s.codes.email;
-      if (!waiting || waiting.expires <= now || waiting.extra === account) await this.issue("email", canonical, typed, now, account);
+    await this.repair();
+    if (this.s.account) return "sent";
+    if (this.deps.mailBudget && !(await this.deps.mailBudget())) return "busy";
+    const pending = Object.keys(this.s.codes).filter((k) => k.startsWith("email:"));
+    if (pending.length >= MAX_PENDING_EMAIL && !pending.includes(`email:${account}`)) {
+      const oldest = pending.sort((x, y) => this.s.codes[x as Purpose]!.expires - this.s.codes[y as Purpose]!.expires)[0];
+      delete this.s.codes[oldest as Purpose];
     }
+    await this.issue(`email:${account}`, canonical, typed, now, account);
     await this.save();
     return "sent";
   }
 
-  // The current address of an account without a password is asked as well before the email changes.
+  // The current address of an account is asked as well before its email changes.
   async requestOldCheck(canonical: string, account: string, now = this.clock()): Promise<Sent | "none"> {
     if (this.s.account !== account || !this.s.mailTo) return "none";
     if (!this.ready()) return "not-configured";
@@ -199,10 +203,15 @@ export class AddressCore {
     return "sent";
   }
 
-  // Mailed to the address an account is leaving, with a code that puts it back for a week.
-  async issueUndo(canonical: string, account: string, mailTo: string, moved: string, now = this.clock()): Promise<void> {
-    await this.issue("undo", canonical, mailTo, now, account, (digits) => `The email of your Lazy account was changed to ${moved}. If that was you, ignore this email. If it was not, enter the code ${digits} within 7 days to put this address back and sign every session out.`, UNDO_MS);
-    await this.save();
+  // Tells an address about a change of email, and says whether the mail went; asked twice more if it did not.
+  async notifyChange(to: string, text: string): Promise<boolean> {
+    for (let attempt = 0; attempt < 3; attempt++) {
+      try {
+        await this.deps.mailer().send({ to, subject: "The email of your Lazy account changed", text });
+        return true;
+      } catch {}
+    }
+    return false;
   }
 
   // Each caller gets three tries per code and ten wrong codes a day; the code itself has thirty tries
@@ -292,7 +301,7 @@ export class AddressCore {
   // The first moment something kept here runs out; nothing to wake for when nothing will.
   private nextWake(): number | undefined {
     const times: number[] = [];
-    for (const c of Object.values(this.s.codes)) times.push(c.expires);
+    for (const c of Object.values(this.s.codes)) times.push(c!.expires);
     if (this.s.sends.length > 0) times.push(Math.min(...this.s.sends) + DAY);
     if (this.s.code.count > 0) times.push(this.s.code.since + DAY);
     if (this.s.password.count > 0) times.push(this.s.password.since + PASSWORD_WINDOW_MS);

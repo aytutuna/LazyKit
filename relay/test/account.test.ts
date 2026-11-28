@@ -310,22 +310,22 @@ describe("sign in with Apple and Google over HTTP", () => {
 });
 
 describe("email, export and deletion over HTTP", () => {
-  it("moves the account to a new address after a code and the password, tells the old address, and can be undone", async () => {
+  it("moves the account only with the password and a code from each mailbox, and tells both addresses", async () => {
     const token = await signUp(EMAIL, PASSWORD);
     expect((await account("email", "POST", { email: who.other }, token)).status).toBe(401);
+    expect((await account("email", "POST", { email: who.other, password: PASSWORD, turnstile: "" }, token)).status).toBe(403);
     expect((await account("email", "POST", { email: who.other, password: PASSWORD }, token)).status).toBe(202);
-    await mailed(2);
-    expect(sent[1].to).toBe(who.other);
-    expect((await account("email/confirm", "POST", { email: who.other, code: codeIn(sent[1]) }, token)).status).toBe(204);
     await mailed(3);
-    expect(sent[2].to).toBe(EMAIL);
-    expect(sent[2].text).toContain(who.other);
+    const oldCode = codeIn(sent.find((m, i) => i > 0 && m.to === EMAIL)!);
+    const newCode = codeIn(sent.find((m) => m.to === who.other)!);
+    expect((await account("email/confirm", "POST", { email: who.other, code: newCode }, token)).status).toBe(401);
+    expect((await account("email/confirm", "POST", { email: who.other, code: newCode, oldCode }, token)).status).toBe(204);
+    await mailed(5);
+    expect(sent.some((m) => m.to === EMAIL && m.text.includes(`is being changed to ${who.other}`))).toBe(true);
+    expect(sent.some((m) => m.to === who.other && m.text.includes("is now the email"))).toBe(true);
     expect((await account("signin", "POST", { email: who.other, password: PASSWORD, ...LOGIN, device: DEV_B })).status).toBe(200);
     expect((await account("signin", "POST", { email: EMAIL, password: PASSWORD, ...LOGIN, device: DEV_B })).status).toBe(401);
-    expect((await account("email/undo", "POST", { email: EMAIL, code: "000000" })).status).toBe(401);
-    expect((await account("email/undo", "POST", { email: EMAIL, code: codeIn(sent[2]) })).status).toBe(204);
-    expect((await account("me", "GET", undefined, token)).status).toBe(401);
-    expect((await account("signin", "POST", { email: EMAIL, password: PASSWORD, ...LOGIN })).status).toBe(200);
+    expect((await account("email/undo", "POST", { email: EMAIL, code: "000000" })).status).toBe(404);
   });
 
   it("needs the confirmation word and removes everything the service holds", async () => {

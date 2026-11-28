@@ -91,7 +91,7 @@ async function botCheck(env: Cloudflare.Env, svc: AccountService, body: Record<s
   }
 }
 
-const FORM = ["POST signup", "POST code", "POST nonce", "POST signup/confirm", "POST signin/code", "POST signin", "POST apple", "POST google", "POST link/confirm", "POST email/undo"];
+const FORM = ["POST signup", "POST code", "POST nonce", "POST signup/confirm", "POST signin/code", "POST signin", "POST apple", "POST google", "POST link/confirm"];
 
 export async function accountApi(req: Request, env: Cloudflare.Env, path: string, ip: string | null): Promise<Response> {
   const svc = accountService(env);
@@ -137,6 +137,8 @@ export async function accountApi(req: Request, env: Cloudflare.Env, path: string
     if (route === "POST email") {
       const slow = limited(startLimit);
       if (slow) return slow;
+      const bot = await botCheck(env, svc, body, ip);
+      if (bot) return bot;
       const r = await svc.changeEmail(s, body.email, body.password);
       return r === "need-fresh" ? fail("sign in again first", 403) : r === "bad" ? fail("wrong password", 401) : r === "locked" ? fail("too many tries, try again later", 429, { "Retry-After": "900" }) : sentStatus(r);
     }
@@ -144,7 +146,7 @@ export async function accountApi(req: Request, env: Cloudflare.Env, path: string
       const slow = limited(confirmLimit);
       if (slow) return slow;
       const r = await svc.confirmEmail(s, body.email, body.code, caller, body.oldCode);
-      return r === "ok" ? new Response(null, { status: 204 }) : r === "need-fresh" ? fail("sign in again first", 403) : fail(r === "bad" ? "wrong code" : r, r === "bad" ? 401 : 400);
+      return r === "ok" ? new Response(null, { status: 204 }) : r === "need-fresh" ? fail("sign in again first", 403) : r === "mail-failed" ? fail("the notice could not be sent, try again", 503, { "Retry-After": "60" }) : fail(r === "bad" ? "wrong code" : r, r === "bad" ? 401 : 400);
     }
     const r = await svc.setPassword(s, body.password, body.current);
     return r === "bad-password" ? fail("bad password", 400) : reauth(r);
@@ -163,13 +165,6 @@ export async function accountApi(req: Request, env: Cloudflare.Env, path: string
     const bot = await botCheck(env, svc, body, ip);
     if (bot) return bot;
     return sentStatus(route === "POST signup" ? await svc.signup(body.email) : await svc.code(body.email));
-  }
-
-  if (route === "POST email/undo") {
-    const slow = limited(confirmLimit);
-    if (slow) return slow;
-    const r = await svc.undoEmail(body.email, body.code, caller);
-    return r === "ok" ? new Response(null, { status: 204 }) : fail(r === "bad" ? "wrong code" : r, r === "bad" ? 401 : 400);
   }
 
   const slow = limited(route === "POST signin" || route === "POST apple" || route === "POST google" ? signinLimit : confirmLimit);
