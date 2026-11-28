@@ -59,7 +59,7 @@ pub struct GraphicsState {
     pub stroke_alpha: f64,
     pub blend_mode: String,
     /// The /SMask of an ExtGState: a dictionary, or none.
-    pub soft_mask: Option<Dict>,
+    pub soft_mask: Option<Arc<Dict>>,
 }
 
 impl GraphicsState {
@@ -324,7 +324,34 @@ pub trait ContentVisitor {
 enum Key {
     Number(u32),
     Text(Vec<u8>),
+    /// A direct entry of a resource dictionary, known by the dictionary (which it keeps alive) and the entry's place.
+    Direct(DictId, String, String),
 }
+
+#[derive(Debug, Clone)]
+struct DictId(Arc<Dict>);
+
+impl PartialEq for DictId {
+    fn eq(&self, other: &Self) -> bool {
+        Arc::ptr_eq(&self.0, &other.0)
+    }
+}
+
+impl Eq for DictId {}
+
+impl std::hash::Hash for DictId {
+    fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
+        (Arc::as_ptr(&self.0) as usize).hash(state);
+    }
+}
+
+/// What a resource lookup found, by the dictionary searched, the category and the name; a miss is kept too.
+type Lookups = HashMap<(usize, String, String), (Arc<Dict>, Option<(Key, Arc<Object>)>)>;
+
+const MAX_LOOKUPS: usize = 4096;
+const MAX_CACHED_FONTS: usize = 512;
+const MAX_CACHED_MASKS: usize = 256;
+const MAX_FAILED_FORMS: usize = 4096;
 
 impl Key {
     // An object that is a reference is known by its number, a direct one by what it says.
@@ -345,26 +372,52 @@ fn resolved(doc: &mut Document, value: &Object) -> Option<Arc<Object>> {
 }
 
 // The resource `name` of a category, looked up in the current resources and then those of the enclosing streams;
-// with the key of the entry as the file gives it.
+// with the key of the entry as the file gives it. Only the entry found is copied out of the dictionary, once.
 fn lookup_resource(
     doc: &mut Document,
-    resources: &[Option<Dict>],
+    resources: &[Option<Arc<Dict>>],
+    lookups: &mut Lookups,
     category: &str,
     name: &str,
 ) -> Option<(Key, Arc<Object>)> {
     for dict in resources.iter().rev().flatten() {
-        let Some(entries) = doc.lookup(dict, category).map(|v| v.into_shared()) else {
+        let id = (
+            Arc::as_ptr(dict) as usize,
+            category.to_string(),
+            name.to_string(),
+        );
+        if let Some((_, known)) = lookups.get(&id) {
+            if known.is_some() {
+                return known.clone();
+            }
             continue;
-        };
-        let Some(entries) = entries.as_dict() else {
-            continue;
-        };
-        if let Some(entry) = entries.get(name) {
-            let value = resolved(doc, entry)?;
-            return Some((Key::of(entry, &value), value));
+        }
+        let found = find_entry(doc, dict, category, name);
+        if lookups.len() >= MAX_LOOKUPS {
+            lookups.clear();
+        }
+        lookups.insert(id, (dict.clone(), found.clone()));
+        if found.is_some() {
+            return found;
         }
     }
     None
+}
+
+fn find_entry(
+    doc: &mut Document,
+    dict: &Arc<Dict>,
+    category: &str,
+    name: &str,
+) -> Option<(Key, Arc<Object>)> {
+    let entries = doc.lookup(dict, category)?;
+    let entry = entries.as_dict()?.get(name)?;
+    let value = resolved(doc, entry)?;
+    let key = match entry {
+        Object::Ref(r) => Key::Number(r.number),
+        _ => Key::Direct(DictId(dict.clone()), category.to_string(), name.to_string()),
+    };
+    Some((key, value))
 }
 
 pub struct ContentInterpreter<'a> {
@@ -373,7 +426,11 @@ pub struct ContentInterpreter<'a> {
     form_operations: HashMap<u32, Arc<Vec<ContentOperation>>>,
     color_spaces: HashMap<Key, Arc<ColorSpaceInfo>>,
     fonts: HashMap<Key, Arc<PdfFont>>,
-    resources: Vec<Option<Dict>>,
+    resources: Vec<Option<Arc<Dict>>>,
+    lookups: Lookups,
+    form_resources: HashMap<u32, Option<Arc<Dict>>>,
+    failed_forms: HashSet<u32>,
+    soft_masks: HashMap<usize, (Arc<Object>, Option<Arc<Dict>>)>,
     active_forms: HashSet<u32>,
     walked_patterns: HashSet<u32>,
     context: ContentContext,
@@ -405,6 +462,10 @@ impl<'a> ContentInterpreter<'a> {
             color_spaces: HashMap::new(),
             fonts: HashMap::new(),
             resources: Vec::new(),
+            lookups: HashMap::new(),
+            form_resources: HashMap::new(),
+            failed_forms: HashSet::new(),
+            soft_masks: HashMap::new(),
             active_forms: HashSet::new(),
             walked_patterns: HashSet::new(),
             context: ContentContext {
@@ -443,7 +504,7 @@ impl<'a> ContentInterpreter<'a> {
     pub fn run_page(&mut self, page: &Page) {
         let crop = page.crop_box(self.doc);
         self.begin(crop);
-        let resources = page.resources(self.doc);
+        let resources = page.resources(self.doc).map(Arc::new);
         self.resources.push(resources);
         let contents = page.contents(self.doc);
         let operations = parse(&contents);
@@ -615,7 +676,8 @@ impl<'a> ContentInterpreter<'a> {
     }
 
     fn find_resource(&mut self, category: &str, name: &str) -> Option<Arc<Object>> {
-        lookup_resource(self.doc, &self.resources, category, name).map(|(_, v)| v)
+        lookup_resource(self.doc, &self.resources, &mut self.lookups, category, name)
+            .map(|(_, v)| v)
     }
 
     /// The font for a font dictionary, kept for this interpreter.
@@ -624,6 +686,9 @@ impl<'a> ContentInterpreter<'a> {
             return known.clone();
         }
         let font = Arc::new(PdfFont::new(self.doc, dict));
+        if self.fonts.len() >= MAX_CACHED_FONTS {
+            self.fonts.clear();
+        }
         self.fonts.insert(key, font.clone());
         font
     }
@@ -671,10 +736,10 @@ impl<'a> ContentInterpreter<'a> {
 
     fn set_ext_gstate(&mut self, op: &ContentOperation) {
         let Some(name) = name_operand(op) else { return };
-        let Some(g) = self.find_resource("ExtGState", &name) else {
+        let Some(entry) = self.find_resource("ExtGState", &name) else {
             return;
         };
-        let Object::Dict(g) = &*g else { return };
+        let Object::Dict(g) = &*entry else { return };
         let doc = &mut *self.doc;
         if let Some(v) = doc.number_of(g, "LW") {
             self.context.state.line_width = v;
@@ -735,7 +800,19 @@ impl<'a> ContentInterpreter<'a> {
             state.blend_mode = mode.text();
         }
         if g.contains_key("SMask") {
-            state.soft_mask = doc.dict_of(g, "SMask");
+            let id = Arc::as_ptr(&entry) as usize;
+            let mask = match self.soft_masks.get(&id) {
+                Some((_, known)) => known.clone(),
+                None => {
+                    let mask = doc.dict_of(g, "SMask").map(Arc::new);
+                    if self.soft_masks.len() >= MAX_CACHED_MASKS {
+                        self.soft_masks.clear();
+                    }
+                    self.soft_masks.insert(id, (entry.clone(), mask.clone()));
+                    mask
+                }
+            };
+            state.soft_mask = mask;
         }
     }
 
@@ -965,7 +1042,13 @@ impl<'a> ContentInterpreter<'a> {
             let definition = Arc::new(Object::name(name));
             (Key::of(&Object::Null, &definition), definition)
         } else {
-            match lookup_resource(self.doc, &self.resources, "ColorSpace", name) {
+            match lookup_resource(
+                self.doc,
+                &self.resources,
+                &mut self.lookups,
+                "ColorSpace",
+                name,
+            ) {
                 Some(found) => found,
                 None => return ColorSpaceInfo::device_gray(),
             }
@@ -1034,7 +1117,13 @@ impl<'a> ContentInterpreter<'a> {
             return;
         };
         self.context.state.font_size = size.value();
-        let found = lookup_resource(self.doc, &self.resources, "Font", &name.text());
+        let found = lookup_resource(
+            self.doc,
+            &self.resources,
+            &mut self.lookups,
+            "Font",
+            &name.text(),
+        );
         let font = match found {
             Some((key, value)) => match &*value {
                 Object::Dict(dict) => self.font_for(key, dict),
@@ -1208,13 +1297,24 @@ impl<'a> ContentInterpreter<'a> {
         if let Some(known) = self.form_operations.get(&stream.number) {
             return known.clone();
         }
+        if self.failed_forms.contains(&stream.number) {
+            return Arc::new(Vec::new());
+        }
         let mut size = 0;
         let operations = match self.doc.stream_data_limited(stream, MAX_FORM_SIZE, false) {
             Ok(data) => {
                 size = data.len();
                 parse_limited(&data, MAX_FORM_OPERATIONS).unwrap_or_default()
             }
-            Err(_) => Vec::new(),
+            Err(_) => {
+                // A stream that cannot be read is not read again at every Do.
+                if stream.number != 0 && self.failed_forms.len() < MAX_FAILED_FORMS {
+                    self.failed_forms.insert(stream.number);
+                } else {
+                    self.budget -= (MAX_FORM_SIZE >> 6) as i64;
+                }
+                Vec::new()
+            }
         };
         let operations = Arc::new(operations);
         if stream.number != 0
@@ -1269,7 +1369,8 @@ impl<'a> ContentInterpreter<'a> {
         let resources = &self.resources;
         let lookup = |name: &str| {
             let mut doc = doc.borrow_mut();
-            lookup_resource(&mut doc, resources, "ColorSpace", name).map(|(_, v)| (*v).clone())
+            lookup_resource(&mut doc, resources, &mut Lookups::new(), "ColorSpace", name)
+                .map(|(_, v)| (*v).clone())
         };
         let dictionary = image.expanded(Some(&lookup));
         self.paint_image(None, None, Some(image.clone()), dictionary);
@@ -1414,7 +1515,16 @@ impl<'a> ContentInterpreter<'a> {
         let matrix = inner.ctm;
         self.context.state = inner;
         self.reset_path();
-        let resources = self.doc.dict_of(&stream.dict, "Resources");
+        let resources = match self.form_resources.get(&stream.number) {
+            Some(known) if stream.number != 0 => known.clone(),
+            _ => {
+                let found = self.doc.dict_of(&stream.dict, "Resources").map(Arc::new);
+                if stream.number != 0 {
+                    self.form_resources.insert(stream.number, found.clone());
+                }
+                found
+            }
+        };
         self.resources.push(resources);
         self.context.forms.push(form.clone());
         let info = FormInfo {
@@ -1470,14 +1580,18 @@ impl<'a> ContentInterpreter<'a> {
                     entry = Some(last.clone());
                 }
                 Object::Name(key) => {
-                    if let Some((found, value)) =
-                        lookup_resource(self.doc, &self.resources, "Properties", &key.text())
-                        && let Object::Dict(d) = &*value
+                    if let Some((found, value)) = lookup_resource(
+                        self.doc,
+                        &self.resources,
+                        &mut self.lookups,
+                        "Properties",
+                        &key.text(),
+                    ) && let Object::Dict(d) = &*value
                     {
                         properties = Some(d.clone());
                         entry = Some(match found {
                             Key::Number(number) => Object::reference(number, 0),
-                            Key::Text(_) => Object::Dict(d.clone()),
+                            Key::Text(_) | Key::Direct(..) => Object::Dict(d.clone()),
                         });
                     }
                 }
