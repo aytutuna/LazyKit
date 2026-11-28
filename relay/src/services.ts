@@ -1,5 +1,6 @@
 import { APPLE_ROOT, fromBase64 } from "./appattest";
 import type { IntegrityPayload } from "./integrity";
+import type { Mailer } from "./account/email";
 
 export type Store = "apple" | "google" | "microsoft";
 export type Platform = "apns" | "fcm";
@@ -22,9 +23,9 @@ export interface PurchaseVerifier {
   // Google's purchase token, Microsoft's purchase id for the buyer, not the
   // add-on's product Store ID, which every buyer shares), which stays the same
   // across renewals. A real check also confirms that the purchase was made
-  // for this group: Apple's appAccountToken or Google's obfuscatedAccountId
-  // is set to the group id at purchase time.
-  verify(store: Store, receipt: string, group: string): Promise<{ until: number; purchase: string }>;
+  // for this account: Apple's appAccountToken or Google's obfuscatedAccountId
+  // is set to the relay's account token at purchase time.
+  verify(store: Store, receipt: string, accountToken: string): Promise<{ until: number; purchase: string }>;
 }
 
 export interface PushSender {
@@ -36,12 +37,22 @@ export interface IntegrityDecoder {
   decode(token: string): Promise<IntegrityPayload>;
 }
 
+export type PublishedKey = JsonWebKey & { kid?: string };
+
+export interface KeySource {
+  // The public key with this id from the identity provider's published set.
+  get(provider: "apple" | "google", kid: string): Promise<PublishedKey | undefined>;
+}
+
 export interface Services {
   verifier: PurchaseVerifier;
   push: PushSender;
   integrity: IntegrityDecoder;
   // The roots App Attest chains must lead to; only tests use another.
   appleRoots: Uint8Array[];
+  keys: KeySource;
+  // Left unset, the account service sends through Resend with its own environment.
+  mailer?: Mailer;
 }
 
 // The stores' receipt checks and the APNs and FCM clients need keys that are
@@ -63,6 +74,7 @@ const notConfigured: Services = {
     },
   },
   appleRoots: [fromBase64(APPLE_ROOT)],
+  keys: publishedKeys(),
 };
 
 let current = notConfigured;
@@ -71,4 +83,27 @@ export const services = (): Services => current;
 
 export function useServices(s?: Partial<Services>): void {
   current = { ...notConfigured, ...s };
+}
+
+const KEY_URLS = { apple: "https://appleid.apple.com/auth/keys", google: "https://www.googleapis.com/oauth2/v3/certs" };
+const KEYS_KEEP_MS = 3_600_000;
+const KEYS_RETRY_MS = 300_000;
+
+// Providers rotate keys now and then, so an unknown id triggers one fetch, at most every few minutes.
+function publishedKeys(): KeySource {
+  const cache = new Map<string, { keys: PublishedKey[]; at: number }>();
+  return {
+    async get(provider, kid) {
+      const now = Date.now();
+      const kept = cache.get(provider);
+      const find = (keys: PublishedKey[]) => keys.find((k) => k.kid === kid);
+      if (kept && now - kept.at < KEYS_KEEP_MS && find(kept.keys)) return find(kept.keys);
+      if (kept && now - kept.at < KEYS_RETRY_MS) return undefined;
+      const res = await fetch(KEY_URLS[provider]);
+      if (!res.ok) throw new Error(`${provider} keys answered ${res.status}`);
+      const keys = ((await res.json()) as { keys: PublishedKey[] }).keys;
+      cache.set(provider, { keys, at: now });
+      return find(keys);
+    },
+  };
 }
