@@ -265,6 +265,26 @@ async fn an_app_that_cannot_make_its_proof_says_why() {
     ));
 }
 
+#[tokio::test(start_paused = true)]
+async fn an_app_that_never_answers_its_proof_is_given_up_on() {
+    struct Silent;
+    #[async_trait]
+    impl Attester for Silent {
+        async fn attest(&self, _: &str, _: &str) -> Result<Attestation, String> {
+            std::future::pending().await
+        }
+    }
+    let wanted = "HTTP/1.1 403 Forbidden\r\nx-relay-reason: attestation-required\r\nContent-Length: 0\r\n\r\n";
+    let challenge = "HTTP/1.1 200 OK\r\nContent-Length: 17\r\n\r\n{\"challenge\":\"c\"}";
+    let t = common::Replies::new(&[wanted, challenge]);
+    let relay = Relay::new("https://alazy.app/relay/v1", &random_id(), &random_id(), t)
+        .with_attester(Arc::new(Silent));
+    assert!(matches!(
+        relay.register_push(Platform::Fcm, "t").await,
+        Err(RelayError::Attester(_))
+    ));
+}
+
 const NOT_FOUND_WOKEN: &str =
     "HTTP/1.1 404 Not Found\r\nx-relay-woken: 1\r\nContent-Length: 0\r\n\r\n";
 const NOT_FOUND: &str = "HTTP/1.1 404 Not Found\r\nContent-Length: 0\r\n\r\n";

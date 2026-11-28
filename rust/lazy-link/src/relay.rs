@@ -55,6 +55,8 @@ fn cut_off() -> Message {
 
 /// How long a connect or a plain request may take before it counts as failed.
 const REQUEST_TIMEOUT: Duration = Duration::from_secs(15);
+// The app's proof may wait on the system (App Attest talks to Apple), so it gets longer.
+const ATTEST_TIMEOUT: Duration = Duration::from_secs(60);
 /// How much a stream holds before a write waits.
 const WINDOW: usize = 256 * 1024;
 /// Frames a stream may have sent that the other end has not yet handed to its reader. The other
@@ -517,9 +519,9 @@ impl Relay {
             .and_then(|v| v["challenge"].as_str().map(str::to_owned))
             .filter(|_| status == 200)
             .ok_or(RelayError::Refused(status))?;
-        let proof = attester
-            .attest(&self.group, &challenge)
+        let proof = tokio::time::timeout(ATTEST_TIMEOUT, attester.attest(&self.group, &challenge))
             .await
+            .map_err(|_| RelayError::Attester("the app did not make its proof in time".into()))?
             .map_err(RelayError::Attester)?;
         let mut body = match proof {
             Attestation::Apple {
