@@ -21,7 +21,8 @@ pub struct Login {
 #[derive(Debug, Clone, uniffi::Record)]
 pub struct Session {
     pub token: String,
-    pub session: String,
+    /// The session's short id, as `sessions` lists it and `revoke` takes it.
+    pub id: String,
     /// The account as JSON: its address, whether it has a password, its linked identities.
     pub account_json: String,
 }
@@ -149,7 +150,7 @@ fn bot(b: Bot) -> account::Bot {
 fn session(s: account::Session) -> Session {
     Session {
         token: s.token,
-        session: s.session,
+        id: s.session,
         account_json: s.account.to_string(),
     }
 }
