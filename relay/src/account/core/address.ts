@@ -36,6 +36,8 @@ export interface AddressState {
   // Wrong passwords and wrong codes by everyone, without saying who.
   password: Window;
   code: Window;
+  // Guesses that found no live code, counted so they cost what any other guess does.
+  misses?: number;
 }
 
 export type Taken = { ok: true; account?: string; mailTo: string; extra?: unknown } | { ok: false };
@@ -170,26 +172,34 @@ export class AddressCore {
   }
 
   // Each caller gets three tries per code and ten wrong codes a day; the code itself has thirty tries
-  // and the address three hundred wrong codes a day. Tries are counted before the compare.
+  // and the address three hundred wrong codes a day. Tries are counted before the compare. A guess at
+  // an address with no live code does the same hashing and the same two writes, so that is not a way to
+  // tell which addresses have codes or accounts.
   async takeCode(purpose: Purpose, code: unknown, canonical: string, caller: string, now = this.clock()): Promise<Taken> {
-    const c = this.s.codes[purpose];
-    if (!c || !this.deps.codeKey()) return { ok: false };
-    const mine = this.tried.get(c.hash) ?? new Map<string, number>();
-    if (c.expires <= now || c.tries >= TRIES_PER_CODE || (mine.get(caller) ?? 0) >= TRIES_PER_CODE_CALLER) return { ok: false };
+    if (!this.deps.codeKey()) return { ok: false };
     if (this.codeCallers.full(caller, now, CODE_FAILS_CALLER) || windowFull(this.s.code, now, DAY, CODE_FAILS_TOTAL)) return { ok: false };
-    c.tries++;
-    mine.set(caller, (mine.get(caller) ?? 0) + 1);
-    if (this.tried.size >= 50) this.tried.delete(this.tried.keys().next().value!);
-    this.tried.set(c.hash, mine);
+    const c = this.s.codes[purpose];
+    const mine = c ? (this.tried.get(c.hash) ?? new Map<string, number>()) : undefined;
+    const live = c && mine && c.expires > now && c.tries < TRIES_PER_CODE && (mine.get(caller) ?? 0) < TRIES_PER_CODE_CALLER;
+    if (live) {
+      c.tries++;
+      mine.set(caller, (mine.get(caller) ?? 0) + 1);
+      if (this.tried.size >= 50) this.tried.delete(this.tried.keys().next().value!);
+      this.tried.set(c.hash, mine);
+    } else {
+      this.s.misses = (this.s.misses ?? 0) + 1;
+    }
     await this.save();
-    const good = typeof code === "string" && /^[0-9]{6}$/.test(code) && equal(bytes(await this.hash(purpose, canonical, code)), bytes(c.hash));
+    const guess = typeof code === "string" && /^[0-9]{6}$/.test(code) ? code : "000000";
+    const same = equal(bytes(await this.hash(purpose, canonical, guess)), bytes(live ? c.hash : "-"));
+    const good = Boolean(live) && same && guess === code;
     if (good) delete this.s.codes[purpose];
     else {
       this.codeCallers.add(caller, now);
       windowAdd(this.s.code, now, DAY);
     }
     await this.save();
-    return good ? { ok: true, account: this.s.account, mailTo: c.mailTo, extra: c.extra } : { ok: false };
+    return good ? { ok: true, account: this.s.account, mailTo: c!.mailTo, extra: c!.extra } : { ok: false };
   }
 
   // True once, for the first account to claim the address.
@@ -231,6 +241,7 @@ export class AddressCore {
     const now = this.clock();
     this.s.sends = this.s.sends.filter((t) => now - t < CODE_MS);
     for (const k of Object.keys(this.s.codes) as Purpose[]) if (this.s.codes[k]!.expires <= now) delete this.s.codes[k];
+    if (windowIdle(this.s.code, now, DAY)) this.s.misses = undefined;
     this.codeCallers.prune(now);
     this.passwordCallers.prune(now);
     const quiet = this.s.sends.length === 0 && Object.keys(this.s.codes).length === 0 && windowIdle(this.s.code, now, DAY) && windowIdle(this.s.password, now, PASSWORD_WINDOW_MS);

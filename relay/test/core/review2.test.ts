@@ -31,7 +31,7 @@ function picky(rig: Rig) {
 }
 
 describe("second review findings", () => {
-  it.fails("Q1 sign-in code: a wrong code writes storage only when the address has an account", async () => {
+  it("Q1 sign-in code: a wrong code writes storage only when the address has an account", async () => {
     const rig = memoryService();
     await signUp(rig, "known@example.com");
     await rig.service.code("known@example.com");
@@ -165,5 +165,28 @@ describe("second review findings", () => {
     await rig.flush();
     const r = await rig.service.confirmLink("own13@example.com", codeIn(rig.mail[rig.mail.length - 1]), { ...OTHER, device: "c".repeat(32) }, "elsewhere");
     expect(r.ok).toBe(false);
+  });
+});
+
+describe("wrong guesses cost the same at every address", () => {
+  it("writes twice whether the address has a live code, an expired one, none or no account", async () => {
+    const rig = memoryService();
+    await signUp(rig, "known14@example.com");
+    const counts: number[] = [];
+    const guess = async (email: string, net: string) => {
+      const puts = countPuts(rig);
+      await rig.service.signinCode(email, "000001", OTHER, net);
+      return puts();
+    };
+    await rig.service.code("known14@example.com");
+    await rig.service.code("nobody14@example.com");
+    await rig.flush();
+    counts.push(await guess("known14@example.com", "n1"));
+    rig.clock.now += 11 * 60_000;
+    counts.push(await guess("known14@example.com", "n2"));
+    for (let i = 0; i < 3; i++) await rig.service.signinCode("known14@example.com", "000002", OTHER, "n3");
+    counts.push(await guess("known14@example.com", "n4"));
+    counts.push(await guess("nobody14@example.com", "n1"));
+    expect(counts).toEqual([2, 2, 2, 2]);
   });
 });
