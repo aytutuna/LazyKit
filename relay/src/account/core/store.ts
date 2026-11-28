@@ -19,6 +19,8 @@ export interface Deps {
   stages?(): number;
   // Takes one of today's mails from the budget of the whole service; false once it is spent.
   mailBudget?(): Promise<boolean>;
+  // Whether any of today's mails is left, without taking one.
+  mailBudgetOpen?(): Promise<boolean>;
   // Whether an account still stands, for an address that names it.
   accountExists?(id: string): Promise<boolean>;
   now?(): number;

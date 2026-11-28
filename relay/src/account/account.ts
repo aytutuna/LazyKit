@@ -190,6 +190,11 @@ export class Budget extends DurableObject<Cloudflare.Env> {
     return true;
   }
 
+  async open(limit: number, now = Date.now()): Promise<boolean> {
+    const kept = await this.ctx.storage.get<{ day: string; count: number }>("s");
+    return kept?.day !== new Date(now).toISOString().slice(0, 10) || kept.count < limit;
+  }
+
   // Only a past day is wiped; a count that has started for the new day stays.
   async alarm(): Promise<void> {
     const today = new Date().toISOString().slice(0, 10);

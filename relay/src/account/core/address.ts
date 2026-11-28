@@ -96,6 +96,8 @@ export class AddressCore {
   // The whole service has a day's allowance of mail too, charged only when a mail will really go; when
   // it is spent the request leaves no mark on this address.
   private async reserveSend(now: number, mails: boolean): Promise<"ok" | "limited" | "busy"> {
+    // While the day's mail is spent every request gets the same answer, whatever the address.
+    if (this.deps.mailBudgetOpen && !(await this.deps.mailBudgetOpen())) return "busy";
     this.s.sends = this.s.sends.filter((t) => now - t < DAY);
     if (this.s.sends.length >= SENDS_PER_DAY || this.s.sends.filter((t) => now - t < CODE_MS).length >= SENDS_PER_WINDOW) return "limited";
     this.s.sends.push(now);
@@ -186,6 +188,7 @@ export class AddressCore {
   async requestEmail(typed: string, canonical: string, account: string, now = this.clock()): Promise<Sent> {
     if (!this.ready()) return "not-configured";
     await this.repair();
+    if (this.deps.mailBudgetOpen && !(await this.deps.mailBudgetOpen())) return "busy";
     if (this.s.account) return "sent";
     if (this.deps.mailBudget && !(await this.deps.mailBudget())) return "busy";
     const pending = Object.keys(this.s.codes).filter((k) => k.startsWith("email:"));

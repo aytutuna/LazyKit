@@ -160,6 +160,17 @@ describe("mail", () => {
     expect(rig.budget.left).toBe(2);
   });
 
+  it("answers every mail request alike while the day's mail is spent, whatever the address", async () => {
+    const a = await signUp();
+    const s = (await rig.service.session(header(a)))!;
+    rig.budget.left = 0;
+    rig.clock.now += 11 * MIN;
+    const known = [await rig.service.signup(email), await rig.service.code(email), await rig.service.changeEmail(s, `free${n}@example.com`, PASSWORD)];
+    const unknown = [await rig.service.signup(`nobody${n}@example.com`), await rig.service.code(`nobody${n}@example.com`), await rig.service.changeEmail(s, `other${n}@example.com`, PASSWORD)];
+    expect(known).toEqual(["busy", "busy", "busy"]);
+    expect(unknown).toEqual(known);
+  });
+
   it("leaves no mark on an address when the day's mail is spent", async () => {
     rig.budget.left = 0;
     expect(await rig.service.signup(email)).toBe("busy");
