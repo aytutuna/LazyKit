@@ -83,6 +83,12 @@ describe("App Attest", () => {
     }
   });
 
+  it("refuses text that is not UTF-8 as an unreadable attestation", async () => {
+    const pki = await makePki();
+    const junk = new Uint8Array([0x62, 0xff, 0xfe]);
+    await expect(verifyAppAttest(config(pki), challenge(), new Uint8Array(32), junk)).rejects.toThrow(AttestationError);
+  });
+
   it("carries Apple's root, which signs itself", async () => {
     const root = fromBase64(APPLE_ROOT);
     const cert = parseCert(root);

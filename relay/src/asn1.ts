@@ -176,7 +176,12 @@ export function cborDecode(buf: Uint8Array): Cbor {
       case 3: {
         if (at + n > buf.length) throw new DecodeError("truncated");
         const bytes = buf.subarray(at, (at += n));
-        return major === 2 ? bytes : new TextDecoder("utf-8", { fatal: true }).decode(bytes);
+        if (major === 2) return bytes;
+        try {
+          return new TextDecoder("utf-8", { fatal: true }).decode(bytes);
+        } catch {
+          throw new DecodeError("text is not UTF-8");
+        }
       }
       case 4: {
         if (n > buf.length) throw new DecodeError("truncated");
