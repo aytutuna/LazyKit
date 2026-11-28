@@ -6,7 +6,7 @@
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
-use lazy_pdf_syntax::{Dict, Document, Name, Number, Object, Page, Rect};
+use lazy_pdf_syntax::{Dict, Document, Name, Object, Page, Rect};
 
 use crate::color::{ColorSpaceInfo, PdfColor};
 use crate::content_parser::{ContentOperation, InlineImage, parse, parse_limited};
@@ -432,6 +432,7 @@ pub struct ContentInterpreter<'a> {
     form_resources: HashMap<u32, Option<Arc<Dict>>>,
     failed_forms: HashSet<u32>,
     soft_masks: HashMap<usize, (Arc<Object>, Option<Arc<Dict>>)>,
+    overflow_marker: Option<Arc<MarkedContent>>,
     active_forms: HashSet<u32>,
     walked_patterns: HashSet<u32>,
     context: ContentContext,
@@ -467,6 +468,7 @@ impl<'a> ContentInterpreter<'a> {
             form_resources: HashMap::new(),
             failed_forms: HashSet::new(),
             soft_masks: HashMap::new(),
+            overflow_marker: None,
             active_forms: HashSet::new(),
             walked_patterns: HashSet::new(),
             context: ContentContext {
@@ -1560,15 +1562,21 @@ impl<'a> ContentInterpreter<'a> {
 
     fn begin_marked_content(&mut self, op: &ContentOperation) {
         if self.context.marked.len() >= MAX_MARKED_DEPTH {
-            self.context.marked.push(Arc::new(MarkedContent {
-                tag: String::new(),
-                properties: None,
-                mcid: None,
-                optional_content: None,
-                layer: None,
-                actual_text: None,
-                overflow: true,
-            }));
+            let marker = self
+                .overflow_marker
+                .get_or_insert_with(|| {
+                    Arc::new(MarkedContent {
+                        tag: String::new(),
+                        properties: None,
+                        mcid: None,
+                        optional_content: None,
+                        layer: None,
+                        actual_text: None,
+                        overflow: true,
+                    })
+                })
+                .clone();
+            self.context.marked.push(marker);
             return;
         }
         let tag = name_operand(op).unwrap_or_default();
@@ -1693,6 +1701,3 @@ fn name_operand(op: &ContentOperation) -> Option<String> {
         _ => None,
     }
 }
-
-#[allow(dead_code)]
-fn unused(_: Number) {}
