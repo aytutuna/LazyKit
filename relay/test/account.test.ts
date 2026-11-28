@@ -1,6 +1,6 @@
 import { env, exports } from "cloudflare:workers";
-import { runInDurableObject } from "cloudflare:test";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { runDurableObjectAlarm, runInDurableObject } from "cloudflare:test";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { identityName } from "../src/account/core/account";
 import { canonicalEmail } from "../src/account/core/email";
 import { hmac } from "../src/account/core/util";
@@ -106,6 +106,41 @@ describe("sign-up over HTTP", () => {
     const ghost = `ghost${who.apple}@example.com`;
     await account("signup", "POST", { email: ghost });
     expect(await statuses(ghost, "198.51.100.31")).toEqual(await statuses(real, "198.51.100.32"));
+  });
+});
+
+describe("the day's mail budget", () => {
+  const stub = () => env.BUDGET.get(env.BUDGET.idFromName(`test-${who.apple}`));
+  const day = (t: number) => new Date(t).toISOString().slice(0, 10);
+
+  it("counts a day's mails, refuses the rest, and wipes the count at the end of the day only", async () => {
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    const now = Date.now();
+    for (let i = 0; i < 5; i++) expect(await stub().take(5, now)).toBe(true);
+    expect(await stub().take(5, now)).toBe(false);
+    expect(await stub().take(5, now)).toBe(false);
+    expect(warn.mock.calls.map((c) => String(c[0]))).toEqual([
+      expect.stringContaining("[alert:mail-cap] 4 of 5 mails used"),
+      expect.stringContaining("[alert:mail-cap] daily mail cap of 5 reached"),
+    ]);
+    warn.mockRestore();
+    await runInDurableObject(stub(), async (_o, state) => {
+      expect(await state.storage.getAlarm()).toBe(Date.parse(day(now)) + 86_400_000);
+    });
+    // The alarm firing during the day it counts leaves the count alone.
+    expect(await runDurableObjectAlarm(stub())).toBe(true);
+    expect(await stub().take(5, now)).toBe(false);
+  });
+
+  it("starts a new count on the next day, and wipes an old day when the alarm comes", async () => {
+    const now = Date.now();
+    await stub().take(1, now - 3 * 86_400_000);
+    expect(await stub().take(1, now)).toBe(true);
+    expect(await stub().take(1, now)).toBe(false);
+    const old = env.BUDGET.get(env.BUDGET.idFromName(`old-${who.apple}`));
+    await old.take(1, now - 3 * 86_400_000);
+    await runDurableObjectAlarm(old);
+    await runInDurableObject(old, async (_o, state) => expect([...(await state.storage.list())]).toEqual([]));
   });
 });
 

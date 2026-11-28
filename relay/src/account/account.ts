@@ -169,20 +169,33 @@ export class Address extends DurableObject<Cloudflare.Env> {
   }
 }
 
-// Counts the mails the whole service has been asked to send today.
+// Counts the mails the service has sent today (UTC). The count is wiped at the end of its day, never
+// in the middle of one, and the log gets a line at 80% and at the cap so someone can act.
 export class Budget extends DurableObject<Cloudflare.Env> {
   async take(limit: number, now = Date.now()): Promise<boolean> {
     const day = new Date(now).toISOString().slice(0, 10);
-    const kept = await this.ctx.storage.get<{ day: string; count: number }>("s");
-    const count = kept?.day === day ? kept.count : 0;
-    if (count >= limit) return false;
-    await this.ctx.storage.put("s", { day, count: count + 1 });
-    if ((await this.ctx.storage.getAlarm()) === null) await this.ctx.storage.setAlarm(now + 2 * 86_400_000);
+    const kept = await this.ctx.storage.get<{ day: string; count: number; refused?: boolean }>("s");
+    const today = kept?.day === day ? kept : { day, count: 0 };
+    if (today.count >= limit) {
+      if (!today.refused) {
+        console.warn(`[alert:mail-cap] daily mail cap of ${limit} reached; mail is refused until ${day} ends`);
+        await this.ctx.storage.put("s", { ...today, refused: true });
+      }
+      return false;
+    }
+    const count = today.count + 1;
+    await this.ctx.storage.put("s", { day, count });
+    if (count === Math.ceil(limit * 0.8)) console.warn(`[alert:mail-cap] ${count} of ${limit} mails used today`);
+    if ((await this.ctx.storage.getAlarm()) === null) await this.ctx.storage.setAlarm(Date.parse(day) + 86_400_000);
     return true;
   }
 
+  // Only a past day is wiped; a count that has started for the new day stays.
   async alarm(): Promise<void> {
-    await this.ctx.storage.deleteAll();
+    const today = new Date().toISOString().slice(0, 10);
+    const kept = await this.ctx.storage.get<{ day: string }>("s");
+    if (kept && kept.day >= today) await this.ctx.storage.setAlarm(Date.parse(kept.day) + 86_400_000);
+    else await this.ctx.storage.deleteAll();
   }
 }
 

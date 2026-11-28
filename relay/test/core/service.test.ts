@@ -145,9 +145,31 @@ describe("mail", () => {
   it("says plainly when the whole service has used its mail for the day", async () => {
     rig.budget.left = 2;
     expect(await rig.service.signup(email)).toBe("sent");
-    expect(await rig.service.code(`other${n}@example.com`)).toBe("sent");
+    expect(await rig.service.signup(`other${n}@example.com`)).toBe("sent");
     expect(await rig.service.signup(`third${n}@example.com`)).toBe("busy");
-    expect(await rig.service.code(`fourth${n}@example.com`)).toBe("busy");
+    expect(await rig.service.signup(`fourth${n}@example.com`)).toBe("busy");
+  });
+
+  it("charges the day's mail only for a mail that goes: not for a code asked of an address with no account", async () => {
+    rig.budget.left = 3;
+    for (let i = 0; i < 6; i++) expect(await rig.service.code(`nobody${i}-${n}@example.com`)).toBe("sent");
+    expect(rig.budget.left).toBe(3);
+    await rig.flush();
+    expect(rig.mail).toHaveLength(0);
+    expect(await rig.service.signup(`one${n}@example.com`)).toBe("sent");
+    expect(rig.budget.left).toBe(2);
+  });
+
+  it("leaves no mark on an address when the day's mail is spent", async () => {
+    rig.budget.left = 0;
+    expect(await rig.service.signup(email)).toBe("busy");
+    expect(await rig.service.signup(email)).toBe("busy");
+    const [{ store }] = [...rig.addresses.values()];
+    expect(store.value?.sends ?? []).toEqual([]);
+    rig.budget.left = 5;
+    expect(await rig.service.signup(email)).toBe("sent");
+    expect(await rig.service.signup(email)).toBe("sent");
+    expect(await rig.service.signup(email)).toBe("sent");
   });
 
   it("never sends more than three mails in a window, even for parallel requests", async () => {

@@ -93,12 +93,17 @@ export class AddressCore {
 
   // The window counts requests, not deliveries, and is recorded before the mail goes: parallel
   // requests cannot all pass it, and a refused mail cannot be told apart by a refund.
-  private async reserveSend(now: number): Promise<"ok" | "limited" | "busy"> {
+  // The whole service has a day's allowance of mail too, charged only when a mail will really go; when
+  // it is spent the request leaves no mark on this address.
+  private async reserveSend(now: number, mails: boolean): Promise<"ok" | "limited" | "busy"> {
     this.s.sends = this.s.sends.filter((t) => now - t < DAY);
     if (this.s.sends.length >= SENDS_PER_DAY || this.s.sends.filter((t) => now - t < CODE_MS).length >= SENDS_PER_WINDOW) return "limited";
     this.s.sends.push(now);
-    // The whole service has a day's allowance of mail too; asking counts, like the rest.
-    return this.deps.mailBudget && !(await this.deps.mailBudget()) ? "busy" : "ok";
+    if (mails && this.deps.mailBudget && !(await this.deps.mailBudget())) {
+      this.s.sends.splice(this.s.sends.indexOf(now), 1);
+      return "busy";
+    }
+    return "ok";
   }
 
   private later(to: string, subject: string, text: string, undo: () => void = () => {}): void {
@@ -141,7 +146,7 @@ export class AddressCore {
   async requestSignup(typed: string, canonical: string, now = this.clock()): Promise<Sent> {
     if (!this.ready()) return "not-configured";
     await this.repair();
-    const slot = await this.reserveSend(now);
+    const slot = await this.reserveSend(now, true);
     if (slot !== "ok") return slot;
     if (this.s.account && this.s.mailTo) {
       this.later(this.s.mailTo, "You already have a Lazy account", "Someone asked to create a Lazy account with this address, which already has one. Sign in instead; if you forgot your password, ask for a sign-in code. If it was not you, you can ignore this email.");
@@ -155,7 +160,7 @@ export class AddressCore {
   async requestSignin(canonical: string, now = this.clock()): Promise<Sent> {
     if (!this.ready()) return "not-configured";
     await this.repair();
-    const slot = await this.reserveSend(now);
+    const slot = await this.reserveSend(now, Boolean(this.s.account && this.s.mailTo));
     if (slot !== "ok") return slot;
     if (this.s.account && this.s.mailTo) await this.issue("signin", canonical, this.s.mailTo, now);
     else await this.hash("signin", canonical, "000000");
@@ -167,7 +172,7 @@ export class AddressCore {
   async requestLink(canonical: string, identity: { id: string; provider: string; app: string; device: string }, now = this.clock()): Promise<Sent | "none"> {
     if (!this.s.account || !this.s.mailTo) return "none";
     if (!this.ready()) return "not-configured";
-    const slot = await this.reserveSend(now);
+    const slot = await this.reserveSend(now, true);
     if (slot !== "ok") return slot;
     await this.issue("link", canonical, this.s.mailTo, now, identity);
     await this.save();
@@ -197,7 +202,7 @@ export class AddressCore {
   async requestOldCheck(canonical: string, account: string, purpose: "emailold" | "setpw" = "emailold", now = this.clock()): Promise<Sent | "none"> {
     if (this.s.account !== account || !this.s.mailTo) return "none";
     if (!this.ready()) return "not-configured";
-    const slot = await this.reserveSend(now);
+    const slot = await this.reserveSend(now, true);
     if (slot !== "ok") return slot;
     await this.issue(purpose, canonical, this.s.mailTo, now, account);
     await this.save();
