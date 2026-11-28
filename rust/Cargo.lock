@@ -654,6 +654,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "lazy-office-zip"
+version = "0.1.0"
+dependencies = [
+ "sha2",
+]
+
+[[package]]
 name = "lazy-pdf-filters"
 version = "0.1.0"
 dependencies = [

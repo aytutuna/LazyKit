@@ -1,6 +1,6 @@
 [workspace]
 resolver = "3"
-members = ["lazy-pdf-filters", "lazy-tiff", "lazy-image", "lazy-scan", "lazy-scan-model", "lazy-link", "lazy-pdf-syntax", "lazy-link-ffi", "lazy-link-wasm", "uniffi-bindgen"]
+members = ["lazy-pdf-filters", "lazy-tiff", "lazy-office-zip", "lazy-image", "lazy-scan", "lazy-scan-model", "lazy-link", "lazy-pdf-syntax", "lazy-link-ffi", "lazy-link-wasm", "uniffi-bindgen"]
 
 [workspace.package]
 version = "0.1.0"
