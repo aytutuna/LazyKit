@@ -7,12 +7,15 @@
 use crate::spki_fingerprint;
 use crate::transport::{Connection, Transport, TransportError};
 use async_trait::async_trait;
+use futures_util::stream::{FuturesUnordered, StreamExt};
 use rustls::client::danger::{HandshakeSignatureValid, ServerCertVerified, ServerCertVerifier};
 use rustls::crypto::{CryptoProvider, WebPkiSupportedAlgorithms, aws_lc_rs};
 use rustls::pki_types::{CertificateDer, ServerName, UnixTime};
 use rustls::{ClientConfig, DigitallySignedStruct, Error, SignatureScheme};
 #[cfg(not(target_os = "android"))]
 use rustls_platform_verifier::{BuilderVerifierExt, Verifier};
+use std::future::Future;
+use std::net::SocketAddr;
 use std::sync::{Arc, Mutex as StdMutex};
 use std::time::Duration;
 use subtle::ConstantTimeEq;
@@ -24,6 +27,10 @@ use tokio_rustls::client::TlsStream;
 use x509_cert::der::{Decode, Encode};
 
 const CONNECT_TIMEOUT: Duration = Duration::from_secs(15);
+/// How long an address gets before the next one is tried as well (RFC 8305 suggests 250 ms).
+const STAGGER: Duration = Duration::from_millis(250);
+/// How long one address may take on its own.
+const ATTEMPT_TIMEOUT: Duration = Duration::from_secs(5);
 
 // Roots an app adds for a relay of its own (development); empty in a shipped app.
 static DEVELOPMENT_ROOTS: StdMutex<Vec<CertificateDer<'static>>> = StdMutex::new(Vec::new());
@@ -99,10 +106,9 @@ impl Transport for TlsTransport {
         server_name: &str,
     ) -> Result<Arc<dyn Connection>, TransportError> {
         let name = ServerName::try_from(server_name.to_owned()).map_err(failed)?;
-        let tcp = tokio::time::timeout(CONNECT_TIMEOUT, TcpStream::connect((host, port)))
+        let tcp = tokio::time::timeout(CONNECT_TIMEOUT, connect_tcp(host, port))
             .await
-            .map_err(|_| failed("connecting timed out"))?
-            .map_err(failed)?;
+            .map_err(|_| failed("connecting timed out"))??;
         let _ = tcp.set_nodelay(true);
         let tls = tokio::time::timeout(
             CONNECT_TIMEOUT,
@@ -239,4 +245,169 @@ fn system_verified(
         .dangerous()
         .with_custom_certificate_verifier(Arc::new(verifier))
         .with_no_client_auth())
+}
+
+// Resolves the name and connects the way RFC 8305 asks, so a network whose IPv6 (or IPv4) path
+// drops packets costs a quarter of a second, not the whole connect time.
+async fn connect_tcp(host: &str, port: u16) -> Result<TcpStream, TransportError> {
+    let found: Vec<SocketAddr> = tokio::net::lookup_host((host, port))
+        .await
+        .map_err(failed)?
+        .collect();
+    race(
+        interleaved(found),
+        STAGGER,
+        ATTEMPT_TIMEOUT,
+        TcpStream::connect,
+    )
+    .await
+}
+
+// IPv6 first, then the families alternate, as the RFC orders them.
+fn interleaved(addrs: Vec<SocketAddr>) -> Vec<SocketAddr> {
+    let (mut v6, mut v4): (Vec<_>, Vec<_>) = addrs.into_iter().partition(SocketAddr::is_ipv6);
+    v6.reverse();
+    v4.reverse();
+    let mut out = Vec::new();
+    while !v6.is_empty() || !v4.is_empty() {
+        out.extend(v6.pop());
+        out.extend(v4.pop());
+    }
+    out
+}
+
+// Starts the first address, the next one after `stagger` or as soon as one fails, and so on; the
+// first to connect wins and the others are dropped.
+async fn race<T, F, Fut>(
+    addrs: Vec<SocketAddr>,
+    stagger: Duration,
+    attempt: Duration,
+    connect: F,
+) -> Result<T, TransportError>
+where
+    F: Fn(SocketAddr) -> Fut,
+    Fut: Future<Output = std::io::Result<T>>,
+{
+    let mut addrs = addrs.into_iter();
+    let mut running = FuturesUnordered::new();
+    let mut last = failed("the name has no address");
+    let mut start = |running: &mut FuturesUnordered<_>| match addrs.next() {
+        Some(addr) => {
+            let attempt_future = connect(addr);
+            running.push(async move {
+                tokio::time::timeout(attempt, attempt_future)
+                    .await
+                    .unwrap_or_else(|_| Err(std::io::ErrorKind::TimedOut.into()))
+            });
+            true
+        }
+        None => false,
+    };
+    let mut more = start(&mut running);
+    if running.is_empty() {
+        return Err(last);
+    }
+    loop {
+        let timer = tokio::time::sleep(stagger);
+        tokio::select! {
+            done = running.next(), if !running.is_empty() => match done {
+                Some(Ok(connected)) => return Ok(connected),
+                Some(Err(e)) => {
+                    last = failed(e);
+                    more = more && start(&mut running);
+                    if running.is_empty() {
+                        return Err(last);
+                    }
+                }
+                None => return Err(last),
+            },
+            () = timer, if more => {
+                more = start(&mut running);
+            }
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::io::{Error, ErrorKind};
+
+    fn v6() -> SocketAddr {
+        "[2001:db8::1]:443".parse().unwrap()
+    }
+
+    fn v4() -> SocketAddr {
+        "192.0.2.1:443".parse().unwrap()
+    }
+
+    #[test]
+    fn the_families_take_turns_with_ipv6_first() {
+        let a: SocketAddr = "[2001:db8::2]:443".parse().unwrap();
+        let b: SocketAddr = "192.0.2.2:443".parse().unwrap();
+        assert_eq!(interleaved(vec![v4(), b, v6(), a]), [v6(), v4(), a, b]);
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn an_address_that_drops_packets_is_overtaken_after_the_stagger() {
+        let started = tokio::time::Instant::now();
+        let got = race(
+            vec![v6(), v4()],
+            STAGGER,
+            ATTEMPT_TIMEOUT,
+            |addr| async move {
+                if addr.is_ipv6() {
+                    std::future::pending().await
+                } else {
+                    tokio::time::sleep(Duration::from_millis(10)).await;
+                    Ok(addr)
+                }
+            },
+        )
+        .await
+        .unwrap();
+        assert_eq!(got, v4());
+        assert!(
+            started.elapsed() < Duration::from_millis(300),
+            "{:?}",
+            started.elapsed()
+        );
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn a_refusal_moves_on_at_once() {
+        let started = tokio::time::Instant::now();
+        let got = race(
+            vec![v6(), v4()],
+            STAGGER,
+            ATTEMPT_TIMEOUT,
+            |addr| async move {
+                if addr.is_ipv6() {
+                    Err(Error::from(ErrorKind::ConnectionRefused))
+                } else {
+                    Ok(addr)
+                }
+            },
+        )
+        .await
+        .unwrap();
+        assert_eq!(got, v4());
+        assert!(started.elapsed() < Duration::from_millis(10));
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn every_address_failing_reports_the_last_error_and_a_silent_one_times_out() {
+        let err = race(vec![v6(), v4()], STAGGER, ATTEMPT_TIMEOUT, |_| async {
+            std::future::pending::<std::io::Result<()>>().await
+        })
+        .await
+        .unwrap_err();
+        assert!(err.0.to_lowercase().contains("timed out"), "{err}");
+        let none = race(Vec::new(), STAGGER, ATTEMPT_TIMEOUT, |_| async {
+            Ok::<(), Error>(())
+        })
+        .await
+        .unwrap_err();
+        assert!(none.0.contains("no address"), "{none}");
+    }
 }
