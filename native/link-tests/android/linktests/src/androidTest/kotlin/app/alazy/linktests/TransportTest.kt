@@ -156,8 +156,8 @@ class TransportTest {
             back += part
         }
         assertArrayEquals(down, back)
-        guestSide.close()
-        hostSide.close()
+        guestSide.finish()
+        hostSide.finish()
     }
 
     @Test

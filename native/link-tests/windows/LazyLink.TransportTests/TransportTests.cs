@@ -109,8 +109,8 @@ public class TransportTests
         }
         Assert.Equal(down, back.ToArray());
 
-        await guestSide.Close();
-        await hostSide.Close();
+        await guestSide.Finish();
+        await hostSide.Finish();
     }
 
     [Fact]

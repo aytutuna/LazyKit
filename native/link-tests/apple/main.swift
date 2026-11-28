@@ -268,8 +268,8 @@ func twoDevices() async {
             back.append(part)
         }
         check(back == down, "the guest got the reply")
-        try await guestSide.close()
-        try await hostSide.close()
+        try await guestSide.finish()
+        try await hostSide.finish()
         _ = hosting
     } catch {
         check(false, "two devices: \(error)")

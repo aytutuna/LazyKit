@@ -166,14 +166,14 @@ pub enum RelayFailure {
     AttestationRejected,
     #[error("the relay cannot check this platform's app proof yet")]
     AttestationUnavailable,
-    #[error("the app could not make its proof: {message}")]
-    Attester { message: String },
+    #[error("the app could not make its proof: {reason}")]
+    Attester { reason: String },
     #[error("the relay answered {status}")]
     Refused { status: u16 },
     #[error("the relay closed the connection ({code})")]
     Closed { code: u16 },
-    #[error("{message}")]
-    Transport { message: String },
+    #[error("{reason}")]
+    Transport { reason: String },
 }
 
 impl From<relay::RelayError> for RelayFailure {
@@ -193,10 +193,10 @@ impl From<relay::RelayError> for RelayFailure {
             E::AttestationRequired => Self::AttestationRequired,
             E::AttestationRejected => Self::AttestationRejected,
             E::AttestationUnavailable => Self::AttestationUnavailable,
-            E::Attester(message) => Self::Attester { message },
+            E::Attester(reason) => Self::Attester { reason },
             E::Refused(status) => Self::Refused { status },
             E::Closed(code) => Self::Closed { code },
-            E::Transport(message) => Self::Transport { message },
+            E::Transport(reason) => Self::Transport { reason },
         }
     }
 }
@@ -381,8 +381,9 @@ impl RelayConnection {
         Ok(())
     }
 
-    /// Ends the stream in both directions. What was written before is still sent.
-    pub async fn close(&self) -> Result<(), LinkError> {
+    /// Ends the stream in both directions. What was written before is still sent. (Not `close`:
+    /// Kotlin gives every object one.)
+    pub async fn finish(&self) -> Result<(), LinkError> {
         self.closing.notify_waiters();
         self.read.lock().await.take();
         self.write.lock().await.take();
