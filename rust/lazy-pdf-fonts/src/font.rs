@@ -16,6 +16,7 @@ use crate::standard14::Standard14;
 use crate::truetype::TrueTypeFont;
 
 const MAX_DIFFERENCES: usize = 4096;
+const MAX_CACHED_CHARS: usize = 100_000;
 const MAX_CID: f64 = 0xFFFF as f64;
 const MAX_WIDTH_ENTRIES: usize = 300_000;
 const MAP_LIMIT: usize = 16 << 20;
@@ -83,6 +84,10 @@ pub struct PdfFont {
     cid_widths: HashMap<i64, f64>,
     cid_vertical: HashMap<i64, (f64, f64, f64)>,
     cid_to_gid: Option<Vec<u16>>,
+    // Characters already read, as the reference keeps them: all 256 of a simple font, up to MAX_CACHED_CHARS of a
+    // composite one.
+    simple_chars: Mutex<Vec<Option<FontChar>>>,
+    composite_chars: Mutex<HashMap<i64, FontChar>>,
 }
 
 fn sat(v: f64) -> i64 {
@@ -193,6 +198,8 @@ impl PdfFont {
             cid_widths: HashMap::new(),
             cid_vertical: HashMap::new(),
             cid_to_gid: None,
+            simple_chars: Mutex::new(vec![None; 256]),
+            composite_chars: Mutex::new(HashMap::new()),
         };
         font.initialize(doc, dictionary);
         font
@@ -511,6 +518,15 @@ impl PdfFont {
     }
 
     fn read_simple(&self, code: u8) -> FontChar {
+        if let Some(known) = &self.simple_chars.lock().unwrap()[usize::from(code)] {
+            return known.clone();
+        }
+        let made = self.make_simple(code);
+        self.simple_chars.lock().unwrap()[usize::from(code)] = Some(made.clone());
+        made
+    }
+
+    fn make_simple(&self, code: u8) -> FontChar {
         let index = i64::from(code);
         let width = self.simple_width(index);
         FontChar {
@@ -770,11 +786,16 @@ impl PdfFont {
                 i += 1;
                 continue;
             };
-            let list = items
+            let shared = items
                 .get(i + 1)
                 .and_then(|o| doc.resolve(o))
-                .and_then(|v| v.as_array().map(<[Object]>::to_vec));
-            if let Some(list) = list {
+                .map(|v| v.into_shared());
+            if let Some(list) = shared.as_deref().and_then(Object::as_array) {
+                if first > MAX_CID {
+                    budget = budget.saturating_sub(list.len().min(budget));
+                    i += 2;
+                    continue;
+                }
                 let mut k = 0;
                 while k < list.len() && first + k as f64 <= MAX_CID && budget > 0 {
                     budget -= 1;
@@ -811,11 +832,16 @@ impl PdfFont {
                 i += 1;
                 continue;
             };
-            let list = items
+            let shared = items
                 .get(i + 1)
                 .and_then(|o| doc.resolve(o))
-                .and_then(|v| v.as_array().map(<[Object]>::to_vec));
-            if let Some(list) = list {
+                .map(|v| v.into_shared());
+            if let Some(list) = shared.as_deref().and_then(Object::as_array) {
+                if first > MAX_CID {
+                    budget = budget.saturating_sub(list.len().min(budget));
+                    i += 2;
+                    continue;
+                }
                 let mut k = 0;
                 while k + 2 < list.len() && first + (k / 3) as f64 <= MAX_CID && budget > 0 {
                     budget -= 1;
@@ -855,6 +881,10 @@ impl PdfFont {
             length = 1;
             code = i64::from(bytes[0]);
         }
+        let key = ((length as i64) << 32) | (code & 0xFFFF_FFFF);
+        if let Some(known) = self.composite_chars.lock().unwrap().get(&key) {
+            return (length, known.clone());
+        }
         let cid = self.cmap.cid_of(code, length).unwrap_or(0);
         let width = self
             .cid_widths
@@ -877,6 +907,10 @@ impl PdfFont {
             origin_x: vertical.1,
             origin_y: vertical.2,
         };
+        let mut cache = self.composite_chars.lock().unwrap();
+        if cache.len() < MAX_CACHED_CHARS {
+            cache.insert(key, character.clone());
+        }
         (length, character)
     }
 

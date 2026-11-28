@@ -643,6 +643,13 @@ impl TrueTypeFont {
             return Some(self.load_composite(g, depth, budget, points));
         }
         // A glyph that components repeat is counted each time: the points are built for each of them.
+        if *points <= 0 {
+            return None;
+        }
+        // The last end point gives the count before anything is allocated for it.
+        if n > 0 && g.len() >= 10 + 2 * n && g.u16(10 + 2 * (n - 1)) + 1 > *points {
+            return None;
+        }
         let simple = load_simple(g, n)?;
         *points -= simple.points.len() as i64;
         if *points >= 0 { Some(simple) } else { None }
