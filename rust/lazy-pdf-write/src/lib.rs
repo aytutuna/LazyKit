@@ -2,8 +2,11 @@
 //! metadata, and scanned pages as a document. The bytes are the same as Lazy Scan's Swift and C# writers make.
 //! Required Notice: Copyright (c) 2026 Alazy Inc. (https://alazy.app)
 
+pub mod collect;
 pub mod document;
 pub mod glyphless;
+pub mod image;
+pub mod import;
 mod number;
 pub mod pdfa;
 mod writer;
@@ -15,3 +18,5 @@ pub use document::{
 pub use number::num;
 pub use pdfa::Date;
 pub use writer::{ObjectWriter, ascii_string};
+
+pub use collect::Collector;

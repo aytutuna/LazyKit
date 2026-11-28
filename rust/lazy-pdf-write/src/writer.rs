@@ -49,21 +49,23 @@ impl ObjectWriter {
     }
 
     /// A whole object whose value is `value` (a dictionary, an array, ...).
-    pub fn write_object(&mut self, number: usize, value: &str) {
+    pub fn write_object(&mut self, number: usize, value: impl AsRef<[u8]>) {
         self.begin_object(number);
-        self.write_ascii(value);
+        self.out.extend(value.as_ref());
         self.write_ascii("\nendobj\n");
     }
 
     /// A stream object: "<<{entries} /Length n>>", the data between "stream" and "endstream", each keyword on a line of
     /// its own. `entries` are the dictionary's other entries ("" for none); the length is always added last.
-    pub fn write_stream(&mut self, number: usize, entries: &str, data: &[u8]) {
+    pub fn write_stream(&mut self, number: usize, entries: impl AsRef<[u8]>, data: &[u8]) {
         self.begin_object(number);
-        let separator = if entries.is_empty() { "" } else { " " };
-        self.write_ascii(&format!(
-            "<<{entries}{separator}/Length {}>>\nstream\n",
-            data.len()
-        ));
+        let entries = entries.as_ref();
+        self.out.extend(b"<<");
+        self.out.extend(entries);
+        if !entries.is_empty() {
+            self.out.push(b' ');
+        }
+        self.write_ascii(&format!("/Length {}>>\nstream\n", data.len()));
         self.out.extend(data);
         self.write_ascii("\nendstream\nendobj\n");
     }
