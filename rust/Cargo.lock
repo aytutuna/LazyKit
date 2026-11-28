@@ -666,6 +666,7 @@ name = "lazy-pdf-fonts"
 version = "0.1.0"
 dependencies = [
  "lazy-pdf-syntax",
+ "miniz_oxide",
  "sha2",
 ]
 
