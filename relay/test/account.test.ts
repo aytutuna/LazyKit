@@ -73,7 +73,7 @@ describe("sign-up over HTTP", () => {
     expect((await account("code", "POST", { email: EMAIL })).status).toBe(501);
   });
 
-  it("answers 202 even when the mail service fails, and takes the code back", async () => {
+  it("answers 202 even when the mail service fails, and takes the code back but keeps the count", async () => {
     useServices({ mailer: { send: async () => { throw new Error("refused"); } } });
     expect((await account("signup", "POST", { email: EMAIL })).status).toBe(202);
     await new Promise((r) => setTimeout(r, 50));
@@ -81,7 +81,7 @@ describe("sign-up over HTTP", () => {
     await runInDurableObject(stub, async (_o, state) => {
       const s = (await state.storage.get<any>("s"))!;
       expect(s.codes.signup).toBeUndefined();
-      expect(s.sends).toEqual([]);
+      expect(s.sends).toHaveLength(1);
     });
   });
 

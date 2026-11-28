@@ -1,4 +1,6 @@
-// One address, one spelling: the account is named by this, so lookalike forms must collapse.
+// One address, one spelling: the account is named by this, so lookalike forms must collapse. The
+// name before the at-sign must be plain ASCII (after width and case are folded), which every mail
+// service takes; the domain may be international and goes out in its ASCII form.
 export function normalizeEmail(raw: unknown): string | undefined {
   if (typeof raw !== "string" || raw.length > 320) return undefined;
   const s = raw.trim().normalize("NFKC").toLowerCase().normalize("NFKC");
@@ -6,7 +8,7 @@ export function normalizeEmail(raw: unknown): string | undefined {
   const parts = s.split("@");
   if (parts.length !== 2) return undefined;
   const [local, domain] = parts;
-  if (local.length === 0 || local.length > 64 || !/^[\p{L}\p{N}._%+'!#$&*/=?^`{|}~-]+$/u.test(local)) return undefined;
+  if (local.length === 0 || local.length > 64 || !/^[a-z0-9._%+'!#$&*/=?^`{|}~-]+$/.test(local)) return undefined;
   if (local.startsWith(".") || local.endsWith(".") || local.includes("..")) return undefined;
   if (!/^[\p{L}\p{N}.-]+$/u.test(domain) || !domain.includes(".")) return undefined;
   let host: string;

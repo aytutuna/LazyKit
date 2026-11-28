@@ -12,8 +12,11 @@ describe("email addresses", () => {
     expect(normalizeEmail("a@BÜCHER.example")).toBe("a@xn--bcher-kva.example");
   });
 
-  it("keeps lookalike letters apart, since they are different addresses", () => {
-    expect(normalizeEmail("аda@example.com")).not.toBe(normalizeEmail("ada@example.com"));
+  it("takes only a plain ASCII name before the at-sign, once width and case are folded", () => {
+    expect(normalizeEmail("аda@example.com")).toBeUndefined();
+    expect(normalizeEmail("ada+é@example.com")).toBeUndefined();
+    expect(normalizeEmail("rémi@example.com")).toBeUndefined();
+    expect(normalizeEmail("Ａda@example.com")).toBe("ada@example.com");
   });
 
   it("refuses control, invisible, bidi and separator characters", () => {

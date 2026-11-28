@@ -140,13 +140,13 @@ describe("mail", () => {
     expect(rig.mail.length).toBeLessThanOrEqual(3);
   });
 
-  it("takes back the code and the send when the mail is refused", async () => {
+  it("takes back the code but keeps the count when the mail is refused", async () => {
     rig.mailer.fail = true;
     expect(await rig.service.signup(email)).toBe("sent");
     await rig.flush();
     const [{ store }] = [...rig.addresses.values()];
     expect(store.value!.codes.signup).toBeUndefined();
-    expect(store.value!.sends).toEqual([]);
+    expect(store.value!.sends).toHaveLength(1);
     rig.mailer.fail = false;
     expect(await rig.service.signup(email)).toBe("sent");
     await rig.flush();

@@ -79,7 +79,8 @@ export class AddressCore {
     return Boolean(this.deps.codeKey()) && this.deps.mailer().ready?.() !== false;
   }
 
-  // The window is recorded before the mail goes, so parallel requests cannot all pass it.
+  // The window counts requests, not deliveries, and is recorded before the mail goes: parallel
+  // requests cannot all pass it, and a refused mail cannot be told apart by a refund.
   private reserveSend(now: number): boolean {
     this.s.sends = this.s.sends.filter((t) => now - t < CODE_MS);
     if (this.s.sends.length >= SENDS_PER_WINDOW) return false;
@@ -87,18 +88,13 @@ export class AddressCore {
     return true;
   }
 
-  private later(to: string, subject: string, text: string, undo: () => void): void {
+  private later(to: string, subject: string, text: string, undo: () => void = () => {}): void {
     this.deps.defer(
       this.deps.mailer().send({ to, subject, text }).catch(async () => {
         undo();
         await this.save();
       }),
     );
-  }
-
-  private unsend(now: number): void {
-    const i = this.s.sends.indexOf(now);
-    if (i >= 0) this.s.sends.splice(i, 1);
   }
 
   private hash(purpose: Purpose, canonical: string, code: string): Promise<string> {
@@ -121,7 +117,6 @@ export class AddressCore {
         if (previous) this.s.codes[purpose] = previous;
         else delete this.s.codes[purpose];
       }
-      this.unsend(now);
     });
   }
 
@@ -131,7 +126,7 @@ export class AddressCore {
     if (!this.ready()) return "not-configured";
     if (!this.reserveSend(now)) return "limited";
     if (this.s.account && this.s.mailTo) {
-      this.later(this.s.mailTo, "You already have a Lazy account", "Someone asked to create a Lazy account with this address, which already has one. Sign in instead; if you forgot your password, ask for a sign-in code. If it was not you, you can ignore this email.", () => this.unsend(now));
+      this.later(this.s.mailTo, "You already have a Lazy account", "Someone asked to create a Lazy account with this address, which already has one. Sign in instead; if you forgot your password, ask for a sign-in code. If it was not you, you can ignore this email.");
     } else {
       await this.issue("signup", canonical, typed, now);
     }
@@ -163,7 +158,7 @@ export class AddressCore {
     if (!this.ready()) return "not-configured";
     if (!this.reserveSend(now)) return "limited";
     if (this.s.account && this.s.mailTo) {
-      this.later(this.s.mailTo, "A Lazy account tried to use this address", "Someone asked to use this address for another Lazy account, which already has one here. Nothing changed. If it was not you, you can ignore this email.", () => this.unsend(now));
+      this.later(this.s.mailTo, "A Lazy account tried to use this address", "Someone asked to use this address for another Lazy account, which already has one here. Nothing changed. If it was not you, you can ignore this email.");
     } else {
       await this.issue("email", canonical, typed, now, account);
     }

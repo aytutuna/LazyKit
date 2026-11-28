@@ -45,7 +45,7 @@ describe("second review findings", () => {
     expect(unknown).toBe(known);
   });
 
-  it.fails("Q3 sign-up oracle: a spelling the mail service refuses is only counted when an account exists", async () => {
+  it("Q3 sign-up oracle: a spelling the mail service refuses is only counted when an account exists", async () => {
     const rig = memoryService();
     await signUp(rig, "known3@example.com");
     const k: string[] = [], u: string[] = [];
@@ -112,7 +112,7 @@ describe("second review findings", () => {
     expect(stored).not.toContain("203.0.113.77");
   });
 
-  it.fails("Q9 a mail that always fails never fills the window", async () => {
+  it("Q9 a mail that always fails never fills the window", async () => {
     const rig = memoryService();
     rig.mailer.fail = true;
     const answers: string[] = [];
