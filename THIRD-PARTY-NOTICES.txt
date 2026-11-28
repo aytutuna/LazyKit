@@ -11,6 +11,9 @@ Rust crates
 adler2 2.0.1
   0BSD OR MIT OR Apache-2.0
   https://github.com/oyvindln/adler2
+aho-corasick 1.1.5
+  Unlicense OR MIT
+  https://github.com/BurntSushi/aho-corasick
 anstyle 1.0.14
   MIT OR Apache-2.0
   https://github.com/rust-cli/anstyle.git
@@ -371,6 +374,15 @@ rayon-core 1.13.0
 redox_syscall 0.9.5
   MIT
   https://gitlab.redox-os.org/redox-os/kernel
+regex 1.13.2
+  MIT OR Apache-2.0
+  https://github.com/rust-lang/regex
+regex-automata 0.4.19
+  MIT OR Apache-2.0
+  https://github.com/rust-lang/regex
+regex-syntax 0.8.12
+  MIT OR Apache-2.0
+  https://github.com/rust-lang/regex
 rustc-hash 2.1.3
   Apache-2.0 OR MIT
   https://github.com/rust-lang/rustc-hash
@@ -470,6 +482,9 @@ thiserror 2.0.21
 thiserror-impl 2.0.21
   MIT OR Apache-2.0
   https://github.com/dtolnay/thiserror
+tinyvec 1.13.3
+  Zlib OR Apache-2.0 OR MIT
+  https://github.com/Lokathor/tinyvec
 tokio 1.54.1
   MIT
   https://github.com/tokio-rs/tokio
@@ -530,9 +545,15 @@ typeid 1.0.3
 typenum 1.20.1
   MIT OR Apache-2.0
   https://github.com/paholg/typenum
+unicode-general-category 1.1.0
+  Apache-2.0
+  https://github.com/yeslogic/unicode-general-category
 unicode-ident 1.0.27
   (MIT OR Apache-2.0) AND Unicode-3.0
   https://github.com/dtolnay/unicode-ident
+unicode-normalization 0.1.26
+  (MIT OR Apache-2.0) AND Unicode-3.0
+  https://github.com/unicode-rs/unicode-normalization
 unicode-width 0.2.3
   MIT OR Apache-2.0
   https://github.com/unicode-rs/unicode-width
@@ -994,6 +1015,66 @@ See the License for the specific language governing permissions and
 limitations under the License.
 
 ==============================================================================
+Used by: aho-corasick 1.1.5, byteorder 1.5.0, memchr 2.8.3, same-file 1.0.6, walkdir 2.5.1, winapi-util 0.1.11
+==============================================================================
+This is free and unencumbered software released into the public domain.
+
+Anyone is free to copy, modify, publish, use, compile, sell, or
+distribute this software, either in source code form or as a compiled
+binary, for any purpose, commercial or non-commercial, and by any
+means.
+
+In jurisdictions that recognize copyright laws, the author or authors
+of this software dedicate any and all copyright interest in the
+software to the public domain. We make this dedication for the benefit
+of the public at large and to the detriment of our heirs and
+successors. We intend this dedication to be an overt act of
+relinquishment in perpetuity of all present and future rights to this
+software under copyright law.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND,
+EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF
+MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT.
+IN NO EVENT SHALL THE AUTHORS BE LIABLE FOR ANY CLAIM, DAMAGES OR
+OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE,
+ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR
+OTHER DEALINGS IN THE SOFTWARE.
+
+For more information, please refer to <http://unlicense.org/>
+
+==============================================================================
+Used by: aho-corasick 1.1.5, byteorder 1.5.0, memchr 2.8.3, same-file 1.0.6, walkdir 2.5.1, winapi-util 0.1.11
+==============================================================================
+This project is dual-licensed under the Unlicense and MIT licenses.
+
+You may use this code under the terms of either license.
+
+==============================================================================
+Used by: aho-corasick 1.1.5, byteorder 1.5.0, memchr 2.8.3, walkdir 2.5.1
+==============================================================================
+The MIT License (MIT)
+
+Copyright (c) 2015 Andrew Gallant
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in
+all copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
+THE SOFTWARE.
+
+==============================================================================
 Used by: anstyle 1.0.14, clap 4.6.10, clap_builder 4.6.10, clap_derive 4.6.9, clap_lex 1.1.2, serde_spanned 1.1.3, toml 1.2.3+spec-1.1.0, toml_datetime 1.1.3+spec-1.1.0, toml_edit 0.25.21+spec-1.1.0, toml_parser 1.1.7+spec-1.1.0, toml_writer 1.2.0+spec-1.1.0
 ==============================================================================
 Copyright (c) Individual contributors
@@ -1017,7 +1098,7 @@ OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
 
 ==============================================================================
-Used by: anstyle 1.0.14, float-ord 0.3.2, rustfft 6.4.1, strength_reduce 0.2.4
+Used by: anstyle 1.0.14, float-ord 0.3.2, rustfft 6.4.1, strength_reduce 0.2.4, unicode-general-category 1.1.0
 ==============================================================================
                                  Apache License
                            Version 2.0, January 2004
@@ -1686,7 +1767,7 @@ IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER
 DEALINGS IN THE SOFTWARE.
 
 ==============================================================================
-Used by: autocfg 1.5.1, base64 0.22.1, bitflags 2.13.2, bumpalo 3.20.4, camino 1.2.6, cc 1.11.3, cfg-if 1.0.5, crossbeam-deque 0.8.8, crossbeam-epoch 0.9.21, crossbeam-utils 0.8.23, either 1.19.0, equivalent 1.0.3, errno 0.3.15, fastrand 2.5.0, filetime 0.2.30, find-msvc-tools 0.1.15, fs-err 3.3.2, glob 0.3.4, hashbrown 0.16.1, hashbrown 0.17.2, heck 0.5.0, indexmap 2.14.2, itertools 0.15.0, jpeg-decoder 0.3.2, js-sys 0.3.107, lazy_static 1.5.1, linux-raw-sys 0.12.1, lock_api 0.5.0, log 0.4.35, maplit 1.0.2, matrixmultiply 0.3.11, minijinja 3.1.0, ndarray 0.17.2, num-bigint 0.4.8, num-complex 0.4.6, num-integer 0.1.47, num-rational 0.4.2, num-traits 0.2.19, once_cell 1.21.4, parking_lot 0.13.0, parking_lot_core 0.10.0, percent-encoding 2.3.2, plain 0.2.3, primal-check 0.3.4, prost 0.14.6, prost-derive 0.14.6, rawpointer 0.2.1, rayon 1.12.0, rayon-core 1.13.0, rustix 1.1.6, scopeguard 1.2.0, smallvec 1.16.6, tar 0.4.46, tempfile 3.27.0, tract-core 0.23.10, tract-data 0.23.10, tract-extra 0.23.10, tract-hir 0.23.10, tract-linalg 0.23.10, tract-nnef 0.23.10, tract-onnx 0.23.10, tract-onnx-opl 0.23.10, tract-transformers 0.23.10, unicode-width 0.2.3, version_check 0.9.5, wasm-bindgen 0.2.130, wasm-bindgen-futures 0.4.80, wasm-bindgen-macro 0.2.130, wasm-bindgen-macro-support 0.2.130, wasm-bindgen-shared 0.2.130, xattr 1.7.0
+Used by: autocfg 1.5.1, base64 0.22.1, bitflags 2.13.2, bumpalo 3.20.4, camino 1.2.6, cc 1.11.3, cfg-if 1.0.5, crossbeam-deque 0.8.8, crossbeam-epoch 0.9.21, crossbeam-utils 0.8.23, either 1.19.0, equivalent 1.0.3, errno 0.3.15, fastrand 2.5.0, filetime 0.2.30, find-msvc-tools 0.1.15, fs-err 3.3.2, glob 0.3.4, hashbrown 0.16.1, hashbrown 0.17.2, heck 0.5.0, indexmap 2.14.2, itertools 0.15.0, jpeg-decoder 0.3.2, js-sys 0.3.107, lazy_static 1.5.1, linux-raw-sys 0.12.1, lock_api 0.5.0, log 0.4.35, maplit 1.0.2, matrixmultiply 0.3.11, minijinja 3.1.0, ndarray 0.17.2, num-bigint 0.4.8, num-complex 0.4.6, num-integer 0.1.47, num-rational 0.4.2, num-traits 0.2.19, once_cell 1.21.4, parking_lot 0.13.0, parking_lot_core 0.10.0, percent-encoding 2.3.2, plain 0.2.3, primal-check 0.3.4, prost 0.14.6, prost-derive 0.14.6, rawpointer 0.2.1, rayon 1.12.0, rayon-core 1.13.0, regex 1.13.2, regex-automata 0.4.19, regex-syntax 0.8.12, rustix 1.1.6, scopeguard 1.2.0, smallvec 1.16.6, tar 0.4.46, tempfile 3.27.0, tract-core 0.23.10, tract-data 0.23.10, tract-extra 0.23.10, tract-hir 0.23.10, tract-linalg 0.23.10, tract-nnef 0.23.10, tract-onnx 0.23.10, tract-onnx-opl 0.23.10, tract-transformers 0.23.10, unicode-normalization 0.1.26, unicode-width 0.2.3, version_check 0.9.5, wasm-bindgen 0.2.130, wasm-bindgen-futures 0.4.80, wasm-bindgen-macro 0.2.130, wasm-bindgen-macro-support 0.2.130, wasm-bindgen-shared 0.2.130, xattr 1.7.0
 ==============================================================================
                               Apache License
                         Version 2.0, January 2004
@@ -2150,7 +2231,7 @@ See the License for the specific language governing permissions and
 limitations under the License.
 
 ==============================================================================
-Used by: bitflags 2.13.2, glob 0.3.4, log 0.4.35, num-bigint 0.4.8, num-complex 0.4.6, num-integer 0.1.47, num-rational 0.4.2, num-traits 0.2.19
+Used by: bitflags 2.13.2, glob 0.3.4, log 0.4.35, num-bigint 0.4.8, num-complex 0.4.6, num-integer 0.1.47, num-rational 0.4.2, num-traits 0.2.19, regex 1.13.2, regex-automata 0.4.19, regex-syntax 0.8.12
 ==============================================================================
 Copyright (c) 2014 The Rust Project Developers
 
@@ -2645,66 +2726,6 @@ CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION
 OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR
 IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER
 DEALINGS IN THE SOFTWARE.
-
-==============================================================================
-Used by: byteorder 1.5.0, memchr 2.8.3, same-file 1.0.6, walkdir 2.5.1, winapi-util 0.1.11
-==============================================================================
-This is free and unencumbered software released into the public domain.
-
-Anyone is free to copy, modify, publish, use, compile, sell, or
-distribute this software, either in source code form or as a compiled
-binary, for any purpose, commercial or non-commercial, and by any
-means.
-
-In jurisdictions that recognize copyright laws, the author or authors
-of this software dedicate any and all copyright interest in the
-software to the public domain. We make this dedication for the benefit
-of the public at large and to the detriment of our heirs and
-successors. We intend this dedication to be an overt act of
-relinquishment in perpetuity of all present and future rights to this
-software under copyright law.
-
-THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND,
-EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF
-MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT.
-IN NO EVENT SHALL THE AUTHORS BE LIABLE FOR ANY CLAIM, DAMAGES OR
-OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE,
-ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR
-OTHER DEALINGS IN THE SOFTWARE.
-
-For more information, please refer to <http://unlicense.org/>
-
-==============================================================================
-Used by: byteorder 1.5.0, memchr 2.8.3, same-file 1.0.6, walkdir 2.5.1, winapi-util 0.1.11
-==============================================================================
-This project is dual-licensed under the Unlicense and MIT licenses.
-
-You may use this code under the terms of either license.
-
-==============================================================================
-Used by: byteorder 1.5.0, memchr 2.8.3, walkdir 2.5.1
-==============================================================================
-The MIT License (MIT)
-
-Copyright (c) 2015 Andrew Gallant
-
-Permission is hereby granted, free of charge, to any person obtaining a copy
-of this software and associated documentation files (the "Software"), to deal
-in the Software without restriction, including without limitation the rights
-to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
-copies of the Software, and to permit persons to whom the Software is
-furnished to do so, subject to the following conditions:
-
-The above copyright notice and this permission notice shall be included in
-all copies or substantial portions of the Software.
-
-THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
-IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
-FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
-AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
-LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
-OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
-THE SOFTWARE.
 
 ==============================================================================
 Used by: bytes 1.12.2
@@ -4154,7 +4175,7 @@ IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER
 DEALINGS IN THE SOFTWARE.
 
 ==============================================================================
-Used by: heck 0.5.0, unicode-width 0.2.3
+Used by: heck 0.5.0, unicode-normalization 0.1.26, unicode-width 0.2.3
 ==============================================================================
 Copyright (c) 2015 The Rust Project Developers
 
@@ -5281,7 +5302,7 @@ OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
 
 ==============================================================================
-Used by: ort 2.0.0-rc.15, ort-sys 2.0.0-rc.15, siphasher 1.0.4, static_assertions 1.1.0
+Used by: ort 2.0.0-rc.15, ort-sys 2.0.0-rc.15, siphasher 1.0.4, static_assertions 1.1.0, tinyvec 1.13.3
 ==============================================================================
                                  Apache License
                            Version 2.0, January 2004
@@ -6946,6 +6967,30 @@ OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
 
 ==============================================================================
+Used by: tinyvec 1.13.3
+==============================================================================
+Copyright (c) 2019 Daniel "Lokathor" Gee.
+
+This software is provided 'as-is', without any express or implied warranty. In no event will the authors be held liable for any damages arising from the use of this software.
+
+Permission is granted to anyone to use this software for any purpose, including commercial applications, and to alter it and redistribute it freely, subject to the following restrictions:
+
+1. The origin of this software must not be misrepresented; you must not claim that you wrote the original software. If you use this software in a product, an acknowledgment in the product documentation would be appreciated but is not required.
+
+2. Altered source versions must be plainly marked as such, and must not be misrepresented as being the original software.
+
+3. This notice may not be removed or altered from any source distribution.
+
+==============================================================================
+Used by: tinyvec 1.13.3
+==============================================================================
+Permission is hereby granted, free of charge, to any person obtaining a copy of this software and associated documentation files (the "Software"), to deal in the Software without restriction, including without limitation the rights to use, copy, modify, merge, publish, distribute, sublicense, and/or sell copies of the Software, and to permit persons to whom the Software is furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
+
+==============================================================================
 Used by: tokio 1.54.1
 ==============================================================================
 MIT License
@@ -7485,7 +7530,7 @@ OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
 
 ==============================================================================
-Used by: unicode-ident 1.0.27
+Used by: unicode-ident 1.0.27, unicode-normalization 0.1.26
 ==============================================================================
 UNICODE LICENSE V3
 
