@@ -162,7 +162,7 @@ export class AddressCore {
   }
 
   // A provider vouched for this address, which already has an account: the owner has to say yes by code.
-  async requestLink(canonical: string, identity: { id: string; provider: string }, now = this.clock()): Promise<Sent | "none"> {
+  async requestLink(canonical: string, identity: { id: string; provider: string; app: string; device: string }, now = this.clock()): Promise<Sent | "none"> {
     if (!this.s.account || !this.s.mailTo) return "none";
     if (!this.ready()) return "not-configured";
     const slot = await this.reserveSend(now);

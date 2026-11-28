@@ -172,7 +172,7 @@ describe("second review findings", () => {
     expect(again.ok).toBe(true);
   });
 
-  it.fails("Q13 a pending link code is confirmed by whoever holds it, without the provider token", async () => {
+  it("Q13 a pending link code is confirmed by whoever holds it, without the provider token", async () => {
     const rig = memoryService();
     await signUp(rig, "own13@example.com");
     const raw = (await rig.service.nonce())!;

@@ -204,7 +204,7 @@ export class AccountService {
 
     // The address already has an account: the owner says yes by code before anything is linked.
     if (await a.port.account()) {
-      const sent = await a.port.requestLink(a.canonical, { id, provider });
+      const sent = await a.port.requestLink(a.canonical, { id, provider, app: login.app, device: login.device });
       return sent === "sent" ? { ok: false, why: "link-code" } : { ok: false, why: sent === "none" ? "refused" : sent };
     }
     const fresh = randomId();
@@ -229,12 +229,13 @@ export class AccountService {
     const a = await this.address(email);
     if (!a) return { ok: false, why: normalizeEmail(email) ? "not-configured" : "bad-email" };
     const taken = await a.port.takeCode("link", code, a.canonical, caller);
-    const link = taken.ok ? (taken.extra as { id: string; provider: string } | undefined) : undefined;
-    if (!taken.ok || !taken.account || !link) return { ok: false, why: "bad" };
+    const link = taken.ok ? (taken.extra as { id: string; provider: string; app: string; device: string } | undefined) : undefined;
+    // The code finishes the sign-in that asked for it, on that device and nowhere else.
+    if (!taken.ok || !taken.account || !link || link.device !== login.device || link.app !== login.app) return { ok: false, why: "bad" };
     const identity = this.dir.identity(link.id);
     const account = this.dir.account(taken.account);
     await identity.bind(taken.account);
-    if ((await account.addIdentity(link)) === "gone") {
+    if ((await account.addIdentity({ id: link.id, provider: link.provider })) === "gone") {
       await identity.erase();
       return { ok: false, why: "bad" };
     }

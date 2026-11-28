@@ -478,7 +478,7 @@ describe("Apple and Google", () => {
     expect((await rig.service.me(s))).toMatchObject({ providers: [] });
 
     expect((await rig.service.confirmLink(email, "000000", OTHER, "stranger")).ok).toBe(false);
-    const linked = await rig.service.confirmLink(email, codeIn(lastMail()), OTHER);
+    const linked = await rig.service.confirmLink(email, codeIn(lastMail()), LOGIN);
     expect(linked).toMatchObject({ ok: true, account: { providers: ["google"], password: true } });
     await rig.flush();
     expect(lastMail().subject).toBe("A sign-in method was added to your Lazy account");

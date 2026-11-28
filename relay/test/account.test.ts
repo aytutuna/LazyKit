@@ -289,8 +289,8 @@ describe("sign in with Apple and Google over HTTP", () => {
     expect([r.status, await body(r)]).toEqual([202, { linkRequired: true }]);
     await mailed(2);
     const code = codeIn(sent[1]);
-    expect((await account("link/confirm", "POST", { email: EMAIL, code: "000000", ...LOGIN, device: DEV_B }, undefined, { "CF-Connecting-IP": "198.51.100.9" })).status).toBe(401);
-    const ok = await account("link/confirm", "POST", { email: EMAIL, code, ...LOGIN, device: DEV_B });
+    expect((await account("link/confirm", "POST", { email: EMAIL, code: "000000", ...LOGIN }, undefined, { "CF-Connecting-IP": "198.51.100.9" })).status).toBe(401);
+    const ok = await account("link/confirm", "POST", { email: EMAIL, code, ...LOGIN });
     expect(ok.status).toBe(200);
     expect((await body(ok)).account).toMatchObject({ providers: ["google"], password: true });
     await mailed(3);
