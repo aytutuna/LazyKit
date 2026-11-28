@@ -5,8 +5,8 @@ use async_trait::async_trait;
 use lazy_link::transport::{Connection, Transport, TransportError};
 use std::sync::Arc;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
-use tokio::net::TcpStream;
 use tokio::net::tcp::{OwnedReadHalf, OwnedWriteHalf};
+use tokio::net::{TcpListener, TcpStream};
 use tokio::sync::Mutex;
 
 pub struct Tcp;
@@ -136,4 +136,40 @@ impl Connection for Canned {
     }
 
     async fn close(&self) {}
+}
+
+// Answers each connection with the next canned reply and keeps the request heads it read.
+pub async fn stand(replies: Vec<String>) -> (String, Arc<std::sync::Mutex<Vec<String>>>) {
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let url = format!("http://{}/relay/v1", listener.local_addr().unwrap());
+    let heads = Arc::new(std::sync::Mutex::new(Vec::new()));
+    let seen = heads.clone();
+    tokio::spawn(async move {
+        for reply in replies {
+            let (mut tcp, _) = listener.accept().await.unwrap();
+            let mut buf = vec![0u8; 8192];
+            let mut got = 0;
+            loop {
+                let n = tcp.read(&mut buf[got..]).await.unwrap();
+                got += n;
+                if n == 0 || buf[..got].windows(4).any(|w| w == b"\r\n\r\n") {
+                    break;
+                }
+            }
+            seen.lock()
+                .unwrap()
+                .push(String::from_utf8_lossy(&buf[..got]).into_owned());
+            tcp.write_all(reply.as_bytes()).await.unwrap();
+            let _ = tcp.shutdown().await;
+        }
+    });
+    (url, heads)
+}
+
+pub fn answer(status: &str, reason: Option<&str>, body: &str) -> String {
+    let reason = reason.map_or(String::new(), |r| format!("x-relay-reason: {r}\r\n"));
+    format!(
+        "HTTP/1.1 {status}\r\n{reason}Content-Length: {}\r\nConnection: close\r\n\r\n{body}",
+        body.len()
+    )
 }
