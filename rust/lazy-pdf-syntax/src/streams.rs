@@ -264,24 +264,25 @@ impl Document {
         max_size: usize,
     ) -> Result<Arc<Vec<u8>>, ReadError> {
         let limit = max_size.min(MAX_GLOBALS);
-        if let Some(refused) = self
-            .refused_globals
-            .get(&globals.number)
-            .filter(|_| globals.number != 0)
-        {
-            return Err(refused.clone());
-        }
         let cached = (globals.number != 0)
             .then(|| self.globals.get(&globals.number))
             .flatten();
         if let Some(data) = cached.filter(|d| d.len() <= limit) {
             return Ok(data.clone());
         }
+        // A refusal for being too large holds only for limits no bigger than the one it was made under.
+        if let Some((under, refused)) = self.refused_globals.get(&globals.number)
+            && globals.number != 0
+            && (!refused.too_large || limit <= *under)
+        {
+            return Err(refused.clone());
+        }
         let result = self.read_globals(globals, max_size, limit);
         if let Err(e) = &result
             && globals.number != 0
         {
-            self.refused_globals.insert(globals.number, e.clone());
+            self.refused_globals
+                .insert(globals.number, (limit, e.clone()));
         }
         result
     }

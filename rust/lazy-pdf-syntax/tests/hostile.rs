@@ -1219,3 +1219,39 @@ fn entries_listed_at_a_long_comment_cost_nothing_once_the_parse_budget_is_spent(
     assert!(document.get(5).is_some_and(|o| o.as_dict().is_some()));
     must_finish_within(Duration::from_secs(5), started);
 }
+
+#[test]
+fn a_small_image_does_not_make_shared_globals_fail_for_a_big_one() {
+    let mut pdf = TestPdf::with_header("%PDF-1.5\n");
+    pdf.obj(1, "<</Type /Catalog /Pages 2 0 R>>")
+        .obj(2, "<</Type /Pages /Kids [] /Count 0>>");
+    pdf.stream_with(
+        3,
+        "/Filter /FlateDecode",
+        &deflate(&vec![0u8; 1 << 20]),
+        None,
+        true,
+    );
+    for k in 0..2 {
+        pdf.stream_with(
+            10 + k,
+            "/Width 8 /Height 8 /Filter /JBIG2Decode /DecodeParms <</JBIG2Globals 3 0 R>>",
+            b"x",
+            None,
+            true,
+        );
+    }
+    let file = [
+        pdf.finish_without_xref(),
+        latin("trailer\n<</Root 1 0 R>>\n"),
+    ]
+    .concat();
+    let mut document = open(file);
+    let small = document.get(10).unwrap();
+    let big = document.get(11).unwrap();
+    let (Object::Stream(small), Object::Stream(big)) = (&*small, &*big) else {
+        panic!("not streams");
+    };
+    assert!(document.stream_data_limited(small, 4096, false).is_err());
+    assert!(document.filter_chain(big).is_ok());
+}
