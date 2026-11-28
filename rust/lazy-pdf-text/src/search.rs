@@ -78,6 +78,8 @@ pub struct TextSearch {
     options: TextSearchOptions,
     query: Vec<u16>,
     regex: Option<Regex>,
+    /// For whole words: the same pattern without the start-of-text alternative, for the search that follows a hit.
+    retry: Option<Regex>,
 }
 
 impl TextSearch {
@@ -106,17 +108,21 @@ impl TextSearch {
                     .map_err(|e| BadPattern(e.to_string()))
             };
             let plain = build(&folded)?;
-            let regex = if options.whole_word {
-                build(&format!(
-                    "(?:[^\\p{{L}}\\p{{N}}]|^)(?P<hit>(?:{folded}))(?:[^\\p{{L}}\\p{{N}}]|$)"
-                ))?
+            let wrapped =
+                |start: &str| format!(r"{start}(?P<hit>(?:{folded}))(?:$|[^\p{{L}}\p{{N}}])");
+            let (regex, retry) = if options.whole_word {
+                (
+                    build(&wrapped(r"(?:^|[^\p{L}\p{N}])"))?,
+                    Some(build(&wrapped(r"[^\p{L}\p{N}]"))?),
+                )
             } else {
-                plain
+                (plain, None)
             };
             return Ok(Some(TextSearch {
                 options: *options,
                 query: Vec::new(),
                 regex: Some(regex),
+                retry,
             }));
         }
         let units: Vec<u16> = query.encode_utf16().collect();
@@ -128,6 +134,7 @@ impl TextSearch {
             options: *options,
             query: plain,
             regex: None,
+            retry: None,
         }))
     }
 
@@ -256,7 +263,7 @@ impl TextSearch {
         };
         let (haystack, units) = to_haystack(&text.text);
         let spans = if self.options.whole_word {
-            whole_word_hits(regex, &haystack)
+            whole_word_hits(regex, self.retry.as_ref().unwrap_or(regex), &haystack)
         } else {
             regex
                 .find_iter(&haystack)
@@ -322,18 +329,23 @@ fn char_len_before(text: &str, at: usize) -> usize {
 }
 
 // The hits of a whole word pattern: each match takes a neighbour on both sides, so the next search starts at the last
-// character of the previous hit, which can be the neighbour of the next one. A match that starts before the end of the
-// previous hit is that hit found again by the start-of-text alternative and is skipped.
-fn whole_word_hits(regex: &Regex, haystack: &str) -> Vec<(usize, usize)> {
+// character of the previous hit, which can be the neighbour of the next one. The start-of-text alternative comes first,
+// so a hit at the start is found without a neighbour; when it finds the previous hit again, the search is repeated from
+// the same place with `retry`, which has to use the neighbour.
+fn whole_word_hits(regex: &Regex, retry: &Regex, haystack: &str) -> Vec<(usize, usize)> {
     let mut hits = Vec::new();
     let mut at = 0;
     let mut min_start = 0;
     while at <= haystack.len() {
-        let Some(caps) = regex.captures_at(haystack, at) else {
-            break;
-        };
-        let Some(group) = caps.name("hit") else { break };
-        let (start, end) = (group.start(), group.end());
+        let mut found = regex
+            .captures_at(haystack, at)
+            .and_then(|c| c.name("hit").map(|g| (g.start(), g.end())));
+        if found.is_some_and(|(start, _)| start < min_start) {
+            found = retry
+                .captures_at(haystack, at)
+                .and_then(|c| c.name("hit").map(|g| (g.start(), g.end())));
+        }
+        let Some((start, end)) = found else { break };
         if start < min_start {
             let step = char_len_at(haystack, at);
             if step == 0 {
