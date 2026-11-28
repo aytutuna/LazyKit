@@ -8,6 +8,10 @@ use lazy_pdf_syntax::{Document, Object, Stream};
 
 const MAX_DEPTH: usize = 8;
 const MAX_OUTPUTS: usize = 64;
+/// Sample tables and calculator programs in real files are kilobytes; these keep a hostile one from costing a stream's
+/// whole size limit each time a colour space names it.
+const MAX_SAMPLE_DATA: usize = 16 << 20;
+const MAX_PROGRAM_SIZE: usize = 256 << 10;
 const MAX_ARRAY_LENGTH: usize = 2_147_483_591;
 const STACK_SIZE: usize = 100;
 const MAX_NESTING: usize = 32;
@@ -288,7 +292,9 @@ impl Function {
             }
             total = total.checked_mul(size[i]).ok_or(FunctionError)?;
         }
-        let data = doc.stream_data(stream).map_err(|_| FunctionError)?;
+        let data = doc
+            .stream_data_limited(stream, MAX_SAMPLE_DATA, false)
+            .map_err(|_| FunctionError)?;
         if total.checked_mul(bits).ok_or(FunctionError)? > data.len().saturating_mul(8) {
             return Err(FunctionError);
         }
@@ -328,7 +334,9 @@ impl Function {
         if range.len() < 2 {
             return Err(FunctionError);
         }
-        let text = doc.stream_data(stream).map_err(|_| FunctionError)?;
+        let text = doc
+            .stream_data_limited(stream, MAX_PROGRAM_SIZE, false)
+            .map_err(|_| FunctionError)?;
         let mut at = 0;
         skip_space(&text, &mut at);
         if at >= text.len() || text[at] != b'{' {

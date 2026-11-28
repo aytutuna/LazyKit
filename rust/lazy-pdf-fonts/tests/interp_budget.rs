@@ -101,3 +101,38 @@ fn form_resources_per_do() {
     run(&mut doc);
     assert!(t.elapsed() < LIMIT);
 }
+
+// Past the 256 colour spaces the interpreter keeps, each use is parsed again, so each one is charged to the budget:
+// without it ten million of them are ten million parses.
+#[test]
+fn uncached_color_spaces_are_charged() {
+    let names: String = (0..300)
+        .map(|i| format!("/C{i} [/Indexed /DeviceGray 255 <00>] "))
+        .collect();
+    let mut content: String = (0..256).map(|i| format!("/C{i} cs\n")).collect();
+    content += &"/C256 cs /C257 cs\n".repeat(1000);
+    let mut doc = page(
+        content.as_bytes(),
+        &format!("/ColorSpace <<{names}>>"),
+        |_| {},
+    );
+    assert!(run(&mut doc));
+}
+
+// A type 4 program larger than any real one is refused rather than read at every colour space that names it.
+#[test]
+fn huge_calculator_programs_are_refused() {
+    use lazy_pdf_fonts::Function;
+    let program = format!("{{{}}}", "0 pop ".repeat(100_000));
+    let mut pdf = TestPdf::new();
+    pdf.obj(1, "<</Type /Catalog /Pages 2 0 R>>");
+    pdf.obj(2, "<</Type /Pages /Kids [] /Count 0>>");
+    pdf.stream(
+        3,
+        "/FunctionType 4 /Domain [0 1] /Range [0 1]",
+        program.as_bytes(),
+    );
+    let mut doc = Document::open(pdf.finish(), Box::new(StandardFilters)).unwrap();
+    let function = doc.get(3).unwrap();
+    assert!(Function::parse(&mut doc, &function).is_err());
+}

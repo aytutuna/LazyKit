@@ -352,6 +352,7 @@ const MAX_LOOKUPS: usize = 4096;
 const MAX_CACHED_FONTS: usize = 512;
 const MAX_CACHED_MASKS: usize = 256;
 const MAX_FAILED_FORMS: usize = 4096;
+const COLOR_SPACE_COST: i64 = 1 << 14;
 
 impl Key {
     // An object that is a reference is known by its number, a direct one by what it says.
@@ -1059,6 +1060,9 @@ impl<'a> ContentInterpreter<'a> {
         let space = ColorSpaceInfo::create(self.doc, &definition, 0);
         if self.color_spaces.len() < 256 {
             self.color_spaces.insert(key, space.clone());
+        } else {
+            // Not kept, so every use of it reads its functions and tables again.
+            self.budget -= COLOR_SPACE_COST;
         }
         space
     }
