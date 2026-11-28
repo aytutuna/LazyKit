@@ -612,11 +612,19 @@ describe("relay", () => {
     const room = newRoom();
     const mine = groupOf(room);
     const other = newGroup();
-    // The guest's group check finds the room unclaimed; the host claims it before the guest's calls return.
-    const stranger = ask(room, "role=guest", other);
-    const control = await open(room, "role=host", mine);
-    expect((await stranger).status).toBe(403);
-    expect(control.texts).toEqual([]);
+    const url = (role: string, group: string) => `https://alazy.app/relay/v1/${room}?role=${role}&group=${group}&device=${"d".repeat(32)}`;
+    const headers = { Upgrade: "websocket" };
+    await runInDurableObject(env.ROOMS.get(env.ROOMS.idFromName(room)), async (r: any) => {
+      // Holds the stranger's group call so the host can claim the room in the meantime.
+      let release!: () => void;
+      const gate = new Promise<void>((res) => (release = res));
+      const real = r.groupStub.bind(r);
+      r.groupStub = (g: string) => (g === other ? { status: async () => (await gate, { capped: false }), touch: async () => {} } : real(g));
+      const stranger = r.fetch(new Request(url("guest", other), { headers }));
+      expect((await r.fetch(new Request(url("host", mine), { headers }))).status).toBe(101);
+      release();
+      expect((await stranger).status).toBe(403);
+    });
   });
 
   it("counts into the week of the bytes and forgets old weeks", async () => {
