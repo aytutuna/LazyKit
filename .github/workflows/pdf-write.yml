@@ -1,0 +1,68 @@
+name: pdf-write
+
+on:
+  push:
+    branches: [main, 'ci/**']
+    paths:
+      - rust/lazy-pdf-filters/**
+      - rust/lazy-pdf-syntax/**
+      - rust/lazy-pdf-write/**
+      - rust/lazy-tiff/**
+      - rust/lazy-office-zip/**
+      - rust/Cargo.toml
+      - rust/Cargo.lock
+      - rust/deny.toml
+      - rust/rust-toolchain.toml
+      - testdata/pdf-write/**
+      - .github/workflows/pdf-write.yml
+
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: always
+  CARGO_DENY: 0.22.1
+
+defaults:
+  run:
+    working-directory: rust
+
+jobs:
+  lint:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2
+        with:
+          workspaces: rust
+      - name: Test data is what SHA256SUMS lists
+        working-directory: testdata/pdf-write
+        run: |
+          sha256sum --check --strict SHA256SUMS
+          test "$(find . -type f ! -name SHA256SUMS ! -name .gitattributes | wc -l)" = "$(wc -l < SHA256SUMS)"
+      - run: cargo fmt --check -p lazy-pdf-filters -p lazy-pdf-write -p lazy-tiff -p lazy-office-zip
+      - run: cargo clippy --locked -p lazy-pdf-filters -p lazy-pdf-write -p lazy-tiff -p lazy-office-zip --all-targets -- -D warnings
+
+  licenses:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2
+        with:
+          workspaces: rust
+          shared-key: licenses
+      - run: cargo install cargo-deny --version "$CARGO_DENY" --locked
+      - run: cargo deny --locked check licenses bans sources
+
+  test:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [windows-latest, ubuntu-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v7
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2
+        with:
+          workspaces: rust
+      - run: cargo test --locked -p lazy-pdf-filters -p lazy-pdf-write -p lazy-tiff -p lazy-office-zip
