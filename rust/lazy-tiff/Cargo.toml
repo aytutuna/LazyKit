@@ -1,0 +1,13 @@
+[package]
+name = "lazy-tiff"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license-file.workspace = true
+publish.workspace = true
+
+[dependencies]
+lazy-pdf-filters = { path = "../lazy-pdf-filters" }
+
+[dev-dependencies]
+sha2 = "0.10"
