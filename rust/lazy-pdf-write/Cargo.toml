@@ -1,0 +1,16 @@
+[package]
+name = "lazy-pdf-write"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license-file.workspace = true
+publish.workspace = true
+
+[dependencies]
+lazy-pdf-filters = { path = "../lazy-pdf-filters" }
+getrandom = "0.3"
+
+[dev-dependencies]
+lazy-pdf-syntax = { path = "../lazy-pdf-syntax" }
+serde_json = "1"
+sha2 = "0.10"

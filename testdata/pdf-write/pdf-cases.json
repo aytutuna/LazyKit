@@ -1,0 +1,133 @@
+{
+  "images": {
+    "jpeg-gray": "jpeg-tiny-gray.jpg",
+    "jpeg-rgb": "jpeg-rgb-header.jpg",
+    "jpeg-unreadable": "jpeg-unreadable.bin",
+    "g4-checker": "g4-checker-37x23.g4",
+    "g4-text": "g4-text-850x1100.g4"
+  },
+  "scripts": [
+    "Çağrı Işık İzmir'de öğün şüpheli ılık su içti",
+    "ÇĞIİÖŞÜ çğıiöşü",
+    "Καλημέρα κόσμε",
+    "Привет, мир",
+    "مرحبا بالعالم",
+    "שלום עולם",
+    "日本語のテキストと中文 𠀋",
+    "नमस्ते दुनिया",
+    "Naïve café — 25 € 📄"
+  ],
+  "cases": [
+    {
+      "name": "standard-golden",
+      "options": { "title": "Tapu belgesi — Çağrı", "date": "2026-10-19T21:30:05+03:00", "id": "A0A1A2A3A4A5A6A7A8A9AAABACADAEAF" },
+      "pages": [
+        { "image": "jpeg-gray", "width": 2550, "height": 3300, "dpi": 300,
+          "lines": [ { "text": "Çağrı Işık İzmir'de öğün şüpheli", "box": [0.1, 0.8, 0.6, 0.04] } ] },
+        { "image": "jpeg-gray", "width": 2550, "height": 3300, "dpi": 300 }
+      ]
+    },
+    {
+      "name": "archival-golden",
+      "options": { "conformance": "pdfa2b", "title": "Tapu belgesi — Çağrı", "date": "2026-10-19T21:30:05+03:00", "id": "A0A1A2A3A4A5A6A7A8A9AAABACADAEAF" },
+      "pages": [
+        { "image": "jpeg-gray", "width": 2550, "height": 3300, "dpi": 300,
+          "lines": [ { "text": "Çağrı Işık İzmir'de öğün şüpheli", "box": [0.1, 0.8, 0.6, 0.04] } ] }
+      ]
+    },
+    {
+      "name": "g4-and-jpeg-golden",
+      "options": { "title": "Siyah beyaz", "date": "2026-10-19T21:30:05+03:00", "id": "A0A1A2A3A4A5A6A7A8A9AAABACADAEAF" },
+      "pages": [
+        { "image": "g4-checker", "g4": [37, 23], "width": 37, "height": 23, "dpi": 100,
+          "lines": [ { "text": "Siyah beyaz — Çağrı", "box": [0.1, 0.5, 0.8, 0.2] } ] },
+        { "image": "jpeg-gray", "width": 850, "height": 1100, "dpi": 100 }
+      ]
+    },
+    {
+      "name": "g4-text-page",
+      "options": { "date": "2026-10-19T21:30:05+00:00", "id": "00000000000000000000000000000000" },
+      "pages": [
+        { "image": "g4-text", "g4": [850, 1100], "width": 850, "height": 1100, "dpi": 100 }
+      ]
+    },
+    {
+      "name": "g4-text-page-pdfa",
+      "options": { "conformance": "pdfa2b", "title": "Siyah beyaz", "date": "2026-10-20T09:30:00+03:00", "id": "00000000000000000000000000000000" },
+      "pages": [
+        { "image": "g4-text", "g4": [850, 1100], "width": 850, "height": 1100, "dpi": 100 }
+      ]
+    },
+    {
+      "name": "scripts-letter",
+      "options": { "title": "Scripts", "date": "2026-10-19T21:30:05-05:30", "id": "0102030405060708090A0B0C0D0E0F10" },
+      "pages": [
+        { "image": "jpeg-gray", "width": 2550, "height": 3300, "dpi": 300, "scripts": true }
+      ]
+    },
+    {
+      "name": "scripts-letter-pdfa",
+      "options": { "conformance": "pdfa2b", "title": "Scripts & <more> \"quoted\"", "date": "2026-10-19T21:30:05+03:00", "id": "0102030405060708090A0B0C0D0E0F10" },
+      "pages": [
+        { "image": "jpeg-gray", "width": 2550, "height": 3300, "dpi": 300, "scripts": true }
+      ]
+    },
+    {
+      "name": "words-and-turned-lines",
+      "options": { "date": "2026-10-19T21:30:05+03:00", "id": "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA" },
+      "pages": [
+        { "image": "jpeg-rgb", "width": 1275, "height": 1650, "dpi": 150,
+          "lines": [
+            { "text": "Hello brave new world", "box": [0.1, 0.8, 0.6, 0.03],
+              "words": [ { "text": "Hello", "box": [0.1, 0.8, 0.1, 0.03] }, { "text": "brave", "box": [0.25, 0.8, 0.1, 0.03] },
+                         { "text": "new", "box": [0.4, 0.8, 0.07, 0.03] }, { "text": "world", "box": [0.5, 0.8, 0.2, 0.03] } ] },
+            { "text": "Vertical", "box": [0.8, 0.2, 0.03, 0.4] },
+            { "text": "ab", "box": [0.1, 0.1, 0.02, 0.2] },
+            { "text": "", "box": [0.1, 0.1, 0.2, 0.2] },
+            { "text": "flat", "box": [0.1, 0.5, 0.0, 0.1] },
+            { "text": "Negative box", "box": [0.6, 0.45, -0.3, -0.04] }
+          ] }
+      ]
+    },
+    {
+      "name": "mixed-mask",
+      "options": { "date": "2026-10-19T21:30:05+03:00", "id": "BBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB" },
+      "pages": [
+        { "image": "jpeg-rgb", "mask": "g4-checker", "g4": [37, 23], "width": 370, "height": 230, "dpi": 100 },
+        { "image": "jpeg-gray", "width": 100, "height": 150, "dpi": 300 },
+        { "image": "jpeg-rgb", "mask": "g4-checker", "g4": [37, 23], "width": 370, "height": 230, "dpi": 100,
+          "lines": [ { "text": "On the mask page", "box": [0.1, 0.1, 0.5, 0.1] } ] }
+      ]
+    },
+    {
+      "name": "fixed-page-a4",
+      "options": { "pageSize": "a4", "date": "2026-10-19T21:30:05+03:00", "id": "CCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCC" },
+      "pages": [
+        { "image": "jpeg-gray", "width": 400, "height": 300, "dpi": 100 },
+        { "image": "jpeg-gray", "width": 2480, "height": 3508, "dpi": 300, "lines": [ { "text": "Whole A4", "box": [0.1, 0.8, 0.3, 0.05] } ] },
+        { "image": "jpeg-gray", "width": 5100, "height": 6600, "dpi": 300 }
+      ]
+    },
+    {
+      "name": "fixed-page-letter",
+      "options": { "pageSize": "letter", "date": "2026-10-19T21:30:05+03:00", "id": "DDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDD" },
+      "pages": [
+        { "image": "jpeg-gray", "width": 400, "height": 300, "dpi": 100 },
+        { "image": "jpeg-gray", "width": 2480, "height": 3508, "dpi": 300 }
+      ]
+    },
+    {
+      "name": "unreadable-jpeg",
+      "options": { "date": "2026-10-19T21:30:05+03:00", "id": "EEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEE" },
+      "pages": [
+        { "image": "jpeg-unreadable", "width": 200, "height": 100, "dpi": 72 },
+        { "image": "jpeg-gray", "width": 200, "height": 100, "dpi": 0 }
+      ]
+    },
+    {
+      "name": "no-pages",
+      "options": { "date": "2026-10-19T21:30:05+03:00", "id": "FFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFF" },
+      "pages": []
+    }
+  ]
+}
