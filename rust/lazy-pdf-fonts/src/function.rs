@@ -283,13 +283,13 @@ impl Function {
             }
             size[i] = sizes[i] as usize;
             stride[i] = total.min(i32::MAX as usize);
-            if size[i] > 8 * MAX_ARRAY_LENGTH / bits / total {
+            if size[i] as u64 > 8 * MAX_ARRAY_LENGTH as u64 / bits as u64 / total as u64 {
                 return Err(FunctionError);
             }
-            total *= size[i];
+            total = total.checked_mul(size[i]).ok_or(FunctionError)?;
         }
         let data = doc.stream_data(stream).map_err(|_| FunctionError)?;
-        if total * bits > data.len() * 8 {
+        if total.checked_mul(bits).ok_or(FunctionError)? > data.len().saturating_mul(8) {
             return Err(FunctionError);
         }
         let mut encode = numbers(doc, d.get("Encode")).unwrap_or_default();

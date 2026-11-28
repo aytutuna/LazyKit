@@ -164,7 +164,8 @@ jobs:
           workspaces: rust
           key: pdf-wasm
       - run: rustup target add wasm32-unknown-unknown
-      - run: cargo clippy --locked -p lazy-pdf-syntax -p lazy-pdf-filters -p lazy-pdf-fonts --target wasm32-unknown-unknown -- -D warnings
+      - run: cargo clippy --locked -p lazy-pdf-syntax -p lazy-pdf-filters -p lazy-pdf-fonts -p lazy-pdf-text --target wasm32-unknown-unknown -- -D warnings
+      - run: cargo build --locked -p lazy-pdf-syntax -p lazy-pdf-filters -p lazy-pdf-fonts -p lazy-pdf-text --target wasm32-unknown-unknown
 
   scan:
     strategy:
