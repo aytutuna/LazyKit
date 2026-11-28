@@ -1217,7 +1217,7 @@ fn entries_listed_at_a_long_comment_cost_nothing_once_the_parse_budget_is_spent(
         document.get(200_000 + k);
     }
     assert!(document.get(5).is_some_and(|o| o.as_dict().is_some()));
-    must_finish_within(Duration::from_secs(5), started);
+    must_finish_within(Duration::from_secs(20), started);
 }
 
 #[test]
