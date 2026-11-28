@@ -23,6 +23,9 @@ env:
   AWS_LC_SYS_CMAKE_BUILDER: 0
   AWS_LC_SYS_PREBUILT_NASM: 1
   AWS_LC_SYS_USE_SYSTEM: 0
+  # aws-lc is compiled by cc and linked by rustc: both have to agree on the oldest system, or iOS fails on missing symbols
+  IPHONEOS_DEPLOYMENT_TARGET: "18.0"
+  MACOSX_DEPLOYMENT_TARGET: "14.0"
   # fc32e9b is the tag v0.12.0+v0.32.0
   UNIFFI_BINDGEN_CS_REV: fc32e9bbf91ee66b0b92241f575cbce1bf5e3151
 
