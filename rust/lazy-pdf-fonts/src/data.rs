@@ -1,5 +1,6 @@
 //! Data tables of the reference engines, copied as they are: the Annex D encodings, the Adobe Glyph List, the
-//! Core 14 AFM data and the predefined CJK CMaps. Adobe's lists and CMaps are BSD-3 licensed.
+//! Core 14 AFM data and the predefined CJK CMaps. The notices Adobe's terms ask for are in
+//! THIRD-PARTY-NOTICES.txt, made by tools/notices.py.
 
 pub const ENCODING_STANDARD: &str = "32=space exclam quotedbl numbersign dollar percent ampersand quoteright parenleft parenright\nasterisk plus comma hyphen period slash zero one two three four five six seven eight nine colon\nsemicolon less equal greater question at A B C D E F G H I J K L M N O P Q R S T U V W X Y Z\nbracketleft backslash bracketright asciicircum underscore quoteleft a b c d e f g h i j k l m n o p\nq r s t u v w x y z braceleft bar braceright asciitilde 161=exclamdown cent sterling fraction yen\nflorin section currency quotesingle quotedblleft guillemotleft guilsinglleft guilsinglright fi fl\n177=endash dagger daggerdbl periodcentered 182=paragraph bullet quotesinglbase quotedblbase\nquotedblright guillemotright ellipsis perthousand 191=questiondown 193=grave acute circumflex tilde\nmacron breve dotaccent dieresis 202=ring cedilla 205=hungarumlaut ogonek caron emdash 225=AE\n227=ordfeminine 232=Lslash Oslash OE ordmasculine 241=ae 245=dotlessi 248=lslash oslash oe\ngermandbls";
 
