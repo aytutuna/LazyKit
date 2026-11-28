@@ -54,22 +54,6 @@ describe("second review findings", () => {
     expect(k[3]).toBe(u[3]);
   });
 
-  it.fails("Q4 email change: the old address is never told, and a password-only thief takes the account silently", async () => {
-    const rig = memoryService();
-    const victim = await signUp(rig, "victim4@example.com");
-    const start = rig.mail.length;
-    const t: any = await rig.service.signinPassword("victim4@example.com", PW, OTHER, "6.6.6.6");
-    const s = (await rig.service.session(`Bearer ${t.token}`))!;
-    expect(s.fresh).toBe(true);
-    expect(await rig.service.changeEmail(s, "thief@evil.test")).toBe("sent");
-    await rig.flush();
-    expect(await rig.service.confirmEmail(s, "thief@evil.test", codeIn(rig.mail[rig.mail.length - 1]), "6.6.6.6")).toBe("ok");
-    expect(await rig.service.setPassword(s, "thief password 1", undefined)).toBe("ok");
-    await rig.flush();
-    const toVictim = rig.mail.slice(start).filter((m) => m.to === "victim4@example.com");
-    expect(toVictim.length).toBeGreaterThan(0);
-  });
-
   it("Q5 an address bound to an account that is gone is unbound again", async () => {
     const rig = memoryService();
     const r = await signUp(rig, "gone5@example.com");

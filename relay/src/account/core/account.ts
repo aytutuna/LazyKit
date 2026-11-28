@@ -162,6 +162,17 @@ export class AccountCore {
     return true;
   }
 
+  private async checkPassword(password: string | undefined, now: number): Promise<"ok" | "bad" | "locked"> {
+    const s = this.s!;
+    if (typeof password !== "string" || !s.password) return "bad";
+    if (windowFull(s.reauth, now, REAUTH_WINDOW_MS, REAUTH_FAILS)) return "locked";
+    windowAdd(s.reauth, now, REAUTH_WINDOW_MS);
+    await this.save();
+    if (!(await verifyPassword(password, s.password))) return "bad";
+    s.reauth.count = 0;
+    return "ok";
+  }
+
   // A session made in the last minutes may act on its own; an older one has to show the password,
   // and where there is none it has to sign in again.
   private async reauth(fresh: boolean, password: string | undefined, now: number): Promise<Reauth> {
@@ -169,13 +180,14 @@ export class AccountCore {
     if (!s) return "bad";
     if (fresh) return "ok";
     if (!s.password) return "need-fresh";
-    if (typeof password !== "string") return "bad";
-    if (windowFull(s.reauth, now, REAUTH_WINDOW_MS, REAUTH_FAILS)) return "locked";
-    windowAdd(s.reauth, now, REAUTH_WINDOW_MS);
-    await this.save();
-    if (!(await verifyPassword(password, s.password))) return "bad";
-    s.reauth.count = 0;
-    return "ok";
+    return this.checkPassword(password, now);
+  }
+
+  // The email is the way back into the account, so even a new session shows the password; with
+  // none, the current address has to say yes by code.
+  async authorizeEmailChange(password: string | undefined, now = this.clock()): Promise<"ok" | "bad" | "locked" | "need-code"> {
+    if (!this.s) return "bad";
+    return this.s.password ? this.checkPassword(password, now) : "need-code";
   }
 
   async setPassword(next: PasswordRecord, current: string | undefined, fresh: boolean, session: string, now = this.clock()): Promise<Reauth> {
@@ -197,11 +209,12 @@ export class AccountCore {
     return this.s?.email;
   }
 
-  async setEmail(email: string): Promise<void> {
+  // Every session but the one that asked ends.
+  async setEmail(email: string, keep?: string): Promise<void> {
     if (!this.s) return;
     this.s.email = email;
+    this.s.sessions = this.s.sessions.filter((x) => x.id === keep);
     await this.save();
-    this.notify("The email of your Lazy account changed", "This address is now the email of your Lazy account.");
   }
 
   me() {

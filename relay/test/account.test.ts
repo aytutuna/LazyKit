@@ -277,14 +277,22 @@ describe("sign in with Apple and Google over HTTP", () => {
 });
 
 describe("email, export and deletion over HTTP", () => {
-  it("moves the account to a new address after a code", async () => {
+  it("moves the account to a new address after a code and the password, tells the old address, and can be undone", async () => {
     const token = await signUp(EMAIL, PASSWORD);
-    expect((await account("email", "POST", { email: who.other }, token)).status).toBe(202);
+    expect((await account("email", "POST", { email: who.other }, token)).status).toBe(401);
+    expect((await account("email", "POST", { email: who.other, password: PASSWORD }, token)).status).toBe(202);
     await mailed(2);
     expect(sent[1].to).toBe(who.other);
     expect((await account("email/confirm", "POST", { email: who.other, code: codeIn(sent[1]) }, token)).status).toBe(204);
+    await mailed(3);
+    expect(sent[2].to).toBe(EMAIL);
+    expect(sent[2].text).toContain(who.other);
     expect((await account("signin", "POST", { email: who.other, password: PASSWORD, ...LOGIN, device: DEV_B })).status).toBe(200);
     expect((await account("signin", "POST", { email: EMAIL, password: PASSWORD, ...LOGIN, device: DEV_B })).status).toBe(401);
+    expect((await account("email/undo", "POST", { email: EMAIL, code: "000000" })).status).toBe(401);
+    expect((await account("email/undo", "POST", { email: EMAIL, code: codeIn(sent[2]) })).status).toBe(204);
+    expect((await account("me", "GET", undefined, token)).status).toBe(401);
+    expect((await account("signin", "POST", { email: EMAIL, password: PASSWORD, ...LOGIN })).status).toBe(200);
   });
 
   it("needs the confirmation word and removes everything the service holds", async () => {

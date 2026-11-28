@@ -511,38 +511,123 @@ describe("Apple and Google", () => {
 });
 
 describe("changing the email", () => {
-  it("moves the account to a new address once that address has answered", async () => {
+  const to = (address: string) => rig.mail.filter((m) => m.to === address);
+
+  it("takes a new session and the password, mails the old address with a way back, and ends the other sessions", async () => {
     const a = await signUp();
+    const other = await rig.service.signinPassword(email, PASSWORD, OTHER);
     const s = (await rig.service.session(header(a)))!;
     const next = `grace${n}@example.com`;
-    expect(await rig.service.changeEmail(s, next)).toBe("sent");
+    expect(await rig.service.changeEmail(s, next, undefined)).toBe("bad");
+    expect(await rig.service.changeEmail(s, next, "wrong password!")).toBe("bad");
+    expect(await rig.service.changeEmail(s, next, PASSWORD)).toBe("sent");
     await rig.flush();
     expect(lastMail().to).toBe(next);
     expect(await rig.service.confirmEmail(s, next, "000000", "stranger")).toBe("bad");
+    const before = to(email).length;
     expect(await rig.service.confirmEmail(s, next, codeIn(lastMail()))).toBe("ok");
+    await rig.flush();
+    expect(to(email)).toHaveLength(before + 1);
+    expect(lastMail().text).toContain(`was changed to ${next}`);
+    expect(await rig.service.session(header(other))).toBeUndefined();
+    expect(await rig.service.session(header(a))).toBeTruthy();
     expect((await rig.service.signinPassword(next, PASSWORD, OTHER)).ok).toBe(true);
     expect((await rig.service.signinPassword(email, PASSWORD, OTHER)).ok).toBe(false);
     expect(await rig.service.me(s)).toMatchObject({ email: next });
     expect(rig.accounts.size).toBe(1);
-    expect(await rig.service.signup(email)).toBe("sent");
-    await rig.flush();
-    expect(lastMail().text).toMatch(/\d{6}/);
   });
 
-  it("is refused to a session that is not new, and does not take over an address that has an account", async () => {
+  it("can be undone from the old address within a week, which signs every session out", async () => {
     const a = await signUp();
-    const b = await signUp(`grace${n}@example.com`);
     const s = (await rig.service.session(header(a)))!;
-    const taken = await rig.service.changeEmail(s, `grace${n}@example.com`);
-    expect(taken).toBe("sent");
+    const next = `grace${n}@example.com`;
+    await rig.service.changeEmail(s, next, PASSWORD);
     await rig.flush();
-    expect(lastMail().to).toBe(`grace${n}@example.com`);
-    expect(lastMail().text).not.toMatch(/\d{6}/);
-    expect(await rig.service.confirmEmail(s, `grace${n}@example.com`, "123456")).toBe("bad");
+    await rig.service.confirmEmail(s, next, codeIn(lastMail()));
+    await rig.flush();
+    const undo = codeIn(lastMail());
+    expect(await rig.service.undoEmail(email, "000000", "stranger")).toBe("bad");
+    expect(await rig.service.undoEmail(email, undo)).toBe("ok");
+    expect(await rig.service.session(header(a))).toBeUndefined();
+    expect((await rig.service.signinPassword(email, PASSWORD, OTHER)).ok).toBe(true);
+    expect((await rig.service.signinPassword(next, PASSWORD, OTHER)).ok).toBe(false);
+    expect(await rig.service.undoEmail(email, undo)).toBe("bad");
+  });
+
+  it("cannot be undone after a week, or once someone else has the old address", async () => {
+    const first = await signUp();
+    const s = (await rig.service.session(header(first)))!;
+    const next = `grace${n}@example.com`;
+    await rig.service.changeEmail(s, next, PASSWORD);
+    await rig.flush();
+    await rig.service.confirmEmail(s, next, codeIn(lastMail()));
+    await rig.flush();
+    const undo = codeIn(lastMail());
+    await signUp(email, "somebody else entirely");
+    expect(await rig.service.undoEmail(email, undo)).toBe("bad");
+    rig.clock.now += 8 * DAY;
+    expect(await rig.service.undoEmail(email, undo)).toBe("bad");
+  });
+
+  it("makes an account without a password prove the current address as well", async () => {
+    const r = await social("apple");
+    const s = (await rig.service.session(header(r)))!;
+    const next = `grace${n}@example.com`;
+    expect(await rig.service.changeEmail(s, next)).toBe("sent");
+    await rig.flush();
+    const mails = rig.mail.slice(-2);
+    const newCode = codeIn(mails.find((m) => m.to === next)!);
+    const oldCode = codeIn(mails.find((m) => m.to === email)!);
+    expect(await rig.service.confirmEmail(s, next, newCode, "stranger")).toBe("bad");
+    expect(await rig.service.changeEmail(s, next)).toBe("sent");
+    await rig.flush();
+    const again = rig.mail.slice(-2);
+    expect(await rig.service.confirmEmail(s, next, codeIn(again.find((m) => m.to === next)!), "x", "000000")).toBe("bad");
+    expect(oldCode).toMatch(/^[0-9]{6}$/);
+    await rig.service.changeEmail(s, next);
+    await rig.flush();
+    const third = rig.mail.slice(-2);
+    expect(await rig.service.confirmEmail(s, next, codeIn(third.find((m) => m.to === next)!), "x", codeIn(third.find((m) => m.to === email)!))).toBe("ok");
+  });
+
+  it("stops a thief who has only the password: the old address is told and the owner can take it back", async () => {
+    const owner = await signUp();
+    const start = rig.mail.length;
+    const stolen = await rig.service.signinPassword(email, PASSWORD, OTHER, "far away");
+    const s = (await rig.service.session(header(stolen)))!;
+    expect(await rig.service.changeEmail(s, "thief@evil.test", PASSWORD)).toBe("sent");
+    await rig.flush();
+    expect(await rig.service.confirmEmail(s, "thief@evil.test", codeIn(lastMail()), "far away")).toBe("ok");
+    await rig.flush();
+    expect(rig.mail.slice(start).filter((m) => m.to === email)).toHaveLength(1);
+    expect(await rig.service.session(header(owner))).toBeUndefined();
+    expect(await rig.service.undoEmail(email, codeIn(rig.mail.slice(start).find((m) => m.to === email)!))).toBe("ok");
+    expect(await rig.service.session(header(stolen))).toBeUndefined();
+  });
+
+  it("is refused to a session that is not new", async () => {
+    const a = await signUp();
     rig.clock.now += 11 * MIN;
     const old = (await rig.service.session(header(a)))!;
-    expect(await rig.service.changeEmail(old, `x${n}@example.com`)).toBe("need-fresh");
-    expect(b.ok).toBe(true);
+    expect(await rig.service.changeEmail(old, `x${n}@example.com`, PASSWORD)).toBe("need-fresh");
+  });
+
+  it("does not take over an address that has an account, or overwrite a change waiting there", async () => {
+    const a = await signUp();
+    const b = await signUp(`grace${n}@example.com`, "somebody else entirely");
+    const s = (await rig.service.session(header(a)))!;
+    expect(await rig.service.changeEmail(s, `grace${n}@example.com`, PASSWORD)).toBe("sent");
+    await rig.flush();
+    expect(lastMail().text).not.toMatch(/d{6}/);
+    expect(await rig.service.confirmEmail(s, `grace${n}@example.com`, "123456")).toBe("bad");
+    const free = `free${n}@example.com`;
+    await rig.service.changeEmail(s, free, PASSWORD);
+    await rig.flush();
+    const mine = codeIn(lastMail());
+    const t = (await rig.service.session(header(b)))!;
+    expect(await rig.service.changeEmail(t, free, "somebody else entirely")).toBe("sent");
+    await rig.flush();
+    expect(await rig.service.confirmEmail(s, free, mine)).toBe("ok");
   });
 });
 

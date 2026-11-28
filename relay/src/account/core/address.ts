@@ -15,8 +15,9 @@ const PASSWORD_FAILS_CALLER = 10;
 const PASSWORD_SLOW_AFTER = 40;
 const PASSWORD_FAILS_TOTAL = 400;
 const SWEEP_MS = 3_600_000;
+const UNDO_MS = 7 * DAY;
 
-export type Purpose = "signup" | "signin" | "link" | "email";
+export type Purpose = "signup" | "signin" | "link" | "email" | "emailold" | "undo";
 export type Sent = "sent" | "limited" | "not-configured";
 
 interface Code {
@@ -111,17 +112,19 @@ export class AddressCore {
   }
 
   // Makes a code and mails it; if the mail is refused later, the code and the send are taken back.
-  private async issue(purpose: Purpose, canonical: string, mailTo: string, now: number, extra?: unknown): Promise<void> {
+  private async issue(purpose: Purpose, canonical: string, mailTo: string, now: number, extra?: unknown, text?: (digits: string) => string, ttl = CODE_MS): Promise<void> {
     const digits = randomDigits();
-    const code: Code = { hash: await this.hash(purpose, canonical, digits), expires: now + CODE_MS, tries: 0, mailTo, extra };
+    const code: Code = { hash: await this.hash(purpose, canonical, digits), expires: now + ttl, tries: 0, mailTo, extra };
     const previous = this.s.codes[purpose];
     this.s.codes[purpose] = code;
-    const text =
-      purpose === "signup" ? `Your Lazy code is ${digits}. It confirms your new account and works for 10 minutes. If you did not ask for it, ignore this email.`
+    const body =
+      text ? text(digits)
+      : purpose === "signup" ? `Your Lazy code is ${digits}. It confirms your new account and works for 10 minutes. If you did not ask for it, ignore this email.`
       : purpose === "signin" ? `Your Lazy sign-in code is ${digits}. It works for 10 minutes. If you did not ask for it, ignore this email and nobody gets in.`
-      : purpose === "link" ? `Your Lazy code is ${digits}. It lets Apple or Google sign in to your Lazy account and works for 10 minutes. If that was not you, ignore this email and nothing is linked.`
+      : purpose === "link" ? `Your Lazy code is ${digits}. Entering it adds Apple or Google as a way to sign in to your Lazy account, and that sign-in will open the account. It works for 10 minutes. If that was not you, ignore this email and nothing is added.`
+      : purpose === "emailold" ? `Your Lazy code is ${digits}. A change of the email of your Lazy account needs it, and it works for 10 minutes. If you did not ask for that, ignore this email and nothing changes.`
       : `Your Lazy code is ${digits}. It confirms this address as the new email of a Lazy account and works for 10 minutes. If you did not ask for it, ignore this email.`;
-    this.later(mailTo, `Your Lazy code: ${digits}`, text, () => {
+    this.later(mailTo, `Your Lazy code: ${digits}`, body, () => {
       if (this.s.codes[purpose] === code) {
         if (previous) this.s.codes[purpose] = previous;
         else delete this.s.codes[purpose];
@@ -171,10 +174,28 @@ export class AddressCore {
     if (this.s.account && this.s.mailTo) {
       this.later(this.s.mailTo, "A Lazy account tried to use this address", "Someone asked to use this address for another Lazy account, which already has one here. Nothing changed. If it was not you, you can ignore this email.");
     } else {
-      await this.issue("email", canonical, typed, now, account);
+      // A change already waiting here for another account is not overwritten.
+      const waiting = this.s.codes.email;
+      if (!waiting || waiting.expires <= now || waiting.extra === account) await this.issue("email", canonical, typed, now, account);
     }
     await this.save();
     return "sent";
+  }
+
+  // The current address of an account without a password is asked as well before the email changes.
+  async requestOldCheck(canonical: string, account: string, now = this.clock()): Promise<Sent | "none"> {
+    if (this.s.account !== account || !this.s.mailTo) return "none";
+    if (!this.ready()) return "not-configured";
+    if (!this.reserveSend(now)) return "limited";
+    await this.issue("emailold", canonical, this.s.mailTo, now, account);
+    await this.save();
+    return "sent";
+  }
+
+  // Mailed to the address an account is leaving, with a code that puts it back for a week.
+  async issueUndo(canonical: string, account: string, mailTo: string, moved: string, now = this.clock()): Promise<void> {
+    await this.issue("undo", canonical, mailTo, now, account, (digits) => `The email of your Lazy account was changed to ${moved}. If that was you, ignore this email. If it was not, enter the code ${digits} within 7 days to put this address back and sign every session out.`, UNDO_MS);
+    await this.save();
   }
 
   // Each caller gets three tries per code and ten wrong codes a day; the code itself has thirty tries
