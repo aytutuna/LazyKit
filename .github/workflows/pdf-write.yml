@@ -31,7 +31,7 @@ jobs:
   lint:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2
         with:
           workspaces: rust
@@ -46,7 +46,7 @@ jobs:
   licenses:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2
         with:
           workspaces: rust
@@ -61,8 +61,22 @@ jobs:
         os: [windows-latest, ubuntu-latest, macos-latest]
     runs-on: ${{ matrix.os }}
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2
         with:
           workspaces: rust
       - run: cargo test --locked -p lazy-pdf-filters -p lazy-pdf-write -p lazy-tiff -p lazy-office-zip
+
+  other-targets:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2
+        with:
+          workspaces: rust
+          key: other-targets
+      - run: rustup target add wasm32-unknown-unknown i686-pc-windows-msvc
+      - name: The writers build for the browser
+        run: cargo build --locked -p lazy-pdf-filters -p lazy-pdf-write -p lazy-tiff -p lazy-office-zip --target wasm32-unknown-unknown
+      - name: And pass their tests on 32 bits
+        run: cargo test --locked -p lazy-pdf-filters -p lazy-pdf-write -p lazy-tiff -p lazy-office-zip --target i686-pc-windows-msvc

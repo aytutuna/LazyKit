@@ -126,7 +126,7 @@ fn dates_are_written_in_both_notations() {
     };
     assert_eq!(west.pdf(), "D:20261019213005-05'30'");
     assert_eq!(west.xmp(), "2026-10-19T21:30:05-05:30");
-    let now = Date::now();
+    let now = Date::now().unwrap();
     assert!(now.year >= 2026 && (1..=12).contains(&now.month) && (1..=31).contains(&now.day));
 }
 
@@ -288,7 +288,7 @@ fn every_case_is_the_reference_file_byte_for_byte() {
     assert_eq!(all.len(), 13);
     for (name, pages, options) in all {
         let expected = data(&format!("pdf-{name}.pdf"));
-        let pdf = make(&pages, &options);
+        let pdf = make(&pages, &options).unwrap();
         assert!(
             pdf == expected,
             "{name}: {} bytes, the reference has {}",
@@ -319,7 +319,7 @@ fn the_pinned_golden_files() {
     ];
     for (name, length, hash) in golden {
         let (_, pages, options) = cases().into_iter().find(|c| c.0 == name).unwrap();
-        let pdf = make(&pages, &options);
+        let pdf = make(&pages, &options).unwrap();
         assert_eq!(pdf.len(), length, "{name}");
         assert_eq!(sha(&pdf), hash, "{name}");
     }
@@ -354,7 +354,7 @@ impl Filters for Inflate {
 #[test]
 fn a_reader_opens_every_file_without_repairing_it() {
     for (name, pages, options) in cases() {
-        let pdf = make(&pages, &options);
+        let pdf = make(&pages, &options).unwrap();
         let mut document =
             Document::open(pdf, Box::new(Inflate)).unwrap_or_else(|e| panic!("{name}: {e:?}"));
         assert!(
@@ -380,7 +380,7 @@ fn the_text_layer_is_read_back_through_the_font_map() {
         .into_iter()
         .find(|c| c.0 == "standard-golden")
         .unwrap();
-    let mut document = Document::open(make(&pages, &options), Box::new(Inflate)).unwrap();
+    let mut document = Document::open(make(&pages, &options).unwrap(), Box::new(Inflate)).unwrap();
     let listed = document.pages();
     let contents = String::from_utf8(listed[0].contents(&mut document)).unwrap();
     assert!(
@@ -414,8 +414,8 @@ fn the_page_size_places_an_image_without_enlarging_it() {
 fn an_unset_date_and_id_are_filled_in() {
     let mut options = Options::new("Lazy Scan");
     options.title = Some("T".into());
-    let first = make(&[], &options);
-    let second = make(&[], &options);
+    let first = make(&[], &options).unwrap();
+    let second = make(&[], &options).unwrap();
     assert_ne!(first, second, "the identifier is random");
     assert!(first.windows(6).any(|w| w == b"/ID [<"));
 }

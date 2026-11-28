@@ -12,8 +12,8 @@ pub mod pdfa;
 mod writer;
 
 pub use document::{
-    Conformance, G4Image, Image, OcrLine, OcrWord, Options, PageInput, PageSize, Placement, Rect,
-    make, read_jpeg_header,
+    Conformance, Error, G4Image, Image, OcrLine, OcrWord, Options, PageInput, PageSize, Placement,
+    Rect, make, read_jpeg_header,
 };
 pub use number::num;
 pub use pdfa::Date;

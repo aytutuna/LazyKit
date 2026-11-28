@@ -23,8 +23,11 @@ pub struct Date {
 }
 
 impl Date {
-    /// The present, in UTC.
-    pub fn now() -> Date {
+    /// The present, in UTC; None where the program has no clock to read (a browser).
+    pub fn now() -> Option<Date> {
+        if cfg!(all(target_arch = "wasm32", target_os = "unknown")) {
+            return None;
+        }
         let seconds = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .map_or(0, |d| d.as_secs() as i64);
@@ -40,7 +43,7 @@ impl Date {
         let day = (doy - (153 * mp + 2) / 5 + 1) as u32;
         let month = if mp < 10 { mp + 3 } else { mp - 9 } as u32;
         let year = (yoe + era * 400 + i64::from(month <= 2)) as i32;
-        Date {
+        Some(Date {
             year,
             month,
             day,
@@ -48,7 +51,7 @@ impl Date {
             minute: (rest % 3600 / 60) as u32,
             second: (rest % 60) as u32,
             offset_minutes: 0,
-        }
+        })
     }
 
     /// "D:20261019213005+03'00'".

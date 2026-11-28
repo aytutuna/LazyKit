@@ -200,7 +200,27 @@ impl PageSize {
 }
 
 /// The PDF for `pages`.
-pub fn make(pages: &[PageInput], options: &Options) -> Vec<u8> {
+/// Why a file could not be made.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Error {
+    /// The options have no date and the program has no clock (a browser): the caller gives one.
+    DateRequired,
+    /// The system has no random bytes for the identifier.
+    NoRandomBytes,
+}
+
+impl std::fmt::Display for Error {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(match self {
+            Error::DateRequired => "The document needs a date: this program has no clock.",
+            Error::NoRandomBytes => "The system gave no random bytes for the file identifier.",
+        })
+    }
+}
+
+impl std::error::Error for Error {}
+
+pub fn make(pages: &[PageInput], options: &Options) -> Result<Vec<u8>, Error> {
     let archival = options.conformance == Conformance::PdfA2b;
     let has_text = pages.iter().any(|p| !p.ocr_lines.is_empty());
     let codes = Codes::for_texts(
@@ -252,7 +272,10 @@ pub fn make(pages: &[PageInput], options: &Options) -> Vec<u8> {
         write_text_font(&mut w, font_object, &codes);
     }
 
-    let date = options.date.unwrap_or_else(Date::now);
+    let date = match options.date {
+        Some(date) => date,
+        None => Date::now().ok_or(Error::DateRequired)?,
+    };
     let title = options.title.as_deref().map(pdfa::clean_title);
     w.write_object(
         info_object,
@@ -291,15 +314,18 @@ pub fn make(pages: &[PageInput], options: &Options) -> Vec<u8> {
         );
     }
 
-    let id = options.document_id.unwrap_or_else(|| {
-        let mut id = [0u8; 16];
-        getrandom::fill(&mut id).expect("the system has random bytes");
-        id
-    });
+    let id = match options.document_id {
+        Some(id) => id,
+        None => {
+            let mut id = [0u8; 16];
+            getrandom::fill(&mut id).map_err(|_| Error::NoRandomBytes)?;
+            id
+        }
+    };
     let hex: String = id.iter().map(|b| format!("{b:02X}")).collect();
-    w.finish(&format!(
+    Ok(w.finish(&format!(
         "/Root 1 0 R /Info {info_object} 0 R /ID [<{hex}> <{hex}>]"
-    ))
+    )))
 }
 
 /// One page's three objects, `[page, image, contents, mask]` (mask is 0 for a page without one): the page (child of
