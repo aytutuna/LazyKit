@@ -422,7 +422,9 @@ impl Document {
             _ => None,
         };
         walk.nodes += 1;
+        // Once the copy budget is spent a direct node is not even looked at.
         let resolved = if depth > MAX_TREE_DEPTH
+            || (reference.is_none() && walk.copied > MAX_TREE_COPIED)
             || walk.nodes > MAX_TREE_NODES
             || reference.is_some_and(|r| !walk.visited.insert(r.number))
         {
