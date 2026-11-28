@@ -128,7 +128,7 @@ impl Function {
         }
         let value = resolved(doc, function).ok_or(FunctionError)?;
         let result = Arc::new(Self::parse_one(doc, &value, depth, parsed)?);
-        if result.outputs > MAX_OUTPUTS {
+        if result.outputs == 0 || result.outputs > MAX_OUTPUTS {
             return Err(FunctionError);
         }
         if let Some(k) = key {

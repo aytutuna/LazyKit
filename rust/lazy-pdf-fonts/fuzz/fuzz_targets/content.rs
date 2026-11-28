@@ -2,6 +2,9 @@
 
 use lazy_pdf_fonts::{ContentInterpreter, ContentVisitor, StandardFilters, parse_content};
 use lazy_pdf_syntax::Document;
+use lazy_pdf_text::{
+    TextPage, TextPageOptions, TextRange, TextSearch, TextSearchOptions, TextSelection,
+};
 use libfuzzer_sys::fuzz_target;
 
 struct Quiet;
@@ -71,5 +74,28 @@ fuzz_target!(|data: &[u8]| {
     if let Some(first) = pages.first() {
         let mut visitor = Quiet;
         ContentInterpreter::new(&mut doc, &mut visitor).run_page(first);
+        let options = TextPageOptions {
+            include_artifacts: true,
+            remove_duplicates: true,
+            include_annotations: true,
+        };
+        let text = TextPage::create(&mut doc, first, &options);
+        let _ = text.text();
+        let _ = text.get_text(TextRange::new(0, text.chars.len()), true);
+        let _ = text.quads(TextRange::new(0, text.chars.len()));
+        if let Some(c) = text.chars.first() {
+            let (x, y) = c.quad.center();
+            let _ = text.hit_test(x, y, f64::INFINITY);
+            let _ = text.caret_at(x, y);
+            let _ = TextSelection::word_at(&text, x, y).get_text(true);
+        }
+        for (query, regex) in [("a b", false), (r"\w+", true)] {
+            let search = TextSearchOptions {
+                regex,
+                whole_word: regex,
+                ..TextSearchOptions::default()
+            };
+            let _ = TextSearch::find(&text, query, &search);
+        }
     }
 });

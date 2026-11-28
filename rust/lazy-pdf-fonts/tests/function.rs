@@ -184,3 +184,19 @@ fn functions_match_the_reference_checks() {
         );
     }
 }
+
+// A function with no outputs adds nothing to a combined array's width, so nested arrays of them would be evaluated
+// 64 to the power of the depth times for one colour.
+#[test]
+fn functions_without_outputs_are_refused() {
+    assert!(func("/FunctionType 2 /Domain [0 1] /C0 [] /C1 [] /N 1", None).is_err());
+    let mut pdf = TestPdf::new();
+    pdf.obj(1, "<</Type /Catalog /Pages 2 0 R>>");
+    pdf.obj(2, "<</Type /Pages /Kids [] /Count 0>>");
+    pdf.obj(10, "<</FunctionType 2 /Domain [0 1] /C0 [] /C1 [] /N 1>>");
+    let refs = vec!["10 0 R"; 64].join(" ");
+    pdf.obj(11, &format!("[{refs}]"));
+    let mut doc = Document::open(pdf.finish(), Box::new(StandardFilters)).unwrap();
+    let nested = doc.get(11).unwrap();
+    assert!(Function::parse(&mut doc, &nested).is_err());
+}

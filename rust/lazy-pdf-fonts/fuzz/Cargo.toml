@@ -17,6 +17,9 @@ path = ".."
 [dependencies.lazy-pdf-syntax]
 path = "../../lazy-pdf-syntax"
 
+[dependencies.lazy-pdf-text]
+path = "../../lazy-pdf-text"
+
 [[bin]]
 name = "truetype"
 path = "fuzz_targets/truetype.rs"
