@@ -1,0 +1,10 @@
+<?xml version="1.0" encoding="utf-8"?>
+<network-security-config>
+    <!-- The development relay's certificate authority, put in res/raw by scripts/link-android.sh -->
+    <base-config>
+        <trust-anchors>
+            <certificates src="system" />
+            <certificates src="@raw/dev_ca" />
+        </trust-anchors>
+    </base-config>
+</network-security-config>

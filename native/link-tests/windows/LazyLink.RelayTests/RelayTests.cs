@@ -2,7 +2,7 @@ using System.Security.Cryptography;
 using System.Text;
 using uniffi.lazy_link_ffi;
 
-namespace LazyLink.TransportTests;
+namespace LazyLink.RelayTests;
 
 // The desktop proof the relay asks of a computer: a key this install made, signing the group and the challenge.
 internal sealed class InstallKey : AppAttester
@@ -20,42 +20,21 @@ internal sealed class InstallKey : AppAttester
     }
 }
 
-public class TransportTests
+public class RelayTests
 {
-    // The development relay under `wrangler dev --local-protocol https`; the script that runs the tests expects it up.
+    // The development relay under `wrangler dev --local-protocol https`, whose certificate authority is in the Windows
+    // root store; the script that runs the tests expects both.
     private static readonly Uri Url = new(Environment.GetEnvironmentVariable("RELAY_URL") ?? throw new InvalidOperationException("RELAY_URL is not set"));
     private static string Base => Url.ToString().TrimEnd('/');
     private static string NewId() => Convert.ToHexString(RandomNumberGenerator.GetBytes(16)).ToLowerInvariant();
     private static string NewRoom() => Convert.ToHexString(RandomNumberGenerator.GetBytes(32)).ToLowerInvariant();
-    private static Relay NewRelay(SecureTransport transport, string? group = null, AppAttester? attester = null) =>
-        new(Base, group ?? NewId(), NewId(), transport, attester);
+    private static Relay NewRelay(string? group = null, AppAttester? attester = null) =>
+        new(Base, group ?? NewId(), NewId(), attester);
 
     [Fact]
-    public async Task ProbeReturnsTheCertificateFingerprintAndChecksAPin()
+    public async Task GroupCallsRunOverRustTls()
     {
-        var transport = new SslTransport(true);
-        byte[] fingerprint = await LazyLinkFfiMethods.ProbeConnection(transport, Url.Host, (ushort)Url.Port, Url.Host, null);
-        Assert.Equal(32, fingerprint.Length);
-        Assert.Equal(fingerprint, await LazyLinkFfiMethods.ProbeConnection(transport, Url.Host, (ushort)Url.Port, Url.Host, fingerprint));
-
-        byte[] wrong = (byte[])fingerprint.Clone();
-        wrong[0] ^= 1;
-        await Assert.ThrowsAnyAsync<LinkException>(() => LazyLinkFfiMethods.ProbeConnection(transport, Url.Host, (ushort)Url.Port, Url.Host, wrong));
-        Assert.Equal(0, transport.Open);
-    }
-
-    [Fact]
-    public async Task ACertificateTheSystemDoesNotTrustIsRefused()
-    {
-        var transport = new SslTransport(false);
-        await Assert.ThrowsAnyAsync<LinkException>(() => LazyLinkFfiMethods.ProbeConnection(transport, Url.Host, (ushort)Url.Port, Url.Host, null));
-        await Assert.ThrowsAsync<RelayFailure.Transport>(() => NewRelay(transport).Status());
-    }
-
-    [Fact]
-    public async Task GroupCallsRunOverTheTransport()
-    {
-        var status = await NewRelay(new SslTransport(true)).Status();
+        var status = await NewRelay().Status();
         Assert.Equal(0UL, status.Used);
         Assert.Equal(5_000_000_000UL, status.Cap);
         Assert.False(status.Capped);
@@ -64,23 +43,21 @@ public class TransportTests
     [Fact]
     public async Task ANewGroupNeedsItsProofAndNothingFlowsWithout()
     {
-        var transport = new SslTransport(true);
-        await Assert.ThrowsAsync<RelayFailure.AttestationRequired>(() => NewRelay(transport).Connect(NewRoom()));
-        await Assert.ThrowsAsync<RelayFailure.AttestationRequired>(() => NewRelay(transport).RegisterPush(PushPlatform.Fcm, "token"));
+        await Assert.ThrowsAsync<RelayFailure.AttestationRequired>(() => NewRelay().Connect(NewRoom()));
+        await Assert.ThrowsAsync<RelayFailure.AttestationRequired>(() => NewRelay().RegisterPush(PushPlatform.Fcm, "token"));
     }
 
     [Fact]
     public async Task TwoDevicesTalkThroughTheRelay()
     {
-        var transport = new SslTransport(true);
         string group = NewId();
         string room = NewRoom();
         var hostKey = new InstallKey();
-        var host = await NewRelay(transport, group, hostKey).Host(room);
+        var host = await NewRelay(group, hostKey).Host(room);
         Assert.Equal(1, hostKey.Calls);
 
         var guestKey = new InstallKey();
-        var guestSide = await NewRelay(transport, group, guestKey).Connect(room);
+        var guestSide = await NewRelay(group, guestKey).Connect(room);
         var hostSide = await host.Accept();
         // The group is verified already, so the second device is not asked again.
         Assert.Equal(0, guestKey.Calls);
@@ -116,10 +93,9 @@ public class TransportTests
     [Fact]
     public async Task AnotherGroupCannotUseTheRoom()
     {
-        var transport = new SslTransport(true);
         string room = NewRoom();
-        var host = await NewRelay(transport, NewId(), new InstallKey()).Host(room);
-        await Assert.ThrowsAsync<RelayFailure.WrongGroup>(() => NewRelay(transport, NewId(), new InstallKey()).Connect(room));
+        var host = await NewRelay(NewId(), new InstallKey()).Host(room);
+        await Assert.ThrowsAsync<RelayFailure.WrongGroup>(() => NewRelay(NewId(), new InstallKey()).Connect(room));
         GC.KeepAlive(host);
     }
 }

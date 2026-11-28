@@ -8,16 +8,15 @@ import org.junit.Assert.assertArrayEquals
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
+import org.junit.Before
 import org.junit.Test
 import org.junit.runner.RunWith
+import app.alazy.link.Tls
 import uniffi.lazy_link_ffi.AppAttester
 import uniffi.lazy_link_ffi.AppProof
-import uniffi.lazy_link_ffi.LinkException
 import uniffi.lazy_link_ffi.PushPlatform
 import uniffi.lazy_link_ffi.Relay
 import uniffi.lazy_link_ffi.RelayFailure
-import uniffi.lazy_link_ffi.SecureTransport
-import uniffi.lazy_link_ffi.probeConnection
 import java.net.URI
 import java.security.KeyPairGenerator
 import java.security.SecureRandom
@@ -64,43 +63,23 @@ class InstallKey : AppAttester {
 }
 
 @RunWith(AndroidJUnit4::class)
-class TransportTest {
-    // The development relay under `wrangler dev --local-protocol https`, reached from the emulator at 10.0.2.2.
+class RelayTest {
+    // The development relay under `wrangler dev --local-protocol https`, reached from the emulator at 10.0.2.2. Its
+    // certificate authority is trusted through this test app's network security config.
     private val url = URI(InstrumentationRegistry.getArguments().getString("relayUrl") ?: error("relayUrl is not set"))
     private val base = url.toString().trimEnd('/')
 
+    // The platform verifier needs the app's context before the first connection.
+    @Before
+    fun startTls() = Tls.init(InstrumentationRegistry.getInstrumentation().targetContext)
+
     private fun id() = ByteArray(16).also { SecureRandom().nextBytes(it) }.joinToString("") { "%02x".format(it) }
     private fun room() = ByteArray(32).also { SecureRandom().nextBytes(it) }.joinToString("") { "%02x".format(it) }
-    private fun relay(t: SecureTransport, group: String = id(), attester: AppAttester? = null) = Relay(base, group, id(), t, attester)
+    private fun relay(group: String = id(), attester: AppAttester? = null) = Relay(base, group, id(), attester)
 
     @Test
-    fun probeReturnsTheCertificateFingerprintAndChecksAPin() = runBlocking {
-        val t = SslSocketTransport(true)
-        val fp = probeConnection(t, url.host, url.port.toUShort(), url.host, null)
-        assertEquals(32, fp.size)
-        assertArrayEquals(fp, probeConnection(t, url.host, url.port.toUShort(), url.host, fp))
-        val wrong = fp.copyOf().also { it[0] = (it[0].toInt() xor 1).toByte() }
-        try {
-            probeConnection(t, url.host, url.port.toUShort(), url.host, wrong)
-            throw AssertionError("a wrong pin was accepted")
-        } catch (_: LinkException) {
-        }
-        assertEquals(0, t.open)
-    }
-
-    @Test
-    fun aCertificateTheSystemDoesNotTrustIsRefused() = runBlocking {
-        val t = SslSocketTransport(false)
-        try {
-            relay(t).status()
-            throw AssertionError("an untrusted certificate was accepted")
-        } catch (_: RelayFailure.Transport) {
-        }
-    }
-
-    @Test
-    fun groupCallsRunOverTheTransport() = runBlocking {
-        val s = relay(SslSocketTransport(true)).status()
+    fun groupCallsRunOverRustTls() = runBlocking {
+        val s = relay().status()
         assertEquals(0UL, s.used)
         assertEquals(5_000_000_000UL, s.cap)
         assertFalse(s.capped)
@@ -108,14 +87,13 @@ class TransportTest {
 
     @Test
     fun aNewGroupNeedsItsProofAndNothingFlowsWithout() = runBlocking {
-        val t = SslSocketTransport(true)
         try {
-            relay(t).connect(room())
+            relay().connect(room())
             throw AssertionError("a room was opened without a proof")
         } catch (_: RelayFailure.AttestationRequired) {
         }
         try {
-            relay(t).registerPush(PushPlatform.FCM, "token")
+            relay().registerPush(PushPlatform.FCM, "token")
             throw AssertionError("a push token was kept without a proof")
         } catch (_: RelayFailure.AttestationRequired) {
         }
@@ -123,15 +101,14 @@ class TransportTest {
 
     @Test
     fun twoDevicesTalkThroughTheRelay() = runBlocking {
-        val t = SslSocketTransport(true)
         val group = id()
         val room = room()
         val hostKey = InstallKey()
-        val host = relay(t, group, hostKey).host(room)
+        val host = relay(group, hostKey).host(room)
         assertEquals(1, hostKey.calls.get())
 
         val guestKey = InstallKey()
-        val guestSide = relay(t, group, guestKey).connect(room)
+        val guestSide = relay(group, guestKey).connect(room)
         val hostSide = host.accept()
         assertEquals(0, guestKey.calls.get())
 
@@ -162,10 +139,9 @@ class TransportTest {
 
     @Test
     fun anotherGroupCannotUseTheRoom() = runBlocking {
-        val t = SslSocketTransport(true)
         val room = room()
-        val host = relay(t, id(), InstallKey()).host(room)
-        assertTrue(runCatching { relay(t, id(), InstallKey()).connect(room) }.exceptionOrNull() is RelayFailure.WrongGroup)
+        val host = relay(id(), InstallKey()).host(room)
+        assertTrue(runCatching { relay(id(), InstallKey()).connect(room) }.exceptionOrNull() is RelayFailure.WrongGroup)
         java.lang.ref.Reference.reachabilityFence(host)
     }
 }

@@ -1,7 +1,8 @@
 #!/bin/bash
-# Builds lazy-link-ffi for Android, generates its Kotlin bindings and runs the SSLSocket transport tests on the
-# connected device or emulator against a development relay on the host (relay/scripts/dev-tls.sh 8788 0.0.0.0).
-# Needs cargo-ndk, the NDK (ANDROID_NDK_HOME) and a device.
+# Builds lazy-link-ffi for Android, generates its Kotlin bindings and runs the relay client tests on the connected device
+# or emulator against a development relay on the host (relay/scripts/dev-tls.sh 8788 0.0.0.0). The test app trusts the
+# relay's development authority through its network security config. Needs cargo-ndk, the NDK (ANDROID_NDK_HOME) and a
+# device.
 #   link-android.sh [relay url as the device sees it, default https://10.0.2.2:8788/relay/v1]
 set -euo pipefail
 
@@ -15,6 +16,8 @@ cargo ndk -t arm64-v8a -t x86_64 -P 26 -o "$out/jniLibs" build --locked -p lazy-
 cargo run --locked -q -p uniffi-bindgen -- generate --library "$out/jniLibs/arm64-v8a/liblazy_link_ffi.so" --language kotlin --out-dir "$out/kotlin" --no-format
 
 cd "$root/native/link-tests/android"
+mkdir -p linktests/src/androidTest/res/raw
+cp "$root/relay/.dev-tls/ca.pem" linktests/src/androidTest/res/raw/dev_ca.pem
 status=0
 ./gradlew :linktests:connectedDebugAndroidTest -PlinkOut="$out" \
   -Pandroid.testInstrumentationRunnerArguments.relayUrl="${1:-https://10.0.2.2:8788/relay/v1}" --console=plain || status=$?

@@ -17,13 +17,17 @@ env:
   CARGO_TERM_COLOR: always
   CARGO_NDK: 4.1.2
   NDK_VERSION: 27.3.13750724
+  AWS_LC_SYS_CMAKE_BUILDER: 0
+  AWS_LC_SYS_PREBUILT_NASM: 1
+  AWS_LC_SYS_USE_SYSTEM: 0
 
 defaults:
   run:
     working-directory: rust
 
-# The relay client has no native dependencies left (the system opens the TLS), so this is a check
-# that every target the apps ship on still builds it.
+# The relay client carries its own TLS: rustls on aws-lc-rs, which compiles C and assembly. This checks that every
+# target the apps ship on builds it with nothing but the platform's compiler: the cc builder (no CMake) and, on Windows
+# x64, the prebuilt NASM objects (no NASM). The wasm crate has no TLS; the browser does that.
 jobs:
   windows:
     runs-on: windows-latest
@@ -69,4 +73,4 @@ jobs:
       - run: cargo ndk --version 2>/dev/null | grep -qx "cargo-ndk ${{ env.CARGO_NDK }}" || cargo install cargo-ndk --version ${{ env.CARGO_NDK }} --locked
       - run: |
           export ANDROID_NDK_HOME="$ANDROID_SDK_ROOT/ndk/$NDK_VERSION"
-          cargo ndk -t arm64-v8a -t x86_64 -P 26 build --locked -p lazy-link --features relay
+          cargo ndk -t arm64-v8a -t x86_64 -P 26 build --locked -p lazy-link-ffi
