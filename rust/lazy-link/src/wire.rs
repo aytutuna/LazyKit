@@ -34,7 +34,25 @@ pub(crate) struct Wire {
     port: u16,
     pub prefix: String,
     transport: Arc<dyn Transport>,
-    pub session: Option<String>,
+    session: Session,
+}
+
+// The token goes into a header as it is, so it is looked at once, when it is set: the characters of
+// the services' tokens and nothing else. One that fails is kept as such and every request that
+// needs it is answered "sign in" without leaving the device.
+#[derive(Clone)]
+enum Session {
+    None,
+    Token(String),
+    Invalid,
+}
+
+/// Whether `s` is made of the characters tokens and session ids are made of.
+pub(crate) fn token_chars(s: &str) -> bool {
+    !s.is_empty()
+        && s.len() <= 256
+        && s.bytes()
+            .all(|b| b.is_ascii_alphanumeric() || matches!(b, b'.' | b'_' | b'-'))
 }
 
 impl Wire {
@@ -58,7 +76,24 @@ impl Wire {
                 format!("/{path}")
             },
             transport,
-            session: None,
+            session: Session::None,
+        }
+    }
+
+    pub fn set_session(&mut self, token: &str) {
+        self.session = if token_chars(token) {
+            Session::Token(token.into())
+        } else {
+            Session::Invalid
+        };
+    }
+
+    /// The token to present; `Err` for one that was refused when it was set.
+    pub fn token(&self) -> Result<Option<&str>, ()> {
+        match &self.session {
+            Session::None => Ok(None),
+            Session::Token(t) => Ok(Some(t)),
+            Session::Invalid => Err(()),
         }
     }
 
@@ -81,19 +116,20 @@ impl Wire {
         path: &str,
         body: Option<&str>,
     ) -> Result<Reply, String> {
+        let Ok(bearer) = self.token() else {
+            return Ok(Reply {
+                status: 401,
+                retry_after: None,
+                reason: Some("sign-in".into()),
+                body: r#"{"error":"sign in"}"#.into(),
+            });
+        };
         let path = format!("{}{path}", self.prefix);
         let request = async {
             let io = self.dial().await?;
-            http::request(
-                io,
-                &self.authority,
-                method,
-                &path,
-                body,
-                self.session.as_deref(),
-            )
-            .await
-            .map_err(|e| e.to_string())
+            http::request(io, &self.authority, method, &path, body, bearer)
+                .await
+                .map_err(|e| e.to_string())
         };
         let answer = tokio::time::timeout(REQUEST_TIMEOUT, request)
             .await

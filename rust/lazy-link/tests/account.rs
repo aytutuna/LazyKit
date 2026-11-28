@@ -186,3 +186,20 @@ async fn the_service_says_why_it_refuses() {
     assert!(matches!(r(a.me().await), AccountError::NoEmail));
     assert!(matches!(r(a.me().await), AccountError::BadInput(m) if m == "bad-email"));
 }
+
+#[tokio::test]
+async fn a_bad_token_or_session_id_is_not_sent() {
+    let (url, heads) = stand(vec![]).await;
+    let a = account(&url).with_session("x\r\nX-Evil: 1");
+    assert!(matches!(a.me().await, Err(AccountError::SignIn)));
+    let a = account(&url).with_session("good.token");
+    assert!(matches!(
+        a.revoke("../../me").await,
+        Err(AccountError::BadInput(_))
+    ));
+    assert!(matches!(
+        a.revoke("short").await,
+        Err(AccountError::BadInput(_))
+    ));
+    assert!(heads.lock().unwrap().is_empty());
+}

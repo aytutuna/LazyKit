@@ -7,7 +7,7 @@ use crate::base64url;
 use crate::relay::Attestation;
 use crate::tls::TlsTransport;
 use crate::transport::Transport;
-use crate::wire::{Reply, Wire};
+use crate::wire::{Reply, Wire, token_chars};
 use serde_json::{Value, json};
 use std::fmt;
 use std::sync::Arc;
@@ -256,7 +256,7 @@ impl Account {
 
     /// Presents a session on the calls that need one.
     pub fn with_session(mut self, token: &str) -> Self {
-        self.wire.session = Some(token.into());
+        self.wire.set_session(token);
         self
     }
 
@@ -384,6 +384,9 @@ impl Account {
 
     /// Ends another session of this account, named by the 12 characters `sessions` lists.
     pub async fn revoke(&self, session: &str) -> Result<(), AccountError> {
+        if session.len() != 12 || !token_chars(session) {
+            return Err(AccountError::BadInput("not a session id".into()));
+        }
         self.call("DELETE", &format!("sessions/{session}"), None)
             .await
             .map(drop)

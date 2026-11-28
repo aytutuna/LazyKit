@@ -77,3 +77,16 @@ async fn the_relay_says_why_it_refuses() {
         Err(RelayError::Refused(409))
     ));
 }
+
+#[tokio::test]
+async fn a_token_that_is_not_made_of_token_characters_never_goes_out() {
+    let (url, heads) = stand(vec![]).await;
+    let bad = "x\r\nX-Evil: 1";
+    let relay = Relay::new(&url, &random_id(), &random_id(), common::tcp()).with_session(bad);
+    assert!(matches!(relay.status().await, Err(RelayError::SignIn)));
+    assert!(matches!(
+        relay.connect(&room_id(b"r")).await,
+        Err(RelayError::SignIn)
+    ));
+    assert!(heads.lock().unwrap().is_empty());
+}

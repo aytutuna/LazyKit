@@ -330,7 +330,7 @@ impl Relay {
     /// Presents this account session (the token sign-in gave) on every request. The session is
     /// made for one device, which has to be the `device` this relay was made with.
     pub fn with_session(mut self, token: &str) -> Self {
-        self.wire.session = Some(token.into());
+        self.wire.set_session(token);
         self
     }
 
@@ -475,11 +475,15 @@ impl Relay {
         let mut request = url
             .into_client_request()
             .map_err(|e| RelayError::Transport(e.to_string()))?;
-        if let Some(token) = &self.wire.session {
-            let value = format!("Bearer {token}")
-                .parse()
-                .map_err(|_| RelayError::Transport("the session token is not a header".into()))?;
-            request.headers_mut().insert("authorization", value);
+        match self.wire.token() {
+            Ok(Some(token)) => {
+                let value = format!("Bearer {token}")
+                    .parse()
+                    .map_err(|_| RelayError::SignIn)?;
+                request.headers_mut().insert("authorization", value);
+            }
+            Ok(None) => {}
+            Err(()) => return Err(RelayError::SignIn),
         }
         let connecting = async {
             let io = self.dial().await?;
