@@ -72,6 +72,7 @@ impl Document {
         // The slot has to be the only owner, or make_mut copies the whole object.
         drop(value);
         self.globals.clear();
+        self.refused_globals.clear();
         self.changed.insert(number);
         let slot = self.objects.get_mut(&number)?;
         Some(Arc::make_mut(&mut slot.value))
@@ -191,6 +192,7 @@ impl Document {
             },
         );
         self.globals.clear();
+        self.refused_globals.clear();
         self.changed.insert(number);
         self.originals.remove(&number);
         self.deleted.remove(&number);
@@ -208,6 +210,7 @@ impl Document {
             return;
         }
         self.globals.clear();
+        self.refused_globals.clear();
         self.objects.remove(&number);
         self.changed.remove(&number);
         self.originals.remove(&number);

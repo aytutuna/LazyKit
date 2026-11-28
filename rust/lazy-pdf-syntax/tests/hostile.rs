@@ -684,7 +684,7 @@ fn a_catalog_that_replaces_a_plain_object_in_an_object_stream_is_found() {
 #[test]
 fn jbig2_globals_are_not_inflated_again_for_each_image() {
     let bomb = deflate(&vec![0u8; 32 << 20]);
-    let images = 30u32;
+    let images = 300u32;
     let mut pdf = TestPdf::with_header(
         "%PDF-1.5
 ",
@@ -719,7 +719,7 @@ fn jbig2_globals_are_not_inflated_again_for_each_image() {
         };
         let _ = document.stream_data(stream);
     }
-    must_finish_within(Duration::from_secs(12), started);
+    must_finish_within(Duration::from_secs(4), started);
 }
 
 #[test]
@@ -754,6 +754,46 @@ fn an_unfiltered_jbig2_globals_stream_is_held_to_the_limit() {
     };
     let error = document.stream_data(stream).unwrap_err();
     assert!(error.detail.contains("too large"), "{}", error.detail);
+}
+
+#[test]
+fn a_refused_jbig2_globals_stream_is_refused_once_for_all_its_images() {
+    let images = 1000u32;
+    let mut pdf = TestPdf::with_header(
+        "%PDF-1.5
+",
+    );
+    pdf.obj(1, "<</Type /Catalog /Pages 2 0 R>>")
+        .obj(2, "<</Type /Pages /Kids [] /Count 0>>");
+    pdf.stream_with(3, "", &vec![0u8; 33 << 20], None, true);
+    for k in 0..images {
+        pdf.stream_with(
+            10 + k,
+            "/Width 8 /Height 8 /Filter /JBIG2Decode /DecodeParms <</JBIG2Globals 3 0 R>>",
+            b"x",
+            None,
+            true,
+        );
+    }
+    let file = [
+        pdf.finish_without_xref(),
+        latin(
+            "trailer
+<</Root 1 0 R>>
+",
+        ),
+    ]
+    .concat();
+    let mut document = open(file);
+    let started = Instant::now();
+    for k in 0..images {
+        let image = document.get(10 + k).unwrap();
+        let Object::Stream(stream) = &*image else {
+            panic!("not a stream");
+        };
+        assert!(document.stream_data(stream).is_err());
+    }
+    must_finish_within(Duration::from_secs(2), started);
 }
 
 #[test]

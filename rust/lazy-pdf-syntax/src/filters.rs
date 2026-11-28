@@ -13,7 +13,7 @@ pub enum Parm {
     String(Vec<u8>),
     Array(Vec<Parm>),
     Dict(Vec<(Vec<u8>, Parm)>),
-    Bytes(Vec<u8>),
+    Bytes(std::sync::Arc<Vec<u8>>),
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]

@@ -130,6 +130,7 @@ pub struct Document {
     /// Bytes of object streams decoded for the first time.
     pub(crate) first_object_stream_bytes: usize,
     pub(crate) globals: HashMap<u32, Arc<Vec<u8>>>,
+    pub(crate) refused_globals: HashMap<u32, ReadError>,
     pub(crate) loading: HashSet<u32>,
     pub(crate) changed: BTreeSet<u32>,
     pub(crate) originals: HashMap<u32, Vec<u8>>,
@@ -183,6 +184,7 @@ impl Document {
             bad_object_streams: HashSet::new(),
             decoded_object_streams: HashSet::new(),
             globals: HashMap::new(),
+            refused_globals: HashMap::new(),
             object_stream_bytes: 0,
             first_object_stream_bytes: 0,
             loading: HashSet::new(),

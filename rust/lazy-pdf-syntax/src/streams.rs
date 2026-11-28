@@ -201,21 +201,29 @@ impl Document {
             Some(single @ Object::Dict(_)) => vec![single],
             _ => Vec::new(),
         };
+        let mut globals: Option<(usize, Arc<Vec<u8>>)> = None;
         if decoding && let Some(at) = names.iter().position(|n| n == b"JBIG2Decode") {
             while each.len() <= at {
                 each.push(Object::Null);
             }
-            each[at] = self.jbig2_stage(&each[at], &stream.dict, max_size)?;
+            let (stage, shared) = self.jbig2_stage(&each[at], &stream.dict, max_size)?;
+            each[at] = stage;
+            globals = shared.map(|data| (at, data));
         }
         Ok(names
             .into_iter()
             .enumerate()
-            .map(|(i, filter)| Stage {
-                filter,
-                parms: match each.get(i) {
+            .map(|(i, filter)| {
+                let mut parms = match each.get(i) {
                     Some(Object::Dict(d)) => parms_of(d),
                     _ => Vec::new(),
-                },
+                };
+                if let Some((at, data)) = &globals
+                    && *at == i
+                {
+                    parms.push((b"JBIG2Globals".to_vec(), Parm::Bytes(data.clone())));
+                }
+                Stage { filter, parms }
             })
             .collect())
     }
@@ -227,17 +235,15 @@ impl Document {
         stage: &Object,
         image: &Dict,
         max_size: usize,
-    ) -> Result<Object, ReadError> {
+    ) -> Result<(Object, Option<Arc<Vec<u8>>>), ReadError> {
         let mut stage = match stage {
             Object::Dict(d) => d.clone(),
             _ => Dict::new(),
         };
+        let mut shared = None;
         if let Some(Object::Stream(globals)) = stage.get("JBIG2Globals").cloned() {
-            let data = self.globals_data(&globals, max_size)?;
-            stage.insert(
-                "JBIG2Globals",
-                Object::Stream(Stream::in_memory(Dict::new(), data)),
-            );
+            shared = Some(self.globals_data(&globals, max_size)?);
+            stage.remove("JBIG2Globals");
         }
         let width = self.integer_of(image, "Width").unwrap_or(0);
         let height = self.integer_of(image, "Height").unwrap_or(0);
@@ -245,22 +251,51 @@ impl Document {
             stage.insert("Width", Object::int(width));
             stage.insert("Height", Object::int(height));
         }
-        Ok(Object::Dict(stage))
+        Ok((Object::Dict(stage), shared))
     }
 
     /// The data of a globals stream. Its own filters are read without any globals of theirs (a JBIG2 stage on it is
     /// damage), so that streams that name each other cannot send this round in circles.
-    fn globals_data(&mut self, globals: &Stream, max_size: usize) -> Result<Vec<u8>, ReadError> {
+    fn globals_data(
+        &mut self,
+        globals: &Stream,
+        max_size: usize,
+    ) -> Result<Arc<Vec<u8>>, ReadError> {
         let limit = max_size.min(MAX_GLOBALS);
+        if let Some(refused) = self
+            .refused_globals
+            .get(&globals.number)
+            .filter(|_| globals.number != 0)
+        {
+            return Err(refused.clone());
+        }
         let cached = (globals.number != 0)
             .then(|| self.globals.get(&globals.number))
             .flatten();
         if let Some(data) = cached.filter(|d| d.len() <= limit) {
-            return Ok(data.to_vec());
+            return Ok(data.clone());
         }
+        let result = self.read_globals(globals, max_size, limit);
+        if let Err(e) = &result
+            && globals.number != 0
+        {
+            self.refused_globals.insert(globals.number, e.clone());
+        }
+        result
+    }
+
+    fn read_globals(
+        &mut self,
+        globals: &Stream,
+        max_size: usize,
+        limit: usize,
+    ) -> Result<Arc<Vec<u8>>, ReadError> {
         let stages = self.decode_spec(globals, false, max_size)?;
         if stages.iter().any(|s| s.filter == b"JBIG2Decode") {
             return Err(ReadError::damaged("A JBIG2 globals stream is JBIG2 coded."));
+        }
+        if stages.iter().all(|s| s.filter == b"Crypt") && self.raw_length(globals) > limit {
+            return Err(ReadError::too_large("A JBIG2 globals stream is too large."));
         }
         let mut data = self.raw_data(globals);
         for stage in stages {
@@ -278,12 +313,13 @@ impl Document {
         if data.len() > limit {
             return Err(ReadError::too_large("A JBIG2 globals stream is too large."));
         }
+        let data = Arc::new(data);
         if globals.number != 0 {
             let held: usize = self.globals.values().map(|d| d.len()).sum();
             if held + data.len() > MAX_CACHED_GLOBALS {
                 self.globals.clear();
             }
-            self.globals.insert(globals.number, Arc::new(data.clone()));
+            self.globals.insert(globals.number, data.clone());
         }
         Ok(data)
     }
@@ -414,7 +450,7 @@ fn parm_of(value: &Object) -> Parm {
         Object::Array(items) => Parm::Array(items.iter().map(parm_of).collect()),
         Object::Dict(d) => Parm::Dict(parms_of(d)),
         // The globals of a JBIG2 stage are the only stream a parameter holds.
-        Object::Stream(s) => Parm::Bytes(s.data.clone().unwrap_or_default()),
+        Object::Stream(s) => Parm::Bytes(Arc::new(s.data.clone().unwrap_or_default())),
         Object::Null | Object::Ref(_) => Parm::Null,
     }
 }
