@@ -5,6 +5,7 @@ mod bytes;
 mod cff;
 mod cff_interp;
 mod cmap;
+mod content_parser;
 mod data;
 mod embedded;
 mod encodings;
@@ -22,6 +23,10 @@ mod type1_interp;
 
 pub use cff::CffFont;
 pub use cmap::CMap;
+pub use content_parser::{
+    ContentOperation, InlineImage, TooManyOperations, parse as parse_content,
+    parse_limited as parse_content_limited,
+};
 pub use embedded::{
     EmbedStatus, EmbeddedFont, FontDescriptorValues, WidthRun, build, build_glyphs,
 };

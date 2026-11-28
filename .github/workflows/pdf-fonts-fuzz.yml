@@ -35,7 +35,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        target: [truetype, cff, type1, cmap]
+        target: [truetype, cff, type1, cmap, content]
     env:
       # A short run on every push, a long one every week.
       SECONDS_TO_FUZZ: ${{ github.event_name == 'schedule' && 1500 || 30 }}
