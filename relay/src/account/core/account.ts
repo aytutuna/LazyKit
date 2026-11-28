@@ -1,7 +1,7 @@
 import { sha256, toBase64Url } from "./b64";
 import { burnPasswordTime, equal, verifyPassword, type PasswordRecord } from "./password";
 import type { Deps, Store } from "./store";
-import { DAY, MINUTE, bytes, noFails, failsAdd, failsForgive, failsFull, type Fails } from "./util";
+import { DAY, MINUTE, bytes, emptyWindow, windowAdd, windowFull, type Window } from "./util";
 
 const SESSION_IDLE_MS = 30 * DAY;
 const SESSION_MAX_MS = 180 * DAY;
@@ -32,7 +32,7 @@ export interface AccountState {
   password?: PasswordRecord;
   identities: { id: string; provider: string }[];
   sessions: Session[];
-  reauth: Fails;
+  reauth: Window;
 }
 
 export interface Login {
@@ -84,7 +84,7 @@ export class AccountCore {
   // False when the id is taken.
   async create(id: string, email: string, password?: PasswordRecord, identity?: { id: string; provider: string }, now = this.clock()): Promise<boolean> {
     if (this.s) return false;
-    this.s = { id, email, created: now, password, identities: identity ? [identity] : [], sessions: [], reauth: noFails() };
+    this.s = { id, email, created: now, password, identities: identity ? [identity] : [], sessions: [], reauth: emptyWindow() };
     await this.save();
     return true;
   }
@@ -166,11 +166,11 @@ export class AccountCore {
     if (fresh) return "ok";
     if (!s.password) return "need-fresh";
     if (typeof password !== "string") return "bad";
-    if (failsFull(s.reauth, "", now, REAUTH_WINDOW_MS, REAUTH_FAILS, REAUTH_FAILS)) return "locked";
-    failsAdd(s.reauth, "", now, REAUTH_WINDOW_MS);
+    if (windowFull(s.reauth, now, REAUTH_WINDOW_MS, REAUTH_FAILS)) return "locked";
+    windowAdd(s.reauth, now, REAUTH_WINDOW_MS);
     await this.save();
     if (!(await verifyPassword(password, s.password))) return "bad";
-    failsForgive(s.reauth, "");
+    s.reauth.count = 0;
     return "ok";
   }
 

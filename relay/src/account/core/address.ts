@@ -1,16 +1,19 @@
 import { equal } from "./password";
 import type { Deps, Store } from "./store";
-import { DAY, MINUTE, bytes, failsAdd, failsForgive, failsFull, failsIdle, hmac, noFails, randomDigits, type Fails } from "./util";
+import { CallerCounts, DAY, MINUTE, bytes, emptyWindow, hmac, randomDigits, windowAdd, windowFull, windowIdle, type Window } from "./util";
 
 const CODE_MS = 10 * MINUTE;
 const SENDS_PER_WINDOW = 3;
+// Each caller gets a few tries, kept in memory; what is written down counts everyone together and
+// sits well above what a few networks could spend, so strangers cannot close the door on the owner.
 const TRIES_PER_CODE_CALLER = 3;
-const TRIES_PER_CODE = 10;
+const TRIES_PER_CODE = 30;
 const CODE_FAILS_CALLER = 10;
-const CODE_FAILS_TOTAL = 100;
+const CODE_FAILS_TOTAL = 300;
 const PASSWORD_WINDOW_MS = 15 * MINUTE;
 const PASSWORD_FAILS_CALLER = 10;
-const PASSWORD_FAILS_TOTAL = 40;
+const PASSWORD_SLOW_AFTER = 40;
+const PASSWORD_FAILS_TOTAL = 400;
 const SWEEP_MS = 3_600_000;
 
 export type Purpose = "signup" | "signin" | "link" | "email";
@@ -20,7 +23,6 @@ interface Code {
   hash: string;
   expires: number;
   tries: number;
-  callers: Record<string, number>;
   mailTo: string;
   extra?: unknown;
 }
@@ -31,13 +33,14 @@ export interface AddressState {
   mailTo?: string;
   sends: number[];
   codes: Partial<Record<Purpose, Code>>;
-  password: Fails;
-  code: Fails;
+  // Wrong passwords and wrong codes by everyone, without saying who.
+  password: Window;
+  code: Window;
 }
 
 export type Taken = { ok: true; account?: string; mailTo: string; extra?: unknown } | { ok: false };
 
-const fresh = (): AddressState => ({ sends: [], codes: {}, password: noFails(), code: noFails() });
+const fresh = (): AddressState => ({ sends: [], codes: {}, password: emptyWindow(), code: emptyWindow() });
 
 // What the service keeps about one email address, whether or not an account stands behind it: how
 // many mails it has been sent, the codes waiting for it, and how many wrong tries it has seen. Named
@@ -45,6 +48,10 @@ const fresh = (): AddressState => ({ sends: [], codes: {}, password: noFails(), 
 // account can change its email without changing who it is.
 export class AddressCore {
   private s: AddressState = fresh();
+  private codeCallers = new CallerCounts(DAY);
+  private passwordCallers = new CallerCounts(PASSWORD_WINDOW_MS);
+  // Tries per caller on the code now waiting, by code hash.
+  private tried = new Map<string, Map<string, number>>();
 
   constructor(
     private store: Store<AddressState>,
@@ -99,7 +106,7 @@ export class AddressCore {
   // Makes a code and mails it; if the mail is refused later, the code and the send are taken back.
   private async issue(purpose: Purpose, canonical: string, mailTo: string, now: number, extra?: unknown): Promise<void> {
     const digits = randomDigits();
-    const code: Code = { hash: await this.hash(purpose, canonical, digits), expires: now + CODE_MS, tries: 0, callers: {}, mailTo, extra };
+    const code: Code = { hash: await this.hash(purpose, canonical, digits), expires: now + CODE_MS, tries: 0, mailTo, extra };
     const previous = this.s.codes[purpose];
     this.s.codes[purpose] = code;
     const text =
@@ -162,19 +169,25 @@ export class AddressCore {
     return "sent";
   }
 
-  // Each caller gets three tries per code, the code ten, and a caller ten wrong codes a day (the
-  // address a hundred), counted before the compare. A stranger's misses close the door to him, not to the owner.
+  // Each caller gets three tries per code and ten wrong codes a day; the code itself has thirty tries
+  // and the address three hundred wrong codes a day. Tries are counted before the compare.
   async takeCode(purpose: Purpose, code: unknown, canonical: string, caller: string, now = this.clock()): Promise<Taken> {
     const c = this.s.codes[purpose];
     if (!c || !this.deps.codeKey()) return { ok: false };
-    if (c.expires <= now || c.tries >= TRIES_PER_CODE || (c.callers[caller] ?? 0) >= TRIES_PER_CODE_CALLER || Object.keys(c.callers).length > 20) return { ok: false };
-    if (failsFull(this.s.code, caller, now, DAY, CODE_FAILS_CALLER, CODE_FAILS_TOTAL)) return { ok: false };
+    const mine = this.tried.get(c.hash) ?? new Map<string, number>();
+    if (c.expires <= now || c.tries >= TRIES_PER_CODE || (mine.get(caller) ?? 0) >= TRIES_PER_CODE_CALLER) return { ok: false };
+    if (this.codeCallers.full(caller, now, CODE_FAILS_CALLER) || windowFull(this.s.code, now, DAY, CODE_FAILS_TOTAL)) return { ok: false };
     c.tries++;
-    c.callers[caller] = (c.callers[caller] ?? 0) + 1;
+    mine.set(caller, (mine.get(caller) ?? 0) + 1);
+    if (this.tried.size >= 50) this.tried.delete(this.tried.keys().next().value!);
+    this.tried.set(c.hash, mine);
     await this.save();
-    const good = typeof code === "string" && /^\d{6}$/.test(code) && equal(bytes(await this.hash(purpose, canonical, code)), bytes(c.hash));
+    const good = typeof code === "string" && /^[0-9]{6}$/.test(code) && equal(bytes(await this.hash(purpose, canonical, code)), bytes(c.hash));
     if (good) delete this.s.codes[purpose];
-    else failsAdd(this.s.code, caller, now, DAY);
+    else {
+      this.codeCallers.add(caller, now);
+      windowAdd(this.s.code, now, DAY);
+    }
     await this.save();
     return good ? { ok: true, account: this.s.account, mailTo: c.mailTo, extra: c.extra } : { ok: false };
   }
@@ -196,16 +209,20 @@ export class AddressCore {
     await this.save();
   }
 
-  // The try is counted before the password is looked at; the answer is the same whether or not an account exists.
-  async passwordTry(caller: string, now = this.clock()): Promise<"ok" | "locked"> {
-    if (failsFull(this.s.password, caller, now, PASSWORD_WINDOW_MS, PASSWORD_FAILS_CALLER, PASSWORD_FAILS_TOTAL)) return "locked";
-    failsAdd(this.s.password, caller, now, PASSWORD_WINDOW_MS);
+  // The try is counted before the password is looked at; the answer is the same whether or not an
+  // account exists. A caller has ten tries in 15 minutes; past forty by everyone together the
+  // answer is slowed, and past four hundred it is refused to all.
+  async passwordTry(caller: string, now = this.clock()): Promise<"ok" | "slow" | "locked"> {
+    if (this.passwordCallers.full(caller, now, PASSWORD_FAILS_CALLER) || windowFull(this.s.password, now, PASSWORD_WINDOW_MS, PASSWORD_FAILS_TOTAL)) return "locked";
+    this.passwordCallers.add(caller, now);
+    windowAdd(this.s.password, now, PASSWORD_WINDOW_MS);
     await this.save();
-    return "ok";
+    return this.s.password.count > PASSWORD_SLOW_AFTER ? "slow" : "ok";
   }
 
   async passwordGood(caller: string): Promise<void> {
-    failsForgive(this.s.password, caller);
+    this.passwordCallers.forgive(caller);
+    this.s.password.count = Math.max(0, this.s.password.count - 1);
     await this.save();
   }
 
@@ -214,7 +231,9 @@ export class AddressCore {
     const now = this.clock();
     this.s.sends = this.s.sends.filter((t) => now - t < CODE_MS);
     for (const k of Object.keys(this.s.codes) as Purpose[]) if (this.s.codes[k]!.expires <= now) delete this.s.codes[k];
-    const quiet = this.s.sends.length === 0 && Object.keys(this.s.codes).length === 0 && failsIdle(this.s.code, now, DAY) && failsIdle(this.s.password, now, PASSWORD_WINDOW_MS);
+    this.codeCallers.prune(now);
+    this.passwordCallers.prune(now);
+    const quiet = this.s.sends.length === 0 && Object.keys(this.s.codes).length === 0 && windowIdle(this.s.code, now, DAY) && windowIdle(this.s.password, now, PASSWORD_WINDOW_MS);
     if (quiet && !this.s.account) {
       this.s = fresh();
       await this.store.erase();

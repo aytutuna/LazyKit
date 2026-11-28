@@ -79,7 +79,7 @@ export function memoryService(over: Options = {}) {
   };
   const service = new AccountService(
     dir,
-    { apps: ["lazysend", "lazyprint"], appleAudiences: "com.lazyscan.lazyscan", googleAudiences: "google-client", keys: kit.keys, idKey: "idKey" in over ? over.idKey : "test-id-key", nonceKey: "nonce-key", stages: 1, now: () => clock.now },
+    { apps: ["lazysend", "lazyprint"], appleAudiences: "com.lazyscan.lazyscan", googleAudiences: "google-client", keys: kit.keys, idKey: "idKey" in over ? over.idKey : "test-id-key", nonceKey: "nonce-key", stages: 1, sleep: async () => {}, now: () => clock.now },
     over.data,
   );
   const flush = async () => {

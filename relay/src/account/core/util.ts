@@ -22,15 +22,7 @@ export interface Window {
   since: number;
 }
 
-// Wrong tries by one caller and by everyone, so a stranger can shut out his own address but not
-// the owner's (the caller is the network a request came from; the total is a higher ceiling).
-export interface Fails {
-  total: Window;
-  by: Record<string, Window>;
-}
-
-export const noFails = (): Fails => ({ total: { count: 0, since: 0 }, by: {} });
-const MAX_CALLERS = 50;
+export const emptyWindow = (): Window => ({ count: 0, since: 0 });
 
 function roll(w: Window, now: number, ms: number): Window {
   if (now - w.since >= ms) {
@@ -40,27 +32,45 @@ function roll(w: Window, now: number, ms: number): Window {
   return w;
 }
 
-export function failsFull(f: Fails, caller: string, now: number, ms: number, perCaller: number, total: number): boolean {
-  const mine = f.by[caller] ? roll(f.by[caller], now, ms) : undefined;
-  return roll(f.total, now, ms).count >= total || (mine?.count ?? 0) >= perCaller;
+export const windowFull = (w: Window, now: number, ms: number, limit: number) => roll(w, now, ms).count >= limit;
+
+export function windowAdd(w: Window, now: number, ms: number): void {
+  roll(w, now, ms).count++;
 }
 
-export function failsAdd(f: Fails, caller: string, now: number, ms: number): void {
-  roll(f.total, now, ms).count++;
-  if (!f.by[caller]) {
-    const keys = Object.keys(f.by);
-    if (keys.length >= MAX_CALLERS) {
-      const stale = keys.filter((k) => now - f.by[k].since >= ms);
-      for (const k of stale.length > 0 ? stale : [keys[0]]) delete f.by[k];
-    }
-    f.by[caller] = { count: 0, since: now };
+export const windowIdle = (w: Window, now: number, ms: number) => w.count === 0 || now - w.since >= ms;
+
+// Wrong tries by each caller, a caller being the network a request came from. Kept in the memory of
+// the object that counts and never written down, so no address is ever stored; a restart forgets them.
+export class CallerCounts {
+  private by = new Map<string, Window>();
+
+  constructor(
+    private ms: number,
+    private max = 200,
+  ) {}
+
+  full(caller: string, now: number, limit: number): boolean {
+    const w = this.by.get(caller);
+    return w !== undefined && windowFull(w, now, this.ms, limit);
   }
-  roll(f.by[caller], now, ms).count++;
-}
 
-export function failsForgive(f: Fails, caller: string): void {
-  if (f.by[caller]) f.by[caller].count = 0;
-  f.total.count = Math.max(0, f.total.count - 1);
-}
+  add(caller: string, now: number): void {
+    let w = this.by.get(caller);
+    if (!w) {
+      if (this.by.size >= this.max) this.prune(now);
+      if (this.by.size >= this.max) this.by.delete(this.by.keys().next().value!);
+      w = emptyWindow();
+      this.by.set(caller, w);
+    }
+    windowAdd(w, now, this.ms);
+  }
 
-export const failsIdle = (f: Fails, now: number, ms: number) => now - f.total.since >= ms && Object.values(f.by).every((w) => now - w.since >= ms);
+  forgive(caller: string): void {
+    this.by.delete(caller);
+  }
+
+  prune(now: number): void {
+    for (const [k, w] of this.by) if (now - w.since >= this.ms) this.by.delete(k);
+  }
+}

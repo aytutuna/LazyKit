@@ -39,6 +39,8 @@ export interface ServiceConfig {
   // Key for the sign-in nonces.
   nonceKey?: string;
   stages?: number;
+  // How a slowed answer waits; real time unless a test says otherwise.
+  sleep?(ms: number): Promise<void>;
   now?(): number;
 }
 
@@ -134,7 +136,9 @@ export class AccountService {
     const a = await this.address(email);
     if (!a) return { ok: false, why: normalizeEmail(email) ? "not-configured" : "bad-email" };
     if (typeof password !== "string" || password.length > 1024) return { ok: false, why: "bad-password" };
-    if ((await a.port.passwordTry(caller)) === "locked") return { ok: false, why: "locked" };
+    const turn = await a.port.passwordTry(caller);
+    if (turn === "locked") return { ok: false, why: "locked" };
+    if (turn === "slow") await (this.cfg.sleep ?? ((ms) => new Promise<void>((r) => setTimeout(r, ms))))(1000);
     const id = await a.port.account();
     if (!id) {
       await burnPasswordTime(this.cfg.stages);

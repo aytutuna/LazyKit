@@ -204,10 +204,10 @@ describe("codes", () => {
     const rs = await Promise.all(guesses.map((g, i) => rig.service.signinCode(email, g, LOGIN, `c${i % 6}`)));
     expect(rs.every((r) => !r.ok)).toBe(true);
     const [{ store }] = [...rig.addresses.values()];
-    expect(store.value!.codes.signin!.tries).toBeLessThanOrEqual(10);
+    expect(store.value!.codes.signin!.tries).toBeLessThanOrEqual(18);
   });
 
-  it("stops a stranger after ten wrong codes in a day without closing the owner out, and everyone after a hundred", async () => {
+  it("stops a stranger after ten wrong codes in a day without closing the owner out", async () => {
     await signUp();
     for (let round = 0; round < 5; round++) {
       await askCode();
@@ -216,17 +216,31 @@ describe("codes", () => {
     }
     const owner = await askCode();
     expect((await rig.service.signinCode(email, owner, LOGIN, "owner")).ok).toBe(true);
+  });
+
+  it("is not shut by a handful of networks: they spend a code, and the owner asks for another", async () => {
+    await signUp();
+    const good = await askCode();
+    for (let net = 0; net < 4; net++) for (let i = 0; i < 3; i++) await rig.service.signinCode(email, "000000", OTHER, `net${net}`);
+    expect((await rig.service.signinCode(email, good, LOGIN, "owner")).ok).toBe(true);
+    const next = await askCode();
+    for (let net = 0; net < 11; net++) for (let i = 0; i < 3; i++) await rig.service.signinCode(email, "000000", OTHER, `more${net}`);
+    expect((await rig.service.signinCode(email, next, LOGIN, "owner")).ok).toBe(false);
     rig.clock.now += 11 * MIN;
-    for (let i = 0; i < 40; i++) {
-      if (i % 2 === 0) await askCode();
-      for (let k = 0; k < 3; k++) await rig.service.signinCode(email, "000000", LOGIN, `bot${i}`);
-      if (i % 2 === 1) rig.clock.now += 11 * MIN;
+    expect((await rig.service.signinCode(email, await askCode(), LOGIN, "owner")).ok).toBe(true);
+  });
+
+  it("closes the door to everyone only after three hundred wrong codes in a day", async () => {
+    await signUp();
+    for (let round = 0; round < 12; round++) {
+      await askCode();
+      for (let net = 0; net < 10; net++) for (let i = 0; i < 3; i++) await rig.service.signinCode(email, "000000", OTHER, `r${round}n${net}`);
+      rig.clock.now += 11 * MIN;
     }
     const late = await askCode();
     expect((await rig.service.signinCode(email, late, LOGIN, "owner")).ok).toBe(false);
     rig.clock.now += DAY;
-    const next = await askCode();
-    expect((await rig.service.signinCode(email, next, LOGIN, "owner")).ok).toBe(true);
+    expect((await rig.service.signinCode(email, await askCode(), LOGIN, "owner")).ok).toBe(true);
   });
 
   it("expires a code after ten minutes", async () => {
@@ -268,6 +282,18 @@ describe("passwords", () => {
     expect((await rig.service.signinPassword(email, PASSWORD, OTHER, "stranger")).ok).toBe(false);
     rig.clock.now += 16 * MIN;
     expect((await rig.service.signinPassword(email, PASSWORD, OTHER, "stranger")).ok).toBe(true);
+  });
+
+  it("stays open to the owner while many networks guess, slows the answers, and locks everyone only past four hundred tries", async () => {
+    await signUp();
+    const [{ core }] = [...rig.addresses.values()];
+    for (let net = 0; net < 5; net++) for (let i = 0; i < 10; i++) await rig.service.signinPassword(email, "wrong password!!", OTHER, `net${net}`);
+    expect((await rig.service.signinPassword(email, PASSWORD, LOGIN, "owner")).ok).toBe(true);
+    expect(await core.passwordTry("far")).toBe("slow");
+    for (let net = 5; net < 45; net++) for (let i = 0; i < 10; i++) await core.passwordTry(`net${net}`);
+    expect(await rig.service.signinPassword(email, PASSWORD, LOGIN, "owner2")).toEqual({ ok: false, why: "locked" });
+    rig.clock.now += 16 * MIN;
+    expect((await rig.service.signinPassword(email, PASSWORD, LOGIN, "owner2")).ok).toBe(true);
   });
 
   it("stores a salted record and never the password", async () => {

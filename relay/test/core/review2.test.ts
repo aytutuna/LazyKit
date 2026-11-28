@@ -87,7 +87,7 @@ describe("second review findings", () => {
     expect(rig.mail[rig.mail.length - 1].subject).not.toBe("You already have a Lazy account");
   });
 
-  it.fails("Q6 four networks spend every try of the owner code", async () => {
+  it("Q6 four networks spend every try of the owner code", async () => {
     const rig = memoryService();
     await signUp(rig, "own6@example.com");
     await rig.service.code("own6@example.com");
@@ -97,14 +97,14 @@ describe("second review findings", () => {
     expect((await rig.service.signinCode("own6@example.com", good, LOGIN, "owner")).ok).toBe(true);
   });
 
-  it.fails("Q7 four networks keep the owner password sign-in shut", async () => {
+  it("Q7 four networks keep the owner password sign-in shut", async () => {
     const rig = memoryService();
     await signUp(rig, "own7@example.com");
     for (const net of ["n1", "n2", "n3", "n4"]) for (let i = 0; i < 10; i++) await rig.service.signinPassword("own7@example.com", "wrong password!!", OTHER, net);
     expect((await rig.service.signinPassword("own7@example.com", PW, LOGIN, "owner")).ok).toBe(true);
   }, 60000);
 
-  it.fails("Q8 caller networks are written to durable storage", async () => {
+  it("Q8 caller networks are written to durable storage", async () => {
     const rig = memoryService();
     await signUp(rig, "own8@example.com");
     await rig.service.signinPassword("own8@example.com", "wrong password!!", OTHER, "203.0.113.77");
