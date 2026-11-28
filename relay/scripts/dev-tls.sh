@@ -15,11 +15,15 @@ cd "$(dirname "$0")/.."
 certs="$PWD/.dev-tls"
 log="${RELAY_LOG:-$PWD/wrangler-tls.log}"
 
-if [ ! -f "$certs/server.pem" ]; then
+# Made again when there is none or the certificate is about to expire (they last 30 days). The authority may only
+# vouch for the names the relay is reached by, so a machine that trusts it trusts it for nothing else.
+if [ ! -f "$certs/server.pem" ] || ! openssl x509 -checkend 86400 -noout -in "$certs/server.pem" > /dev/null; then
+  rm -rf "$certs"
   mkdir -p "$certs"
   export MSYS2_ARG_CONV_EXCL="/CN="
   openssl req -x509 -newkey ec -pkeyopt ec_paramgen_curve:prime256v1 -nodes -days 30 -subj "/CN=Lazy relay dev CA" \
     -addext "basicConstraints=critical,CA:TRUE" -addext "keyUsage=critical,keyCertSign,cRLSign" \
+    -addext "nameConstraints=critical,permitted;DNS:localhost,permitted;IP:127.0.0.1/255.255.255.255,permitted;IP:10.0.2.2/255.255.255.255" \
     -keyout "$certs/ca.key" -out "$certs/ca.pem"
   openssl req -newkey ec -pkeyopt ec_paramgen_curve:prime256v1 -nodes -subj "/CN=localhost" \
     -keyout "$certs/server.key" -out "$certs/server.csr"
