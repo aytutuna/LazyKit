@@ -235,8 +235,9 @@ impl PairingSession {
 }
 
 /// Trusts one more certificate authority (DER) for the relay and account connections made from now
-/// on. Only for a relay that runs on a developer's machine with an authority of its own: an app
-/// never calls it.
+/// on. Only in the builds the native tests use (the `dev-roots` feature), for a relay that runs on a
+/// developer's machine with an authority of its own.
+#[cfg(feature = "dev-roots")]
 #[uniffi::export]
 pub fn trust_development_root(der: Vec<u8>) {
     lazy_link::tls::trust_development_root(&der);

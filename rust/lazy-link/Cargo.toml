@@ -38,6 +38,8 @@ serde_json = "1"
 tokio = { version = "1", features = ["net", "rt-multi-thread", "test-util"] }
 
 [features]
+# Lets a test build trust the authority of a relay run on the developer's machine. Off in the apps.
+dev-roots = []
 # The relay client with its TLS (rustls on aws-lc-rs, certificates judged by the system through
 # rustls-platform-verifier, Mozilla's roots on Android); the plain protocol code builds without it, and so does the wasm crate.
 relay = ["dep:async-trait", "dep:tokio", "dep:tokio-tungstenite", "dep:futures-util", "dep:getrandom", "dep:httparse", "dep:serde_json", "dep:rustls", "dep:tokio-rustls", "dep:rustls-platform-verifier", "dep:webpki-roots", "dep:x509-cert"]

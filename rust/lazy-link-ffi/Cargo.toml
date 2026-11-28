@@ -9,6 +9,10 @@ publish.workspace = true
 [lib]
 crate-type = ["cdylib", "staticlib", "lib"]
 
+[features]
+# The native tests trust the development relay's authority; no app build turns this on.
+dev-roots = ["lazy-link/dev-roots"]
+
 [dependencies]
 async-trait = "0.1"
 lazy-link = { path = "../lazy-link", features = ["relay"] }

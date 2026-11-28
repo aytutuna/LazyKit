@@ -12,7 +12,7 @@ rm -rf "$out"
 mkdir -p "$out"
 
 cd "$root/rust"
-cargo ndk -t arm64-v8a -t x86_64 -P 26 -o "$out/jniLibs" build --locked -p lazy-link-ffi
+cargo ndk -t arm64-v8a -t x86_64 -P 26 -o "$out/jniLibs" build --locked -p lazy-link-ffi --features dev-roots
 cargo run --locked -q -p uniffi-bindgen -- generate --library "$out/jniLibs/arm64-v8a/liblazy_link_ffi.so" --language kotlin --out-dir "$out/kotlin" --no-format
 
 cd "$root/native/link-tests/android"

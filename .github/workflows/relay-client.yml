@@ -35,10 +35,10 @@ jobs:
         run: bash relay/scripts/dev-account.sh 8787 8790
       - name: Clippy
         working-directory: rust
-        run: cargo clippy --locked -p lazy-link --features relay --all-targets -- -D warnings
+        run: cargo clippy --locked -p lazy-link --features relay,dev-roots --all-targets -- -D warnings
       - name: Test against stand-in servers
         working-directory: rust
-        run: cargo test --locked -p lazy-link --features relay
+        run: cargo test --locked -p lazy-link --features relay,dev-roots
       - name: Test against the relay
         working-directory: rust
         run: cargo test --locked -p lazy-link --features relay --test relay_wrangler -- --ignored --test-threads=1

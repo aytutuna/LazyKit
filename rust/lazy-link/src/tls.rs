@@ -16,7 +16,9 @@ use rustls::{ClientConfig, DigitallySignedStruct, Error, SignatureScheme};
 use rustls_platform_verifier::{BuilderVerifierExt, Verifier};
 use std::future::Future;
 use std::net::SocketAddr;
-use std::sync::{Arc, Mutex as StdMutex};
+use std::sync::Arc;
+#[cfg(feature = "dev-roots")]
+use std::sync::Mutex as StdMutex;
 use std::time::Duration;
 use subtle::ConstantTimeEq;
 use tokio::io::{AsyncReadExt, AsyncWriteExt, ReadHalf, WriteHalf};
@@ -32,17 +34,26 @@ const STAGGER: Duration = Duration::from_millis(250);
 /// How long one address may take on its own.
 const ATTEMPT_TIMEOUT: Duration = Duration::from_secs(5);
 
-// Roots an app adds for a relay of its own (development); empty in a shipped app.
+// Roots added for a relay of its own (development). The feature that adds them is on in the
+// native test builds only, so a shipped app has no way to trust another authority.
+#[cfg(feature = "dev-roots")]
 static DEVELOPMENT_ROOTS: StdMutex<Vec<CertificateDer<'static>>> = StdMutex::new(Vec::new());
 
 /// Trusts one more certificate authority, given as DER, for the relay connections made from now
-/// on. A relay run on a developer's machine has a certificate of its own authority; an app never
-/// calls this.
+/// on. A relay run on a developer's machine has a certificate of its own authority.
+#[cfg(feature = "dev-roots")]
 pub fn trust_development_root(der: &[u8]) {
     DEVELOPMENT_ROOTS
         .lock()
         .unwrap()
         .push(CertificateDer::from(der.to_vec()));
+}
+
+fn development_roots() -> Vec<CertificateDer<'static>> {
+    #[cfg(feature = "dev-roots")]
+    return DEVELOPMENT_ROOTS.lock().unwrap().clone();
+    #[cfg(not(feature = "dev-roots"))]
+    Vec::new()
 }
 
 fn provider() -> Arc<CryptoProvider> {
@@ -68,7 +79,7 @@ impl TlsTransport {
         let builder = ClientConfig::builder_with_provider(provider())
             .with_safe_default_protocol_versions()
             .map_err(failed)?;
-        let extra = DEVELOPMENT_ROOTS.lock().unwrap().clone();
+        let extra = development_roots();
         Ok(Self::with_config(system_verified(builder, extra)?))
     }
 
