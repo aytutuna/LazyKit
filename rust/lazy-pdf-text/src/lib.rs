@@ -2,6 +2,8 @@
 //! selection and search.
 //! Required Notice: Copyright (c) 2026 Alazy Inc. (https://alazy.app)
 
+mod bidi;
+mod bidi_tables;
 mod bidi_text;
 mod collector;
 mod flow;
@@ -19,6 +21,10 @@ mod tables;
 mod text_string;
 mod unicode;
 
+pub use bidi::{
+    BidiParagraph, BidiType, is_right_to_left, mirror as bidi_mirror, paired_bracket,
+    type_of as bidi_type_of,
+};
 pub use bidi_text::{BidiClass, class_of as bidi_class_of};
 pub use collector::clean;
 pub use geometry::{DisplayRect, PageGeometry};
