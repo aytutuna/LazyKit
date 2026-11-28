@@ -614,7 +614,8 @@ describe("relay", () => {
     const other = newGroup();
     const url = (role: string, group: string) => `https://alazy.app/relay/v1/${room}?role=${role}&group=${group}&device=${"d".repeat(32)}`;
     const headers = { Upgrade: "websocket" };
-    await runInDurableObject(env.ROOMS.get(env.ROOMS.idFromName(room)), async (r: any) => {
+    await runInDurableObject(stub(room), async (instance) => {
+      const r = instance as unknown as { groupStub: (g: string) => unknown; fetch: (req: Request) => Promise<Response> };
       // Holds the stranger's group call so the host can claim the room in the meantime.
       let release!: () => void;
       const gate = new Promise<void>((res) => (release = res));
