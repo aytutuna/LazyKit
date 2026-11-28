@@ -22,12 +22,6 @@ env:
   CARGO_NDK: 4.1.2
   CARGO_DENY: 0.22.1
   NDK_VERSION: 27.3.13750724
-  AWS_LC_SYS_CMAKE_BUILDER: 0
-  AWS_LC_SYS_PREBUILT_NASM: 1
-  AWS_LC_SYS_USE_SYSTEM: 0
-  # aws-lc is compiled by cc and linked by rustc: both have to agree on the oldest system, or iOS fails on missing symbols
-  IPHONEOS_DEPLOYMENT_TARGET: "18.0"
-  MACOSX_DEPLOYMENT_TARGET: "14.0"
 
 defaults:
   run:
@@ -38,6 +32,9 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
+      - name: Build environment
+        shell: bash
+        run: bash "$GITHUB_WORKSPACE/rust/scripts/build-env.sh" >> "$GITHUB_ENV"
       - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2
         with:
           workspaces: rust
@@ -68,6 +65,9 @@ jobs:
         target: [x86_64-pc-windows-msvc, aarch64-pc-windows-msvc]
     steps:
       - uses: actions/checkout@v7
+      - name: Build environment
+        shell: bash
+        run: bash "$GITHUB_WORKSPACE/rust/scripts/build-env.sh" >> "$GITHUB_ENV"
       - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2
         with:
           workspaces: rust
@@ -85,6 +85,9 @@ jobs:
     runs-on: macos-latest
     steps:
       - uses: actions/checkout@v7
+      - name: Build environment
+        shell: bash
+        run: bash "$GITHUB_WORKSPACE/rust/scripts/build-env.sh" >> "$GITHUB_ENV"
       - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2
         with:
           workspaces: rust
@@ -118,6 +121,9 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
+      - name: Build environment
+        shell: bash
+        run: bash "$GITHUB_WORKSPACE/rust/scripts/build-env.sh" >> "$GITHUB_ENV"
       - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2
         with:
           workspaces: rust
@@ -138,6 +144,9 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
+      - name: Build environment
+        shell: bash
+        run: bash "$GITHUB_WORKSPACE/rust/scripts/build-env.sh" >> "$GITHUB_ENV"
       - uses: actions/setup-node@v4
         with:
           node-version: 24
@@ -168,6 +177,9 @@ jobs:
       LAZY_SCAN_REQUIRE_MODEL: 1
     steps:
       - uses: actions/checkout@v7
+      - name: Build environment
+        shell: bash
+        run: bash "$GITHUB_WORKSPACE/rust/scripts/build-env.sh" >> "$GITHUB_ENV"
       - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2
         with:
           workspaces: rust
@@ -192,6 +204,9 @@ jobs:
       RUSTFLAGS: -C target-feature=+simd128
     steps:
       - uses: actions/checkout@v7
+      - name: Build environment
+        shell: bash
+        run: bash "$GITHUB_WORKSPACE/rust/scripts/build-env.sh" >> "$GITHUB_ENV"
       - uses: actions/setup-node@v4
         with:
           node-version: 24
@@ -216,6 +231,9 @@ jobs:
       LAZY_SCAN_REQUIRE_MODEL: 1
     steps:
       - uses: actions/checkout@v7
+      - name: Build environment
+        shell: bash
+        run: bash "$GITHUB_WORKSPACE/rust/scripts/build-env.sh" >> "$GITHUB_ENV"
       - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2
         with:
           workspaces: rust
@@ -252,6 +270,9 @@ jobs:
     runs-on: macos-latest
     steps:
       - uses: actions/checkout@v7
+      - name: Build environment
+        shell: bash
+        run: bash "$GITHUB_WORKSPACE/rust/scripts/build-env.sh" >> "$GITHUB_ENV"
       - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2
         with:
           workspaces: rust

@@ -1,10 +1,10 @@
 name: relay-native
 
-# The relay client, TLS in Rust included, called from C# on Windows, Swift on macOS and Kotlin on an Android emulator,
-# each against the relay under wrangler dev. Its certificate comes from a development authority that the machine trusts
-# (the Windows root store, the macOS keychain, the emulator's user certificates), because the client judges
-# certificates through the system. aws-lc-rs builds with the platform's C compiler alone: AWS_LC_SYS_CMAKE_BUILDER=0
-# keeps CMake out and AWS_LC_SYS_PREBUILT_NASM=1 keeps NASM out.
+# The account and relay clients, TLS in Rust included, called from C# on Windows, Swift on macOS and Kotlin on an Android
+# emulator, each against the relay under wrangler dev with its mail sink. The relay's certificate comes from a
+# development authority: Windows and macOS trust it in their system stores, since the client asks the system there;
+# on Android, which checks against bundled roots, the test adds it by hand (trustDevelopmentRoot). The build environment
+# aws-lc needs is rust/scripts/build-env.sh.
 on:
   push:
     branches: [main, 'ci/**']
@@ -20,12 +20,6 @@ permissions:
 env:
   CARGO_TERM_COLOR: always
   CARGO_NDK: 4.1.2
-  AWS_LC_SYS_CMAKE_BUILDER: 0
-  AWS_LC_SYS_PREBUILT_NASM: 1
-  AWS_LC_SYS_USE_SYSTEM: 0
-  # aws-lc is compiled by cc and linked by rustc: both have to agree on the oldest system, or iOS fails on missing symbols
-  IPHONEOS_DEPLOYMENT_TARGET: "18.0"
-  MACOSX_DEPLOYMENT_TARGET: "14.0"
   # fc32e9b is the tag v0.12.0+v0.32.0
   UNIFFI_BINDGEN_CS_REV: fc32e9bbf91ee66b0b92241f575cbce1bf5e3151
 
@@ -34,6 +28,9 @@ jobs:
     runs-on: windows-latest
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - name: Build environment
+        shell: bash
+        run: bash "$GITHUB_WORKSPACE/rust/scripts/build-env.sh" >> "$GITHUB_ENV"
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version: 24
@@ -67,6 +64,9 @@ jobs:
     runs-on: macos-latest
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - name: Build environment
+        shell: bash
+        run: bash "$GITHUB_WORKSPACE/rust/scripts/build-env.sh" >> "$GITHUB_ENV"
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version: 24
@@ -91,6 +91,9 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - name: Build environment
+        shell: bash
+        run: bash "$GITHUB_WORKSPACE/rust/scripts/build-env.sh" >> "$GITHUB_ENV"
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version: 24
