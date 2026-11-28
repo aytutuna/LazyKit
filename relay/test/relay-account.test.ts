@@ -1,5 +1,5 @@
 import { env, exports } from "cloudflare:workers";
-import { runInDurableObject } from "cloudflare:test";
+import { runDurableObjectAlarm, runInDurableObject } from "cloudflare:test";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { WEEKLY_CAP } from "../src/group";
 import { purchaseKey } from "../src/purchase";
@@ -130,5 +130,48 @@ describe("deleting an account clears the relay", () => {
     await account("me", "DELETE", { confirm: "delete" }, token);
     expect(await env.GROUPS.get(env.GROUPS.idFromName(g)).record(10)).toBe(false);
     expect((await env.GROUPS.get(env.GROUPS.idFromName(g)).status()).capped).toBe(true);
+  });
+});
+
+describe("signing out closes open connections", () => {
+  const open = async (g: string, device: string, token: string) => {
+    const res = await host(g, device, token);
+    expect(res.status).toBe(101);
+    const ws = res.webSocket!;
+    ws.accept();
+    return new Promise<{ closed: Promise<number> }>((resolve) => {
+      const closed = new Promise<number>((done) =>
+        ws.addEventListener("close", (e) => {
+          ws.close(e.code === 1005 ? 1000 : e.code);
+          done(e.code);
+        }),
+      );
+      resolve({ closed });
+    });
+  };
+  const sweep = (g: string) => runDurableObjectAlarm(env.ROOMS.get(env.ROOMS.idFromName(room(g))));
+
+  it("closes a host whose session was revoked, and leaves the others", async () => {
+    const a = await signUp(who.email, PASSWORD);
+    const b = await signIn(who.email, DEV_B);
+    const g = newGroup();
+    await claim(g, a);
+    const mine = await open(g, DEVICE_A, a);
+    await account("signout", "POST", {}, b);
+    await sweep(g);
+    await expect(Promise.race([mine.closed, new Promise((r) => setTimeout(() => r("open"), 200))])).resolves.toBe("open");
+    await account("signout", "POST", {}, a);
+    await sweep(g);
+    expect(await mine.closed).toBe(1008);
+  });
+
+  it("closes a host when its account is deleted", async () => {
+    const a = await signUp(who.email, PASSWORD);
+    const g = newGroup();
+    await claim(g, a);
+    const mine = await open(g, DEVICE_A, a);
+    await account("me", "DELETE", { confirm: "delete" }, a);
+    await sweep(g);
+    expect(await mine.closed).toBe(1008);
   });
 });

@@ -56,6 +56,9 @@ export default {
     if (role !== "stream" && !ID.test(group)) return text("bad group", 400);
     if (role !== "stream" && !ID.test(device)) return text("bad device", 400);
     if (req.headers.get("Upgrade") !== "websocket") return text("websocket only", 426);
+    const forwarded = new Request(req);
+    forwarded.headers.delete("x-relay-account");
+    forwarded.headers.delete("x-relay-session");
     if (role !== "stream") {
       const s = await sessionOf(req, env);
       if (!s) return signIn();
@@ -64,8 +67,10 @@ export default {
       // A session is made for one device, so a stolen token does not speak for another.
       if (s.device !== device) return refused("not this device's session", "wrong-device");
       if ((await stub.admit()) !== "ok") return unverified();
+      forwarded.headers.set("x-relay-account", s.account);
+      forwarded.headers.set("x-relay-session", s.session);
     }
-    return env.ROOMS.get(env.ROOMS.idFromName(m[1])).fetch(req);
+    return env.ROOMS.get(env.ROOMS.idFromName(m[1])).fetch(forwarded);
   },
 };
 

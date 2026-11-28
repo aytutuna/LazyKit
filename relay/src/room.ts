@@ -18,6 +18,8 @@ const ROOM_KEEP_MS = 90 * 86_400_000;
 // Kept per socket across hibernation. owed counts the frames forwarded to this end that it has
 // not acknowledged yet; eof is set once this end has half-closed.
 interface Mark {
+  // The account session this end connected with, so signing out can close it.
+  who?: { account: string; session: string };
   seen?: number;
   owed?: number;
   eof?: boolean;
@@ -60,8 +62,11 @@ export class Room extends DurableObject {
     const group = url.searchParams.get("group") ?? "";
     if ((this.group ?? group) !== group) return new Response("wrong group", { status: 403 });
     const device = url.searchParams.get("device") ?? "";
-    if (role === "host") return this.acceptHost(group, device);
-    return this.acceptGuest(group, url.pathname.split("/").pop() ?? "", device);
+    const account = req.headers.get("x-relay-account");
+    const session = req.headers.get("x-relay-session");
+    const who = account && session ? { account, session } : undefined;
+    if (role === "host") return this.acceptHost(group, device, who);
+    return this.acceptGuest(group, url.pathname.split("/").pop() ?? "", device, who);
   }
 
   // Called once a host or guest has really joined.
@@ -99,7 +104,7 @@ export class Room extends DurableObject {
 
   // A new host takes over from the old one, which may be a connection that
   // died without a close.
-  private async acceptHost(group: string, device: string): Promise<Response> {
+  private async acceptHost(group: string, device: string, who?: Mark["who"]): Promise<Response> {
     await this.keep(group);
     await this.groupStub(group).touch(device);
     // The last host is the device a push should wake when a guest finds nobody here.
@@ -110,12 +115,12 @@ export class Room extends DurableObject {
     for (const old of this.ctx.getWebSockets("host")) old.close(1012, "replaced");
     const pair = new WebSocketPair();
     this.ctx.acceptWebSocket(pair[1], ["host"]);
-    this.mark(pair[1], { seen: Date.now() });
+    this.mark(pair[1], { seen: Date.now(), who });
     await this.schedule(SWEEP_MS);
     return new Response(null, { status: 101, webSocket: pair[0] });
   }
 
-  private async acceptGuest(groupId: string, room: string, device: string): Promise<Response> {
+  private async acceptGuest(groupId: string, room: string, device: string, who?: Mark["who"]): Promise<Response> {
     const group = this.groupStub(groupId);
     if ((await group.status()).capped) return new Response("weekly cap reached", { status: 402 });
     await group.touch(device);
@@ -148,7 +153,7 @@ export class Room extends DurableObject {
     await this.keep(groupId);
     const pair = new WebSocketPair();
     this.ctx.acceptWebSocket(pair[1], ["guest", id]);
-    this.mark(pair[1], { seen: Date.now() });
+    this.mark(pair[1], { seen: Date.now(), who });
     return new Response(null, { status: 101, webSocket: pair[0] });
   }
 
@@ -233,6 +238,7 @@ export class Room extends DurableObject {
       const limit = role === "host" ? CONTROL_IDLE_MS : STREAM_IDLE_MS;
       if (now - seen > limit) this.end(ws, 1001, "idle");
     }
+    await this.dropSignedOut();
     if (this.ctx.getWebSockets().length > 0) return this.schedule(SWEEP_MS);
     if (this.group === undefined) return;
     this.idleSince ??= now;
@@ -243,6 +249,18 @@ export class Room extends DurableObject {
     this.host = undefined;
     this.stored = false;
     this.idleSince = undefined;
+  }
+
+  // A session that was revoked, or whose account was deleted, loses its connections within a sweep.
+  private async dropSignedOut(): Promise<void> {
+    const seen = new Map<string, boolean>();
+    for (const ws of this.ctx.getWebSockets()) {
+      const who = this.marks(ws).who;
+      if (!who || ws.readyState !== WebSocket.OPEN) continue;
+      const key = `${who.account}.${who.session}`;
+      if (!seen.has(key)) seen.set(key, await this.env.ACCOUNTS.get(this.env.ACCOUNTS.idFromName(who.account)).alive(who.session));
+      if (!seen.get(key)) this.end(ws, 1008, "signed out");
+    }
   }
 
   // Bytes are handed to the group in batches, so a busy stream costs one
