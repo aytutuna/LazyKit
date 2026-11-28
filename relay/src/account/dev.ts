@@ -3,7 +3,7 @@ import type { Turnstile } from "./turnstile";
 
 // For a local `wrangler dev` only, switched on by --var on its command line and never in wrangler.jsonc:
 // mail goes to a sink (scripts/dev-mail.mjs) that the tests read their codes from, and the bot check
-// accepts the token "dev".
+// accepts the token "dev" and the per-address limits are off, so tests can make as many accounts as they like.
 export const devMailer = (url: string): Mailer => ({
   ready: () => true,
   async send(mail) {
