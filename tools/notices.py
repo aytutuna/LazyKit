@@ -12,8 +12,8 @@ from pathlib import Path
 HEADER = """Third-party components of LazyKit
 
 LazyKit's own code is under the PolyForm Noncommercial License 1.0.0 (LICENSE). The components below keep their own
-licences; the licence files found in each crate's source are copied at the end, and ONNX Runtime and the corner model have
-their own section. The file is made by tools/notices.py from rust/Cargo.lock and native/pins.toml.
+licences; the licence files found in each crate's source are copied at the end, and ONNX Runtime, the corner model and
+pdf.js have their own section. The file is made by tools/notices.py from rust/Cargo.lock and native/pins.toml.
 
 UniFFI (MPL-2.0) is used unmodified; its source is at https://github.com/mozilla/uniffi-rs.
 """
@@ -48,6 +48,17 @@ DocAligner FastViT-T8 corner model {model} (Apache-2.0), by DocsaidLab, https://
   the project's LICENSE file. The model is used as published, except for the copy made for tract (the file named
   fastvit_t8_h_e_bifpn_256_fp32-tract.onnx), which tools/patch_einsum.py changes to rewrite its Einsum operators. The
   software is distributed on an "AS IS" basis, without warranties or conditions of any kind.
+
+pdf.js 4.10.38 (Apache-2.0), Copyright 2012 Mozilla Foundation, https://github.com/mozilla/pdf.js
+
+  The JBIG2 decoder in rust/lazy-pdf-filters/src/jbig2 is ported from src/core/jbig2.js and src/core/arithmetic_decoder.js,
+  by way of Lazy PDF's C# and Swift ports, and changed: it is written in Rust, reads Group 4 data through the CCITT decoder
+  of the same crate, takes the generic region template bits in the order of ITU-T T.88, adds the parts pdf.js lacks (Huffman
+  coded symbol refinement, skipped halftone cells, typical prediction of refinement rows, the other combination operators,
+  refinement region segments) and limits the sizes and counts a stream may ask for. Each of those files carries the licence
+  header of the original and says it was changed. Licensed under the Apache License, Version 2.0; the licence text is at
+  https://www.apache.org/licenses/LICENSE-2.0. The software is distributed on an "AS IS" basis, without warranties or
+  conditions of any kind.
 """
 
 def native_text(pins_text):

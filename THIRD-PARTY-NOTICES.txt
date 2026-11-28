@@ -1,8 +1,8 @@
 Third-party components of LazyKit
 
 LazyKit's own code is under the PolyForm Noncommercial License 1.0.0 (LICENSE). The components below keep their own
-licences; the licence files found in each crate's source are copied at the end, and ONNX Runtime and the corner model have
-their own section. The file is made by tools/notices.py from rust/Cargo.lock and native/pins.toml.
+licences; the licence files found in each crate's source are copied at the end, and ONNX Runtime, the corner model and
+pdf.js have their own section. The file is made by tools/notices.py from rust/Cargo.lock and native/pins.toml.
 
 UniFFI (MPL-2.0) is used unmodified; its source is at https://github.com/mozilla/uniffi-rs.
 
@@ -605,6 +605,9 @@ zerocopy 0.8.66
 zerocopy-derive 0.8.66
   BSD-2-Clause OR Apache-2.0 OR MIT
   https://github.com/google/zerocopy
+zlib-rs 0.6.9
+  Zlib
+  https://github.com/trifectatechfoundation/zlib-rs
 zmij 1.0.23
   MIT
   https://github.com/dtolnay/zmij
@@ -648,6 +651,17 @@ DocAligner FastViT-T8 corner model 1.1.1 (Apache-2.0), by DocsaidLab, https://gi
   the project's LICENSE file. The model is used as published, except for the copy made for tract (the file named
   fastvit_t8_h_e_bifpn_256_fp32-tract.onnx), which tools/patch_einsum.py changes to rewrite its Einsum operators. The
   software is distributed on an "AS IS" basis, without warranties or conditions of any kind.
+
+pdf.js 4.10.38 (Apache-2.0), Copyright 2012 Mozilla Foundation, https://github.com/mozilla/pdf.js
+
+  The JBIG2 decoder in rust/lazy-pdf-filters/src/jbig2 is ported from src/core/jbig2.js and src/core/arithmetic_decoder.js,
+  by way of Lazy PDF's C# and Swift ports, and changed: it is written in Rust, reads Group 4 data through the CCITT decoder
+  of the same crate, takes the generic region template bits in the order of ITU-T T.88, adds the parts pdf.js lacks (Huffman
+  coded symbol refinement, skipped halftone cells, typical prediction of refinement rows, the other combination operators,
+  refinement region segments) and limits the sizes and counts a stream may ask for. Each of those files carries the licence
+  header of the original and says it was changed. Licensed under the Apache License, Version 2.0; the licence text is at
+  https://www.apache.org/licenses/LICENSE-2.0. The software is distributed on an "AS IS" basis, without warranties or
+  conditions of any kind.
 
 Licence texts of the Rust crates
 
@@ -8366,3 +8380,26 @@ CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION
 OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR
 IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER
 DEALINGS IN THE SOFTWARE.
+
+==============================================================================
+Used by: zlib-rs 0.6.9
+==============================================================================
+(C) 2024 Trifecta Tech Foundation 
+
+This software is provided 'as-is', without any express or implied
+warranty. In no event will the authors be held liable for any damages
+arising from the use of this software.
+
+Permission is granted to anyone to use this software for any purpose,
+including commercial applications, and to alter it and redistribute it
+freely, subject to the following restrictions:
+
+1. The origin of this software must not be misrepresented; you must not
+   claim that you wrote the original software. If you use this software
+   in a product, an acknowledgment in the product documentation would be
+   appreciated but is not required.
+
+2. Altered source versions must be plainly marked as such, and must not be
+   misrepresented as being the original software.
+
+3. This notice may not be removed or altered from any source distribution.

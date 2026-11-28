@@ -8,6 +8,7 @@ on:
       - testdata/link/**
       - testdata/pdf/**
       - testdata/scan/**
+      - testdata/pdf-filters/**
       - native/**
       - tools/**
       - THIRD-PARTY-NOTICES.txt
