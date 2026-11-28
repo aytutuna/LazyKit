@@ -46,7 +46,7 @@ pub use font::{FontChar, PdfFont};
 pub use function::{Function, FunctionError};
 pub use interpreter::{
     ContentContext, ContentInterpreter, ContentVisitor, FormInfo, GlyphInfo, GraphicsState,
-    ImageInfo, MarkedContent, PathInfo, PathSegment, PathSegmentKind, ShadingInfo,
+    ImageInfo, MarkedContent, OptionalContent, PathInfo, PathSegment, PathSegmentKind, ShadingInfo,
 };
 pub use matrix::Matrix;
 pub use names::{cff_strings, mac_glyphs, standard_encoding, standard_encoding_sids};

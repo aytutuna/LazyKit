@@ -113,7 +113,68 @@ pub struct MarkedContent {
     pub mcid: Option<i64>,
     /// For tag `OC`: the optional content group or membership dictionary the properties name.
     pub optional_content: Option<Dict>,
+    /// What a layer check needs of `optional_content`, with the object numbers that identify the groups.
+    pub layer: Option<OptionalContent>,
     overflow: bool,
+}
+
+/// An optional content group or membership dictionary (8.11.2) as the visibility check reads it: the group's own object
+/// number when the file refers to it, and for a membership dictionary the groups it lists and its policy.
+#[derive(Debug, Clone, PartialEq)]
+pub struct OptionalContent {
+    pub id: Option<u32>,
+    /// A membership dictionary without a visibility expression, which the member list and policy decide.
+    pub is_membership: bool,
+    /// The /P policy: AnyOn, AllOn, AnyOff or AllOff.
+    pub policy: String,
+    /// The object number of each listed group, none for one written inline.
+    pub members: Vec<Option<u32>>,
+}
+
+const MAX_MEMBERS: usize = 100_000;
+
+fn layer_of(doc: &mut Document, entry: &Object) -> Option<(Dict, OptionalContent)> {
+    let value = doc.resolve(entry)?.into_shared();
+    let Object::Dict(group) = &*value else {
+        return None;
+    };
+    let id = match entry {
+        Object::Ref(r) => Some(r.number),
+        _ => None,
+    };
+    let is_membership =
+        doc.name_of(group, "Type").as_deref() == Some(b"OCMD") && !group.contains_key("VE");
+    let policy = doc.name_of(group, "P").map_or_else(
+        || "AnyOn".to_string(),
+        |p| String::from_utf8_lossy(&p).into_owned(),
+    );
+    let mut members = Vec::new();
+    if is_membership && let Some(listed) = group.get("OCGs") {
+        let number_of = |item: &Object| match item {
+            Object::Ref(r) => Some(r.number),
+            _ => None,
+        };
+        match doc.resolve(listed).map(|v| v.into_shared()).as_deref() {
+            Some(Object::Dict(_)) => members.push(number_of(listed)),
+            Some(Object::Array(items)) => {
+                for item in items.iter().take(MAX_MEMBERS) {
+                    if matches!(doc.resolve(item).as_deref(), Some(Object::Dict(_))) {
+                        members.push(number_of(item));
+                    }
+                }
+            }
+            _ => {}
+        }
+    }
+    Some((
+        group.clone(),
+        OptionalContent {
+            id,
+            is_membership,
+            policy,
+            members,
+        },
+    ))
 }
 
 /// Where a callback comes from and what was true when it came.
@@ -240,6 +301,7 @@ pub struct FormInfo {
     pub bounds: Rect,
     pub is_pattern: bool,
     pub optional_content: Option<Dict>,
+    pub layer: Option<OptionalContent>,
 }
 
 /// What an interpreter reports. Every method does nothing until implemented.
@@ -1182,11 +1244,17 @@ impl<'a> ContentInterpreter<'a> {
                 self.paint_image(Some(name), Some(xobject.clone()), None, dictionary);
             }
             Some(b"Form") => {
-                let oc = self.doc.dict_of(&stream.dict, "OC");
+                let oc = stream
+                    .dict
+                    .get("OC")
+                    .and_then(|entry| layer_of(self.doc, entry));
                 self.enter_form(&xobject, Some(name), oc);
             }
             None if stream.dict.contains_key("BBox") => {
-                let oc = self.doc.dict_of(&stream.dict, "OC");
+                let oc = stream
+                    .dict
+                    .get("OC")
+                    .and_then(|entry| layer_of(self.doc, entry));
                 self.enter_form(&xobject, Some(name), oc);
             }
             _ => {}
@@ -1254,7 +1322,12 @@ impl<'a> ContentInterpreter<'a> {
         }
     }
 
-    fn enter_form(&mut self, form: &Arc<Object>, name: Option<String>, oc: Option<Dict>) {
+    fn enter_form(
+        &mut self,
+        form: &Arc<Object>,
+        name: Option<String>,
+        oc: Option<(Dict, OptionalContent)>,
+    ) {
         let Object::Stream(stream) = &**form else {
             return;
         };
@@ -1306,8 +1379,12 @@ impl<'a> ContentInterpreter<'a> {
         name: Option<String>,
         is_pattern: bool,
         mut inner: GraphicsState,
-        optional_content: Option<Dict>,
+        optional_content: Option<(Dict, OptionalContent)>,
     ) {
+        let (optional_content, layer) = match optional_content {
+            Some((dict, layer)) => (Some(dict), Some(layer)),
+            None => (None, None),
+        };
         let Object::Stream(stream) = &**form else {
             return;
         };
@@ -1345,6 +1422,7 @@ impl<'a> ContentInterpreter<'a> {
             bounds: area,
             is_pattern,
             optional_content,
+            layer,
         };
         let index = self.context.operator_index;
         self.visitor.begin_form(&self.context, &info);
@@ -1371,25 +1449,34 @@ impl<'a> ContentInterpreter<'a> {
                 properties: None,
                 mcid: None,
                 optional_content: None,
+                layer: None,
                 overflow: true,
             }));
             return;
         }
         let tag = name_operand(op).unwrap_or_default();
         let mut properties = None;
+        let mut entry = None;
         if op.operator == "BDC"
             && let Some(last) = op.operands.last()
             && op.operands.len() >= 2
         {
             match last {
-                Object::Dict(inline) => properties = Some(inline.clone()),
+                Object::Dict(inline) => {
+                    properties = Some(inline.clone());
+                    entry = Some(last.clone());
+                }
                 Object::Name(key) => {
-                    properties =
-                        self.find_resource("Properties", &key.text())
-                            .and_then(|v| match &*v {
-                                Object::Dict(d) => Some(d.clone()),
-                                _ => None,
-                            });
+                    if let Some((found, value)) =
+                        lookup_resource(self.doc, &self.resources, "Properties", &key.text())
+                        && let Object::Dict(d) = &*value
+                    {
+                        properties = Some(d.clone());
+                        entry = Some(match found {
+                            Key::Number(number) => Object::reference(number, 0),
+                            Key::Text(_) => Object::Dict(d.clone()),
+                        });
+                    }
                 }
                 _ => {}
             }
@@ -1399,16 +1486,19 @@ impl<'a> ContentInterpreter<'a> {
             .as_ref()
             .and_then(|p| self.doc.integer_of(p, "MCID"))
             .filter(|&v| i32::try_from(v).is_ok());
-        let optional_content = if tag == "OC" {
-            properties.clone()
-        } else {
-            None
+        let (optional_content, layer) = match entry
+            .filter(|_| tag == "OC")
+            .and_then(|e| layer_of(self.doc, &e))
+        {
+            Some((dict, layer)) => (Some(dict), Some(layer)),
+            None => (None, None),
         };
         let marked = Arc::new(MarkedContent {
             tag,
             properties,
             mcid,
             optional_content,
+            layer,
             overflow: false,
         });
         self.context.marked.push(marked.clone());
