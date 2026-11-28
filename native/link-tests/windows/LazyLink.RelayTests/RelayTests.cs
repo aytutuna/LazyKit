@@ -57,9 +57,9 @@ public class RelayTests
         var claimed = await relay.Claim(GroupPlatform.Desktop);
         Assert.Equal(36, claimed.AccountToken.Length);
         var status = await relay.Status();
-        Assert.Equal(0UL, status.used);
-        Assert.Equal(5_000_000_000UL, status.cap);
-        Assert.False(status.capped);
+        Assert.Equal(0UL, status.Used);
+        Assert.Equal(5_000_000_000UL, status.Cap);
+        Assert.False(status.Capped);
         Assert.Contains("\"email\":\"" + person.Email + "\"", person.Session.AccountJson);
     }
 
