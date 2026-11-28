@@ -6,6 +6,7 @@ on:
     paths:
       - relay/**
       - rust/**
+      - testdata/link/**
       - .github/workflows/relay-client.yml
 
 permissions:

@@ -22,8 +22,8 @@ defaults:
   run:
     working-directory: rust
 
-# The relay client pulls in ring and the platform certificate code, which is what breaks first
-# when cross-compiling, so every target the apps ship on builds it.
+# The relay client has no native dependencies left (the system opens the TLS), so this is a check
+# that every target the apps ship on still builds it.
 jobs:
   windows:
     runs-on: windows-latest
@@ -38,9 +38,6 @@ jobs:
           key: relay-${{ matrix.target }}
       - run: rustup target add ${{ matrix.target }}
       - run: cargo build --locked -p lazy-link --features relay --target ${{ matrix.target }}
-      # The TLS checks need the internet, so they run weekly and by hand, not on every push.
-      - if: matrix.target == 'x86_64-pc-windows-msvc' && github.event_name != 'push'
-        run: cargo test --locked -p lazy-link --features relay --test relay_tls -- --ignored
 
   apple:
     runs-on: macos-latest
@@ -55,8 +52,6 @@ jobs:
           for target in aarch64-apple-ios aarch64-apple-ios-sim aarch64-apple-darwin; do
             cargo build --locked -p lazy-link --features relay --target $target
           done
-      - if: github.event_name != 'push'
-        run: cargo test --locked -p lazy-link --features relay --test relay_tls -- --ignored
 
   android:
     runs-on: ubuntu-latest

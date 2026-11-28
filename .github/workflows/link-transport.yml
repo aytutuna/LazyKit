@@ -1,0 +1,111 @@
+name: link-transport
+
+# The relay client over each system's own TLS: SslStream on Windows, Network.framework on Apple systems and SSLSocket
+# on Android, each run against the relay under wrangler dev with a self-signed certificate.
+on:
+  push:
+    branches: [main, 'ci/**']
+    paths:
+      - rust/**
+      - relay/**
+      - native/link-tests/**
+      - .github/workflows/link-transport.yml
+
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: always
+  CARGO_NDK: 4.1.2
+  # fc32e9b is the tag v0.12.0+v0.32.0
+  UNIFFI_BINDGEN_CS_REV: fc32e9bbf91ee66b0b92241f575cbce1bf5e3151
+
+jobs:
+  windows:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 24
+          cache: npm
+          cache-dependency-path: relay/package-lock.json
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2
+        with:
+          workspaces: rust
+          key: link-transport
+      - uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
+        with:
+          path: ~/.cargo/bin/uniffi-bindgen-cs.exe
+          key: uniffi-bindgen-cs-${{ env.UNIFFI_BINDGEN_CS_REV }}-${{ runner.os }}
+      - shell: bash
+        run: command -v uniffi-bindgen-cs || cargo install uniffi-bindgen-cs --git https://github.com/NordSecurity/uniffi-bindgen-cs --rev "$UNIFFI_BINDGEN_CS_REV" --locked
+      - run: npm ci
+        working-directory: relay
+      - name: Start the relay with TLS
+        shell: bash
+        run: bash relay/scripts/dev-tls.sh 8788
+      - name: SslStream transport tests
+        shell: bash
+        env:
+          RELAY_URL: https://127.0.0.1:8788/relay/v1
+        run: bash native/link-tests/scripts/link-cs.sh
+
+  apple:
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 24
+          cache: npm
+          cache-dependency-path: relay/package-lock.json
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2
+        with:
+          workspaces: rust
+          key: link-transport
+      - run: npm ci
+        working-directory: relay
+      - name: Start the relay with TLS
+        run: bash relay/scripts/dev-tls.sh 8788
+      - name: Network.framework transport tests
+        env:
+          RELAY_URL: https://127.0.0.1:8788/relay/v1
+        run: bash native/link-tests/scripts/link-swift.sh
+
+  android:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 24
+          cache: npm
+          cache-dependency-path: relay/package-lock.json
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2
+        with:
+          workspaces: rust
+          key: link-transport-android
+      - run: rustup target add aarch64-linux-android x86_64-linux-android
+      - uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
+        with:
+          path: ~/.cargo/bin/cargo-ndk
+          key: cargo-ndk-${{ env.CARGO_NDK }}-${{ runner.os }}
+      - run: cargo ndk --version 2>/dev/null | grep -qx "cargo-ndk ${{ env.CARGO_NDK }}" || cargo install cargo-ndk --version ${{ env.CARGO_NDK }} --locked
+      - run: npm ci
+        working-directory: relay
+      # The emulator reaches the host at 10.0.2.2, so the relay listens on every address.
+      - name: Start the relay with TLS
+        run: bash relay/scripts/dev-tls.sh 8788 0.0.0.0
+      - name: Allow the emulator to use KVM
+        run: |
+          echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' | sudo tee /etc/udev/rules.d/99-kvm4all.rules
+          sudo udevadm control --reload-rules
+          sudo udevadm trigger --name-match=kvm
+      - name: SSLSocket transport tests on an emulator
+        uses: reactivecircus/android-emulator-runner@a421e43855164a8197daf9d8d40fe71c6996bb0d # v2.38.0
+        with:
+          api-level: 34
+          arch: x86_64
+          target: google_apis
+          script: env ANDROID_NDK_HOME=$ANDROID_NDK_LATEST_HOME bash native/link-tests/scripts/link-android.sh
