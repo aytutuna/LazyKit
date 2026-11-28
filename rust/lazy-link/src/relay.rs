@@ -3,9 +3,9 @@
 //! Required Notice: Copyright (c) 2026 Alazy Inc. (https://alazy.app)
 
 use crate::base64url;
-use crate::http;
 use crate::tls::TlsTransport;
-use crate::transport::{self, Transport};
+use crate::transport::Transport;
+use crate::wire::{REQUEST_TIMEOUT, Reply, Wire, retry_after};
 use async_trait::async_trait;
 use futures_util::{SinkExt, StreamExt};
 use sha2::{Digest, Sha256};
@@ -20,6 +20,7 @@ use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt, DuplexStream
 use tokio::sync::{Notify, mpsc};
 use tokio::task::JoinHandle;
 use tokio_tungstenite::WebSocketStream;
+use tokio_tungstenite::tungstenite::client::IntoClientRequest;
 use tokio_tungstenite::tungstenite::protocol::CloseFrame;
 use tokio_tungstenite::tungstenite::protocol::frame::coding::CloseCode;
 use tokio_tungstenite::tungstenite::{self, Message};
@@ -41,8 +42,6 @@ const KEEPALIVE: Duration = Duration::from_secs(30);
 /// The wait between tries while a woken host starts; it grows from the first to the second.
 const WAKE_POLL: Duration = Duration::from_secs(1);
 const WAKE_POLL_SLOW: Duration = Duration::from_secs(4);
-/// A larger Retry-After from the relay or anything in front of it is cut to this many seconds.
-const MAX_RETRY_AFTER: u64 = 3600;
 /// A connection that has said nothing for this long, not even the relay's answer to a ping, is dead.
 const DEAD: Duration = Duration::from_secs(60);
 
@@ -54,8 +53,6 @@ fn cut_off() -> Message {
     }))
 }
 
-/// How long a connect or a plain request may take before it counts as failed.
-const REQUEST_TIMEOUT: Duration = Duration::from_secs(15);
 // The app's proof may wait on the system (App Attest talks to Apple), so it gets longer.
 const ATTEST_TIMEOUT: Duration = Duration::from_secs(60);
 /// How much a stream holds before a write waits.
@@ -101,8 +98,12 @@ pub enum RelayError {
     AttestationRejected,
     /// The relay cannot check this kind of proof yet.
     AttestationUnavailable,
-    /// This computer has verified as many new groups this week as the relay allows an install.
-    AttestationInstallLimit,
+    /// There is no session, or it has ended: sign in again.
+    SignIn,
+    /// The group belongs to another account.
+    WrongAccount,
+    /// The session was made for another device than this one.
+    WrongDevice,
     /// The app's [`Attester`] could not make a proof.
     Attester(String),
     /// The purchase already pays for another group.
@@ -131,9 +132,9 @@ impl fmt::Display for RelayError {
             Self::AttestationUnavailable => {
                 f.write_str("the relay cannot check this platform's app proof yet")
             }
-            Self::AttestationInstallLimit => {
-                f.write_str("this install has verified too many new groups this week")
-            }
+            Self::SignIn => f.write_str("sign in first"),
+            Self::WrongAccount => f.write_str("the group belongs to another account"),
+            Self::WrongDevice => f.write_str("the session is for another device"),
             Self::Attester(e) => write!(f, "the app could not make its proof: {e}"),
             Self::PurchaseUsed => f.write_str("the purchase pays for another group"),
             Self::NotConfigured => f.write_str("the relay cannot check receipts of this store yet"),
@@ -157,13 +158,12 @@ impl From<tungstenite::Error> for RelayError {
                 woken: res.headers().contains_key("x-relay-woken"),
             },
             402 => Self::Capped,
-            403 if res
-                .headers()
-                .get(REASON)
-                .is_some_and(|v| v == "attestation-required") =>
-            {
+            401 if reason_is(res.headers().get(REASON), "sign-in") => Self::SignIn,
+            403 if reason_is(res.headers().get(REASON), "attestation-required") => {
                 Self::AttestationRequired
             }
+            403 if reason_is(res.headers().get(REASON), "wrong-account") => Self::WrongAccount,
+            403 if reason_is(res.headers().get(REASON), "wrong-device") => Self::WrongDevice,
             403 => Self::WrongGroup,
             429 => Self::TooManyStreams,
             503 => match retry_after(
@@ -179,10 +179,8 @@ impl From<tungstenite::Error> for RelayError {
     }
 }
 
-// The relay answers its per-address limit with 503 and a Retry-After in seconds.
-fn retry_after(value: Option<&str>) -> Option<Duration> {
-    let secs: u64 = value?.trim().parse().ok()?;
-    Some(Duration::from_secs(secs.min(MAX_RETRY_AFTER)))
+fn reason_is(value: Option<&tungstenite::http::HeaderValue>, reason: &str) -> bool {
+    value.is_some_and(|v| v == reason)
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -226,6 +224,27 @@ pub struct GroupStatus {
     pub paid_until: u64,
     pub paid: bool,
     pub capped: bool,
+    /// The account's own random token, which a store purchase carries (Apple's appAccountToken,
+    /// Google's obfuscatedAccountId) so the relay can tell whose it is.
+    pub account_token: String,
+}
+
+/// The kind of device a group is made on: the phone platforms also need the app check.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum GroupPlatform {
+    Apple,
+    Google,
+    Desktop,
+}
+
+impl GroupPlatform {
+    fn as_str(self) -> &'static str {
+        match self {
+            Self::Apple => "apple",
+            Self::Google => "google",
+            Self::Desktop => "desktop",
+        }
+    }
 }
 
 /// A random 32-digit hex id, the form of both group and device ids.
@@ -258,15 +277,9 @@ pub enum Attestation {
     },
     /// A Play Integrity token whose nonce is the challenge.
     Google { token: String },
-    /// The install's P-256 public key (65 bytes, uncompressed) and its signature (64 bytes, r then
-    /// s) over `lazy relay install v1`, a zero byte, the group, a zero byte and the challenge.
-    Desktop {
-        public_key: Vec<u8>,
-        signature: Vec<u8>,
-    },
 }
 
-/// Made by the app, which alone can reach App Attest, Play Integrity or the install's key.
+/// Made by the app, which alone can reach App Attest or Play Integrity.
 /// `challenge` is the text the relay issued; App Attest gets its UTF-8 bytes as the client data
 /// and Play Integrity the text as the nonce.
 #[async_trait]
@@ -277,14 +290,9 @@ pub trait Attester: Send + Sync {
 /// One device's view of the relay: its group and its own id.
 #[derive(Clone)]
 pub struct Relay {
-    /// As written in the base address, port included when there is one: what a Host header says.
-    authority: String,
-    host: String,
-    port: u16,
-    prefix: String,
+    wire: Wire,
     group: String,
     device: String,
-    transport: Arc<dyn Transport>,
     attester: Option<Arc<dyn Attester>>,
 }
 
@@ -298,34 +306,36 @@ impl Relay {
 
     /// Like [`system`](Self::system), with connections opened by `transport`.
     pub fn new(base: &str, group: &str, device: &str, transport: Arc<dyn Transport>) -> Self {
-        let secure = base.starts_with("https");
-        let rest = base.split_once("://").map_or(base, |(_, rest)| rest);
-        let (authority, path) = rest.split_once('/').unwrap_or((rest, ""));
-        let (host, port) = match authority.rsplit_once(':') {
-            Some((host, port)) if port.parse::<u16>().is_ok() => (host, port.parse().unwrap()),
-            _ => (authority, if secure { 443 } else { 80 }),
-        };
-        let path = path.trim_end_matches('/');
         Self {
-            authority: authority.into(),
-            host: host.into(),
-            port,
-            prefix: if path.is_empty() {
-                String::new()
-            } else {
-                format!("/{path}")
-            },
+            wire: Wire::new(base, transport),
             group: group.into(),
             device: device.into(),
-            transport,
             attester: None,
         }
+    }
+
+    /// Presents this account session (the token sign-in gave) on every request. The session is
+    /// made for one device, which has to be the `device` this relay was made with.
+    pub fn with_session(mut self, token: &str) -> Self {
+        self.wire.session = Some(token.into());
+        self
     }
 
     /// Lets the relay ask this device to prove itself the first time its group is used.
     pub fn with_attester(mut self, attester: Arc<dyn Attester>) -> Self {
         self.attester = Some(attester);
         self
+    }
+
+    /// Makes this account the owner of the group before its first use; claiming a group the
+    /// account already owns changes nothing. A group of another account is refused.
+    pub async fn claim(&self, platform: GroupPlatform) -> Result<GroupStatus, RelayError> {
+        let body = serde_json::json!({ "platform": platform.as_str() });
+        let (status, body) = self.api("PUT", "", Some(body.to_string())).await?;
+        match status {
+            409 => Err(RelayError::Refused(409)),
+            _ => status_of(status, &body),
+        }
     }
 
     pub async fn status(&self) -> Result<GroupStatus, RelayError> {
@@ -443,15 +453,24 @@ impl Relay {
         query: &str,
         within: Duration,
     ) -> Result<Socket, RelayError> {
-        let path = format!("{}/{room}?{query}", self.prefix);
+        let path = format!("{}/{room}?{query}", self.wire.prefix);
         let url = if query.starts_with("role=stream") {
-            format!("ws://{}{path}", self.authority)
+            format!("ws://{}{path}", self.wire.authority)
         } else {
-            format!("ws://{}{path}&group={}", self.authority, self.group)
+            format!("ws://{}{path}&group={}", self.wire.authority, self.group)
         };
+        let mut request = url
+            .into_client_request()
+            .map_err(|e| RelayError::Transport(e.to_string()))?;
+        if let Some(token) = &self.wire.session {
+            let value = format!("Bearer {token}")
+                .parse()
+                .map_err(|_| RelayError::Transport("the session token is not a header".into()))?;
+            request.headers_mut().insert("authorization", value);
+        }
         let connecting = async {
             let io = self.dial().await?;
-            Ok(tokio_tungstenite::client_async(url, io).await?.0)
+            Ok(tokio_tungstenite::client_async(request, io).await?.0)
         };
         match tokio::time::timeout(within, connecting).await {
             Ok(res) => res,
@@ -461,16 +480,8 @@ impl Relay {
         }
     }
 
-    // The connect runs as its own task: when the caller times out and goes away, a connection
-    // that finishes later still ends up here and is dropped, which closes it.
     async fn dial(&self) -> Result<DuplexStream, RelayError> {
-        let transport = self.transport.clone();
-        let host = self.host.clone();
-        let port = self.port;
-        tokio::spawn(async move { transport::open(&*transport, &host, port, &host).await })
-            .await
-            .map_err(|e| RelayError::Transport(e.to_string()))?
-            .map_err(|e| RelayError::Transport(e.0))
+        self.wire.dial().await.map_err(RelayError::Transport)
     }
 
     async fn api(
@@ -496,27 +507,11 @@ impl Relay {
         path: &str,
         body: Option<&str>,
     ) -> Result<Reply, RelayError> {
-        let path = format!("{}/group/{}{path}", self.prefix, self.group);
-        let request = async {
-            let io = self.dial().await?;
-            http::request(io, &self.authority, method, &path, body)
-                .await
-                .map_err(|e| RelayError::Transport(e.to_string()))
-        };
-        let answer = match tokio::time::timeout(REQUEST_TIMEOUT, request).await {
-            Ok(res) => res?,
-            Err(_) => {
-                return Err(RelayError::Transport(
-                    "the relay did not answer in time".into(),
-                ));
-            }
-        };
-        Ok(Reply {
-            status: answer.status,
-            retry_after: retry_after(answer.retry_after.as_deref()),
-            reason: answer.reason,
-            body: String::from_utf8_lossy(&answer.body).into_owned(),
-        })
+        let path = format!("/group/{}{path}", self.group);
+        self.wire
+            .call(method, &path, body)
+            .await
+            .map_err(RelayError::Transport)
     }
 
     // Gets a challenge from the relay, has the app answer it and hands the answer back, which
@@ -547,14 +542,6 @@ impl Relay {
             Attestation::Google { token } => {
                 serde_json::json!({ "platform": "google", "token": token })
             }
-            Attestation::Desktop {
-                public_key,
-                signature,
-            } => serde_json::json!({
-                "platform": "desktop",
-                "publicKey": base64url::encode(&public_key),
-                "signature": base64url::encode(&signature),
-            }),
         };
         body["challenge"] = challenge.into();
         let reply = self
@@ -563,19 +550,10 @@ impl Relay {
         match reply.into_result()?.0 {
             204 => Ok(()),
             422 => Err(RelayError::AttestationRejected),
-            429 => Err(RelayError::AttestationInstallLimit),
             501 => Err(RelayError::AttestationUnavailable),
             status => Err(RelayError::Refused(status)),
         }
     }
-}
-
-// What a group call came back with, before it is turned into a result.
-struct Reply {
-    status: u16,
-    retry_after: Option<Duration>,
-    reason: Option<String>,
-    body: String,
 }
 
 impl Reply {
@@ -584,8 +562,12 @@ impl Reply {
     }
 
     fn into_result(self) -> Result<(u16, String), RelayError> {
-        if self.wants_attestation() {
-            return Err(RelayError::AttestationRequired);
+        match (self.status, self.reason.as_deref()) {
+            (403, Some("attestation-required")) => return Err(RelayError::AttestationRequired),
+            (401, Some("sign-in")) => return Err(RelayError::SignIn),
+            (403, Some("wrong-account")) => return Err(RelayError::WrongAccount),
+            (403, Some("wrong-device")) => return Err(RelayError::WrongDevice),
+            _ => {}
         }
         if self.status == 503
             && let Some(retry_after) = self.retry_after
@@ -610,6 +592,7 @@ fn status_of(status: u16, body: &str) -> Result<GroupStatus, RelayError> {
         paid_until: num("paidUntil"),
         paid: flag("paid"),
         capped: flag("capped"),
+        account_token: v["accountToken"].as_str().unwrap_or_default().to_owned(),
     })
 }
 

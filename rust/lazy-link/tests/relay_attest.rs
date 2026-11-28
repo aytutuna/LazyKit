@@ -186,21 +186,12 @@ async fn a_new_group_proves_itself_and_is_let_in() {
 
 #[tokio::test]
 async fn the_proof_is_sent_as_the_platform_names_it() {
-    for (proof, platform) in [
-        (
-            Attestation::Google {
-                token: "tok".into(),
-            },
-            "google",
-        ),
-        (
-            Attestation::Desktop {
-                public_key: vec![4; 65],
-                signature: vec![9; 64],
-            },
-            "desktop",
-        ),
-    ] {
+    for (proof, platform) in [(
+        Attestation::Google {
+            token: "tok".into(),
+        },
+        "google",
+    )] {
         let (stand, url) = stand(204).await;
         let relay = Relay::new(&url, &random_id(), &random_id(), common::tcp())
             .with_attester(Fake::new(Ok(proof)));
@@ -245,13 +236,6 @@ async fn a_refused_proof_is_reported_as_such() {
             assert!(matches!(err, RelayError::AttestationUnavailable), "{err}");
         }
     }
-    let (_stand, url) = stand(429).await;
-    let relay = Relay::new(&url, &random_id(), &random_id(), common::tcp())
-        .with_attester(Fake::new(apple()));
-    assert!(matches!(
-        relay.connect(&room_id(b"r")).await,
-        Err(RelayError::AttestationInstallLimit)
-    ));
 }
 
 #[tokio::test]

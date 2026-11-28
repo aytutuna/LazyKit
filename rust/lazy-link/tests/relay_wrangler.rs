@@ -19,7 +19,7 @@ fn url() -> String {
 
 // A device that proves itself to the relay the way a computer does.
 fn device(group: &str) -> Relay {
-    Relay::new(&url(), group, &random_id(), common::tcp()).with_attester(common::Desktop::new())
+    Relay::new(&url(), group, &random_id(), common::tcp())
 }
 
 // Two devices of one person: same group, different device ids.

@@ -1,13 +1,9 @@
-//! What the integration tests supply in place of an app: a transport over plain TCP and an
-//! attester that proves a computer the way the relay's desktop check asks.
+//! What the integration tests supply in place of an app: a transport over plain TCP.
 #![allow(dead_code)]
 
 use async_trait::async_trait;
-use lazy_link::relay::{Attestation, Attester, random_id};
 use lazy_link::transport::{Connection, Transport, TransportError};
-use p256::ecdsa::{Signature, SigningKey, signature::Signer};
 use std::sync::Arc;
-use std::sync::atomic::{AtomicUsize, Ordering};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::TcpStream;
 use tokio::net::tcp::{OwnedReadHalf, OwnedWriteHalf};
@@ -69,43 +65,6 @@ impl Connection for TcpConnection {
 
     async fn close(&self) {
         let _ = self.write.lock().await.shutdown().await;
-    }
-}
-
-/// A computer's install key, signing what the relay's challenge asks for.
-pub struct Desktop {
-    key: SigningKey,
-    pub calls: AtomicUsize,
-}
-
-impl Desktop {
-    pub fn new() -> Arc<Self> {
-        let bytes = [random_id(), random_id()].concat();
-        let raw: Vec<u8> = (0..32)
-            .map(|i| u8::from_str_radix(&bytes[2 * i..2 * i + 2], 16).unwrap())
-            .collect();
-        Arc::new(Self {
-            key: SigningKey::from_slice(&raw).unwrap(),
-            calls: AtomicUsize::new(0),
-        })
-    }
-}
-
-#[async_trait]
-impl Attester for Desktop {
-    async fn attest(&self, group: &str, challenge: &str) -> Result<Attestation, String> {
-        self.calls.fetch_add(1, Ordering::SeqCst);
-        let message = format!("lazy relay install v1\0{group}\0{challenge}");
-        let signature: Signature = self.key.sign(message.as_bytes());
-        Ok(Attestation::Desktop {
-            public_key: self
-                .key
-                .verifying_key()
-                .to_encoded_point(false)
-                .as_bytes()
-                .to_vec(),
-            signature: signature.to_bytes().to_vec(),
-        })
     }
 }
 

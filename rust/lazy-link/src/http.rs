@@ -25,10 +25,14 @@ pub(crate) async fn request(
     method: &str,
     path: &str,
     json: Option<&str>,
+    bearer: Option<&str>,
 ) -> io::Result<Answer> {
     let mut head = format!(
         "{method} {path} HTTP/1.1\r\nHost: {host}\r\nConnection: close\r\nAccept: application/json\r\n"
     );
+    if let Some(token) = bearer {
+        head += &format!("Authorization: Bearer {token}\r\n");
+    }
     if let Some(body) = json {
         head += &format!(
             "Content-Type: application/json\r\nContent-Length: {}\r\n",
@@ -121,7 +125,7 @@ mod tests {
             server.write_all(reply).await.unwrap();
             server.shutdown().await.unwrap();
         });
-        request(client, "relay.test", "GET", "/x", None).await
+        request(client, "relay.test", "GET", "/x", None, None).await
     }
 
     #[tokio::test]
@@ -172,7 +176,7 @@ mod tests {
             server.shutdown().await.unwrap();
             String::from_utf8(buf[..n].to_vec()).unwrap()
         });
-        let a = request(client, "relay.test", "POST", "/p", Some("{\"a\":1}"))
+        let a = request(client, "relay.test", "POST", "/p", Some("{\"a\":1}"), None)
             .await
             .unwrap();
         assert_eq!(a.status, 204);

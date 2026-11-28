@@ -14,6 +14,8 @@ mod short_code;
 pub mod tls;
 #[cfg(feature = "relay")]
 pub mod transport;
+#[cfg(feature = "relay")]
+mod wire;
 
 pub use fingerprint::{
     FINGERPRINT_LENGTH, check_code, fingerprint_text, match_code, spaced, spki_fingerprint,
