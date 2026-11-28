@@ -135,7 +135,7 @@ describe("second review findings", () => {
     }
   });
 
-  it.fails("Q11 one nonce signs in two different identities", async () => {
+  it("Q11 one nonce signs in two different identities", async () => {
     const rig = memoryService();
     const raw = (await rig.service.nonce())!;
     const now = Math.floor(Date.now() / 1000);

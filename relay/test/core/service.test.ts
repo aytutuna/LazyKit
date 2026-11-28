@@ -416,9 +416,7 @@ describe("Apple and Google", () => {
     const a = await token("apple");
     const again = await token("apple", { sub: `other-${n}`, email: `x${n}@example.com` }, {}, a.raw);
     expect((await rig.service.social("apple", a.idToken, a.raw, LOGIN)).ok).toBe(true);
-    expect((await rig.service.social("apple", again.idToken, a.raw, LOGIN)).ok).toBe(true);
-    const sameSubject = await token("apple", { iat: Math.floor(Date.now() / 1000) - 1 }, {}, a.raw);
-    expect((await rig.service.social("apple", sameSubject.idToken, a.raw, LOGIN)).ok).toBe(false);
+    expect(await rig.service.social("apple", again.idToken, a.raw, LOGIN)).toEqual({ ok: false, why: "refused" });
   });
 
   it("takes a token once", async () => {

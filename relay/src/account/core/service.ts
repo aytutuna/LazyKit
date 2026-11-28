@@ -190,7 +190,8 @@ export class AccountService {
     }
     const id = await identityName(provider, ident.sub);
     const identity = this.dir.identity(id);
-    if (!(await identity.use(await sha256(idToken), ident.exp)) || !(await identity.use(`nonce:${await sha256(nonce)}`, ident.exp))) return { ok: false, why: "refused" };
+    // The nonce is spent for the whole service, not per subject: one sign-in each.
+    if (!(await identity.use(await sha256(idToken), ident.exp)) || !(await this.spendNonce(nonce))) return { ok: false, why: "refused" };
 
     const known = await identity.account();
     if (known) {
