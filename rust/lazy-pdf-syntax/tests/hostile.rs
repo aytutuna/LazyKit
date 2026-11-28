@@ -1255,3 +1255,29 @@ fn a_small_image_does_not_make_shared_globals_fail_for_a_big_one() {
     assert!(document.stream_data_limited(small, 4096, false).is_err());
     assert!(document.filter_chain(big).is_ok());
 }
+
+#[test]
+fn object_streams_that_fail_after_a_costly_stage_are_charged_for_it() {
+    let mut data = b"900 0 ".to_vec();
+    data.resize(60 << 20, b' ');
+    let packed = deflate(&data);
+    let mut pdf = TestPdf::with_pages(1);
+    for n in 20..40 {
+        pdf.stream_with(
+            n,
+            "/Type /ObjStm /N 1 /First 6 /Filter [/FlateDecode /Bogus]",
+            &packed,
+            None,
+            true,
+        );
+    }
+    let started = Instant::now();
+    let document = open(pdf.finish_without_xref());
+    let refused = document
+        .repairs()
+        .iter()
+        .filter(|r| r.contains("decode to too much"))
+        .count();
+    assert!(refused > 0, "{:?}", document.repairs().len());
+    must_finish_within(Duration::from_secs(20), started);
+}

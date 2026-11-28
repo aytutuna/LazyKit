@@ -21,6 +21,8 @@ pub struct ReadError {
     /// The stream's data or its decoded output passes the limit the caller gave, so a bigger limit may do. The
     /// problem stays `Damaged`.
     pub too_large: bool,
+    /// Bytes the filters had produced before the failure, for callers that budget the work.
+    pub work: usize,
 }
 
 impl ReadError {
@@ -29,6 +31,7 @@ impl ReadError {
             problem,
             detail: detail.into(),
             too_large: false,
+            work: 0,
         }
     }
 
@@ -37,6 +40,11 @@ impl ReadError {
             too_large: true,
             ..Self::damaged(detail)
         }
+    }
+
+    pub fn with_work(mut self, work: usize) -> Self {
+        self.work = work;
+        self
     }
 
     pub fn damaged(detail: impl Into<String>) -> Self {

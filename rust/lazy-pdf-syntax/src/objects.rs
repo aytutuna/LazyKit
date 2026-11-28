@@ -460,9 +460,10 @@ impl Document {
         let data = match self.stream_data_limited(stream, cap, false) {
             Ok(data) => data,
             Err(e) => {
-                // A decode that ran into its size limit did that much work; other failures stop early.
-                if fresh && e.too_large {
-                    self.first_object_stream_bytes += cap;
+                // What the filters had produced before the failure was work done, whatever the error.
+                if fresh {
+                    let work = if e.too_large { cap.max(e.work) } else { e.work };
+                    self.first_object_stream_bytes += work;
                 }
                 self.bad_object_streams.insert(number);
                 self.add_repair(format!(

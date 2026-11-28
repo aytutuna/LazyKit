@@ -158,15 +158,19 @@ impl Document {
                 .filters
                 .decode(&stage.filter, &stage.parms, &data, max_size, strict)
                 .map_err(|e| match e {
-                    DecodeError::Damaged(detail) => ReadError::damaged(detail),
-                    DecodeError::TooLarge(detail) => ReadError::too_large(detail),
+                    DecodeError::Damaged(detail) => ReadError::damaged(detail).with_work(output),
+                    DecodeError::TooLarge(detail) => {
+                        ReadError::too_large(detail).with_work(output.max(max_size))
+                    }
                     DecodeError::Unsupported(detail) => {
-                        ReadError::new(Problem::Unsupported, detail)
+                        ReadError::new(Problem::Unsupported, detail).with_work(output)
                     }
                 })?;
             output = output.saturating_add(data.len());
             if output > max_size.saturating_mul(CHAIN_OUTPUT_FACTOR) {
-                return Err(ReadError::too_large("The filters produce too much data."));
+                return Err(
+                    ReadError::too_large("The filters produce too much data.").with_work(output)
+                );
             }
         }
         // A stream with no filter, or only /Identity, is not held to the limit by any filter.
