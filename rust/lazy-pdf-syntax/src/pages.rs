@@ -110,19 +110,20 @@ struct Walk {
 
 /// How much a copy of the value costs: one for each object in it.
 fn weight(object: &Object) -> usize {
-    let dict_weight = |dict: &Dict| {
-        1 + dict
-            .entries()
-            .iter()
-            .map(|(_, v)| 1 + weight(v))
-            .sum::<usize>()
-    };
     match object {
         Object::Array(items) => 1 + items.iter().map(weight).sum::<usize>(),
         Object::Dict(dict) => dict_weight(dict),
         Object::Stream(stream) => dict_weight(&stream.dict),
         _ => 1,
     }
+}
+
+fn dict_weight(dict: &Dict) -> usize {
+    1 + dict
+        .entries()
+        .iter()
+        .map(|(_, v)| 1 + weight(v))
+        .sum::<usize>()
 }
 
 impl Page {
@@ -263,6 +264,10 @@ impl Page {
             // What a stream stores is read each time it is named, whatever it decodes to.
             let stored = document.raw_length(stream).max(1);
             if stored > input_room {
+                document.add_repair(format!(
+                    "Page {}: content streams past the size limit were left out",
+                    self.index + 1
+                ));
                 break;
             }
             input_room -= stored;
@@ -393,18 +398,14 @@ impl Document {
         let mut open: Vec<Level> = Vec::new();
         open.extend(self.walk_node(root, &Inherited::default(), 0, walk));
         while let Some(level) = open.last_mut() {
-            let kid = level
-                .kids
-                .as_array()
-                .and_then(|k| k.get(level.next))
-                .cloned();
-            let Some(kid) = kid else {
+            let kids = level.kids.clone();
+            let Some(kid) = kids.as_array().and_then(|k| k.get(level.next)) else {
                 open.pop();
                 continue;
             };
             level.next += 1;
             let (inherited, depth) = (level.inherited.clone(), level.depth + 1);
-            open.extend(self.walk_node(&kid, &inherited, depth, walk));
+            open.extend(self.walk_node(kid, &inherited, depth, walk));
         }
     }
 
@@ -433,31 +434,40 @@ impl Document {
             walk.skipped += 1;
             return None;
         };
-        walk.copied += ["Resources", "MediaBox", "CropBox", "Rotate"]
-            .iter()
-            .filter_map(|key| dict.get(key))
-            .map(weight)
-            .sum::<usize>();
-        if walk.copied > MAX_TREE_COPIED {
-            walk.skipped += 1;
-            return None;
+        // A direct node is part of the array that holds it, and a loop visits it again each time.
+        if reference.is_none() {
+            walk.copied += dict_weight(dict);
+            if walk.copied > MAX_TREE_COPIED {
+                walk.skipped += 1;
+                return None;
+            }
         }
         let kind = self.name_of(dict, "Type");
-        let own = |key: &str| {
-            dict.get(key)
-                .filter(|v| !matches!(v, Object::Null))
-                .map(|v| Arc::new(v.clone()))
-        };
-        let inherited = Inherited {
-            resources: own("Resources").or_else(|| inherited.resources.clone()),
-            media_box: own("MediaBox").or_else(|| inherited.media_box.clone()),
-            crop_box: own("CropBox").or_else(|| inherited.crop_box.clone()),
-            rotate: own("Rotate").or_else(|| inherited.rotate.clone()),
-        };
         if kind.as_deref() != Some(b"Page")
             && let Some(kids) = self.lookup(dict, "Kids")
             && kids.as_array().is_some()
         {
+            // Only a node that passes values down copies them.
+            walk.copied += ["Resources", "MediaBox", "CropBox", "Rotate"]
+                .iter()
+                .filter_map(|key| dict.get(key))
+                .map(weight)
+                .sum::<usize>();
+            if walk.copied > MAX_TREE_COPIED {
+                walk.skipped += 1;
+                return None;
+            }
+            let own = |key: &str| {
+                dict.get(key)
+                    .filter(|v| !matches!(v, Object::Null))
+                    .map(|v| Arc::new(v.clone()))
+            };
+            let inherited = Inherited {
+                resources: own("Resources").or_else(|| inherited.resources.clone()),
+                media_box: own("MediaBox").or_else(|| inherited.media_box.clone()),
+                crop_box: own("CropBox").or_else(|| inherited.crop_box.clone()),
+                rotate: own("Rotate").or_else(|| inherited.rotate.clone()),
+            };
             return Some(Level {
                 kids: kids.into_shared(),
                 next: 0,
@@ -479,7 +489,7 @@ impl Document {
         walk.pages.push(Page {
             reference,
             index: walk.pages.len(),
-            inherited,
+            inherited: inherited.clone(),
         });
         None
     }

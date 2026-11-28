@@ -810,3 +810,59 @@ fn streams_that_share_their_bytes_do_not_make_a_rewrite_grow_with_the_square() {
     });
     assert!(saved.bytes.len() < 2 * file.len(), "{}", saved.bytes.len());
 }
+
+#[test]
+fn direct_nodes_with_many_plain_keys_are_walked_in_bounded_time() {
+    let junk: String = (0..1000).map(|i| format!("/J{i} 0 ")).collect();
+    let node = format!("<</Kids 5 0 R {junk}>>");
+    let mut pdf = TestPdf::new();
+    pdf.obj(1, "<</Type /Catalog /Pages 2 0 R>>")
+        .obj(2, "<</Type /Pages /Kids 5 0 R>>")
+        .obj(5, &format!("[{node} {node}]"));
+    let started = Instant::now();
+    let mut document = open(pdf.finish());
+    assert!(document.pages().is_empty());
+    must_finish_within(Duration::from_secs(20), started);
+}
+
+#[test]
+fn pages_with_large_direct_resources_are_all_listed() {
+    let resources: String = (0..300).map(|i| format!("/F{i} 7 0 R ")).collect();
+    let count = 3000;
+    let kids: String = (10..10 + count).map(|n| format!("{n} 0 R ")).collect();
+    let mut pdf = TestPdf::new();
+    pdf.obj(1, "<</Type /Catalog /Pages 2 0 R>>").obj(
+        2,
+        &format!("<</Type /Pages /Kids [{kids}] /Count {count}>>"),
+    );
+    for n in 10..10 + count {
+        pdf.obj(
+            n,
+            &format!("<</Type /Page /Parent 2 0 R /Resources <<{resources}>>>>"),
+        );
+    }
+    let mut document = open(pdf.finish());
+    assert_eq!(document.pages().len(), count as usize);
+    assert!(document.repairs().is_empty());
+}
+
+#[test]
+fn contents_cut_short_by_the_size_limit_are_noted() {
+    let mut pdf = TestPdf::with_pages(1);
+    let mut data = deflate(b"q");
+    data.resize(1 << 20, 0);
+    pdf.stream_with(20, "/Filter /FlateDecode", &data, None, true);
+    pdf.obj(21, &format!("[{}]", "20 0 R ".repeat(600)));
+    let file = TestPdf::replace(&pdf.finish(), "/Contents 4 0 R", "/Contents 21 0 R");
+    let mut document = open(file);
+    let pages = document.pages();
+    pages[0].contents(&mut document);
+    assert!(
+        document
+            .repairs()
+            .iter()
+            .any(|r| r.contains("past the size limit")),
+        "{:?}",
+        document.repairs()
+    );
+}
