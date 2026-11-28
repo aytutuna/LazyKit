@@ -110,3 +110,17 @@ pub fn check(
         failures.join("\n")
     );
 }
+
+/// A file of testdata/pdf-write, after checking its hash against that directory's SHA256SUMS.
+pub fn data(name: &str) -> Vec<u8> {
+    use sha2::{Digest, Sha256};
+    let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../testdata/pdf-write");
+    let bytes = std::fs::read(dir.join(name)).unwrap();
+    let sums = std::fs::read_to_string(dir.join("SHA256SUMS")).unwrap();
+    let hash: String = Sha256::digest(&bytes)
+        .iter()
+        .map(|b| format!("{b:02x}"))
+        .collect();
+    assert!(sums.contains(&format!("{hash} *{name}")), "{name}");
+    bytes
+}

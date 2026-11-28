@@ -1,18 +1,9 @@
 use lazy_pdf_filters::ccitt::{self, Options};
 use lazy_pdf_filters::g4::{self, Code, encode_g4, stride};
-use sha2::{Digest, Sha256};
+mod common;
 
-fn data(name: &str) -> Vec<u8> {
-    let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../testdata/pdf-write");
-    let bytes = std::fs::read(dir.join(name)).unwrap();
-    let sums = std::fs::read_to_string(dir.join("SHA256SUMS")).unwrap();
-    let hash: String = Sha256::digest(&bytes)
-        .iter()
-        .map(|b| format!("{b:02x}"))
-        .collect();
-    assert!(sums.contains(&format!("{hash} *{name}")), "{name}");
-    bytes
-}
+use common::data;
+use sha2::{Digest, Sha256};
 
 /// The bit strings in order, then zero bits up to a byte boundary.
 fn bits(parts: &[&str]) -> Vec<u8> {

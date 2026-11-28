@@ -161,3 +161,144 @@ impl Codes {
         self.pending &= (1u32 << self.pending_bits) - 1;
     }
 }
+
+const HASH_BITS: u32 = 15;
+const WINDOW: usize = 32768;
+const MAX_MATCH: usize = 258;
+
+const LENGTH_BASE: [usize; 29] = [
+    3, 4, 5, 6, 7, 8, 9, 10, 11, 13, 15, 17, 19, 23, 27, 31, 35, 43, 51, 59, 67, 83, 99, 115, 131,
+    163, 195, 227, 258,
+];
+const LENGTH_EXTRA: [u32; 29] = [
+    0, 0, 0, 0, 0, 0, 0, 0, 1, 1, 1, 1, 2, 2, 2, 2, 3, 3, 3, 3, 4, 4, 4, 4, 5, 5, 5, 5, 0,
+];
+const DISTANCE_BASE: [usize; 30] = [
+    1, 2, 3, 4, 5, 7, 9, 13, 17, 25, 33, 49, 65, 97, 129, 193, 257, 385, 513, 769, 1025, 1537,
+    2049, 3073, 4097, 6145, 8193, 12289, 16385, 24577,
+];
+const DISTANCE_EXTRA: [u32; 30] = [
+    0, 0, 0, 0, 1, 1, 2, 2, 3, 3, 4, 4, 5, 5, 6, 6, 7, 7, 8, 8, 9, 9, 10, 10, 11, 11, 12, 12, 13,
+    13,
+];
+
+/// The Adler-32 checksum of RFC 1950.
+pub fn adler32(data: &[u8]) -> u32 {
+    let (mut a, mut b) = (1u32, 0u32);
+    for chunk in data.chunks(5552) {
+        for &byte in chunk {
+            a += byte as u32;
+            b += a;
+        }
+        a %= 65521;
+        b %= 65521;
+    }
+    b << 16 | a
+}
+
+/// A zlib stream with no compression library behind it: one fixed-Huffman block whose matches come from a greedy LZ77
+/// over a 32 KiB window, a table of the last position of each three-byte hash finding the candidate. Slower and
+/// looser than zlib, but the same bytes as Lazy Scan's Swift and C# encoders, which the PDF writers need more than the
+/// last few percent.
+pub fn zlib_fixed(data: &[u8]) -> Vec<u8> {
+    let mut bits = DeflateBits::default();
+    bits.put(1, 1); // BFINAL
+    bits.put(1, 2); // BTYPE 01: fixed Huffman codes
+    let count = data.len();
+    let mut head = vec![-1i64; 1 << HASH_BITS];
+    let mut i = 0;
+    while i < count {
+        let (mut length, mut distance) = (0, 0);
+        if i + 3 <= count {
+            let h = hash(data, i);
+            let candidate = head[h];
+            head[h] = i as i64;
+            if candidate >= 0 && i - candidate as usize <= WINDOW {
+                let candidate = candidate as usize;
+                let limit = MAX_MATCH.min(count - i);
+                while length < limit && data[candidate + length] == data[i + length] {
+                    length += 1;
+                }
+                distance = i - candidate;
+            }
+        }
+        if length >= 3 {
+            bits.matched(length, distance);
+            for k in i + 1..i + length {
+                if k + 3 <= count {
+                    head[hash(data, k)] = k as i64;
+                }
+            }
+            i += length;
+        } else {
+            bits.literal(data[i]);
+            i += 1;
+        }
+    }
+    bits.code(0, 7); // end of block
+    let mut output = vec![0x78, 0x01];
+    output.extend(bits.finish());
+    output.extend(adler32(data).to_be_bytes());
+    output
+}
+
+fn hash(data: &[u8], i: usize) -> usize {
+    let value = (data[i] as u32) << 16 | (data[i + 1] as u32) << 8 | data[i + 2] as u32;
+    (value.wrapping_mul(2654435761) >> (32 - HASH_BITS)) as usize
+}
+
+/// Deflate's bit order: fields least significant bit first, Huffman codes most significant bit first.
+#[derive(Default)]
+struct DeflateBits {
+    bytes: Vec<u8>,
+    buffer: u64,
+    filled: u32,
+}
+
+impl DeflateBits {
+    fn put(&mut self, value: u32, count: u32) {
+        self.buffer |= (value as u64) << self.filled;
+        self.filled += count;
+        while self.filled >= 8 {
+            self.bytes.push(self.buffer as u8);
+            self.buffer >>= 8;
+            self.filled -= 8;
+        }
+    }
+
+    fn code(&mut self, code: u32, length: u32) {
+        let reversed = code.reverse_bits() >> (32 - length);
+        self.put(reversed, length);
+    }
+
+    fn literal(&mut self, value: u8) {
+        if value < 144 {
+            self.code(0x30 + value as u32, 8);
+        } else {
+            self.code(0x190 + value as u32 - 144, 9);
+        }
+    }
+
+    fn matched(&mut self, length: usize, distance: usize) {
+        let symbol = LENGTH_BASE.iter().rposition(|&b| b <= length).unwrap();
+        if symbol < 23 {
+            self.code(symbol as u32 + 1, 7); // symbols 257-279: 7-bit codes 1-23
+        } else {
+            self.code(0xC0 + symbol as u32 - 23, 8); // symbols 280-285: 8-bit codes 0xC0 on
+        }
+        self.put((length - LENGTH_BASE[symbol]) as u32, LENGTH_EXTRA[symbol]);
+        let slot = DISTANCE_BASE.iter().rposition(|&b| b <= distance).unwrap();
+        self.code(slot as u32, 5);
+        self.put(
+            (distance - DISTANCE_BASE[slot]) as u32,
+            DISTANCE_EXTRA[slot],
+        );
+    }
+
+    fn finish(mut self) -> Vec<u8> {
+        if self.filled > 0 {
+            self.bytes.push(self.buffer as u8);
+        }
+        self.bytes
+    }
+}
