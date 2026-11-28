@@ -274,7 +274,6 @@ impl Document {
                     ..entry
                 },
             );
-            *self.object_starts.borrow_mut() = None;
             return (Some(value), generation);
         }
         self.add_repair(format!("Object {number} could not be read."));
@@ -319,17 +318,16 @@ impl Document {
     fn next_object_start(&self, offset: u64) -> u64 {
         let mut cache = self.object_starts.borrow_mut();
         let starts = cache.get_or_insert_with(|| {
-            let mut starts: Vec<u64> = self
-                .entries
-                .values()
-                .filter(|e| e.kind == EntryKind::InUse)
-                .map(|e| e.offset)
-                .chain(
-                    self.scan
-                        .iter()
-                        .flat_map(|s| s.objects.values().map(|o| o.0 as u64)),
-                )
-                .collect();
+            // Once a scan exists its offsets are real headers; the listed ones may be wrong.
+            let mut starts: Vec<u64> = match &self.scan {
+                Some(scan) => scan.objects.values().map(|o| o.0 as u64).collect(),
+                None => self
+                    .entries
+                    .values()
+                    .filter(|e| e.kind == EntryKind::InUse)
+                    .map(|e| e.offset)
+                    .collect(),
+            };
             starts.sort_unstable();
             starts.dedup();
             starts

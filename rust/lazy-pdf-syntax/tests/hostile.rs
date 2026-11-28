@@ -901,8 +901,7 @@ fn contents_cut_short_by_the_size_limit_are_noted() {
     );
 }
 
-#[test]
-fn an_object_listed_at_a_wrong_offset_does_not_clip_its_neighbour_once_the_parse_budget_is_spent() {
+fn wrongly_listed_neighbours(read_first: u32) {
     let mut pdf = TestPdf::new();
     pdf.obj(1, "<</Type /Catalog /Pages 2 0 R>>")
         .obj(2, "<</Type /Pages /Kids [3 0 R] /Count 1>>")
@@ -924,9 +923,21 @@ fn an_object_listed_at_a_wrong_offset_does_not_clip_its_neighbour_once_the_parse
     for n in 100..3100 {
         document.get(n);
     }
-    assert!(document.get(11).is_some());
-    let a = document.get(10).expect("object 10 reads");
+    let other = if read_first == 10 { 11 } else { 10 };
+    assert!(document.get(read_first).is_some());
+    let a = document.get(other).expect("both objects read");
+    let a = if other == 10 {
+        a
+    } else {
+        document.get(10).unwrap()
+    };
     assert!(a.as_dict().is_some_and(|d| d.get("S").is_some()));
+}
+
+#[test]
+fn an_object_listed_at_a_wrong_offset_does_not_clip_its_neighbour_once_the_parse_budget_is_spent() {
+    wrongly_listed_neighbours(10);
+    wrongly_listed_neighbours(11);
 }
 
 #[test]
@@ -984,4 +995,110 @@ fn a_rebuild_does_not_decode_every_object_stream_in_full() {
         document.repairs().len()
     );
     must_finish_within(Duration::from_secs(20), started);
+}
+
+// Objects listed a few bytes off, read after the parse budget was spent by unclosed strings.
+fn misplaced(count: u32, shift: i64) -> (usize, Duration) {
+    let mut out: Vec<u8> = b"%PDF-1.4
+"
+    .to_vec();
+    let mut at: Vec<(u32, usize)> = Vec::new();
+    let mut put = |out: &mut Vec<u8>, num: u32, body: &str| {
+        at.push((num, out.len()));
+        out.extend_from_slice(
+            format!(
+                "{num} 0 obj
+{body}
+endobj
+"
+            )
+            .as_bytes(),
+        );
+    };
+    put(&mut out, 1, "<</Type /Catalog /Pages 2 0 R>>");
+    put(&mut out, 2, "<</Type /Pages /Kids [3 0 R] /Count 1>>");
+    put(&mut out, 3, "<</Type /Page /Parent 2 0 R>>");
+    for k in 0..80 {
+        put(&mut out, 100 + k, "(");
+    }
+    for k in 0..count {
+        put(&mut out, 100_000 + k, "<</V 1>>");
+    }
+    let xref = out.len();
+    let max = 100_000 + count;
+    let mut table = vec![None; max as usize + 1];
+    for (num, pos) in &at {
+        let pos = if *num >= 100_000 {
+            *pos as i64 + shift
+        } else {
+            *pos as i64
+        };
+        table[*num as usize] = Some(pos);
+    }
+    out.extend_from_slice(
+        format!(
+            "xref
+0 {}
+",
+            max + 1
+        )
+        .as_bytes(),
+    );
+    for (i, entry) in table.iter().enumerate() {
+        match entry {
+            Some(pos) => out.extend_from_slice(
+                format!(
+                    "{pos:010} 00000 n
+"
+                )
+                .as_bytes(),
+            ),
+            None if i == 0 => out.extend_from_slice(
+                b"0000000000 65535 f
+",
+            ),
+            None => out.extend_from_slice(
+                b"0000000000 00000 f
+",
+            ),
+        }
+    }
+    out.extend_from_slice(
+        format!(
+            "trailer
+<</Size {} /Root 1 0 R>>
+startxref
+{xref}
+%%EOF
+",
+            max + 1
+        )
+        .as_bytes(),
+    );
+    let mut document = open(out);
+    for k in 0..80 {
+        document.get(100 + k);
+    }
+    let started = Instant::now();
+    let found = (0..count)
+        .filter(|k| {
+            document
+                .get(100_000 + k)
+                .is_some_and(|o| o.as_dict().is_some())
+        })
+        .count();
+    (found, started.elapsed())
+}
+
+#[test]
+fn objects_listed_early_are_found_in_linear_time_once_the_parse_budget_is_spent() {
+    let (found, took) = misplaced(40_000, -2);
+    assert_eq!(found, 40_000);
+    must_finish_within(Duration::from_secs(20), Instant::now() - took);
+}
+
+#[test]
+fn objects_listed_late_are_found_once_the_parse_budget_is_spent() {
+    let (found, _) = misplaced(10_000, 1);
+    assert_eq!(found, 10_000);
 }
