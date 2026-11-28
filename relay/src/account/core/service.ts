@@ -14,7 +14,7 @@ type Async<T> = { [K in keyof T]: T[K] extends (...a: infer A) => infer R ? (...
 // row or the object itself all fit.
 export type AddressPort = Async<Pick<AddressCore, "requestSignup" | "requestSignin" | "requestLink" | "requestEmail" | "requestOldCheck" | "issueUndo" | "takeCode" | "bindAccount" | "unbind" | "account" | "passwordTry" | "passwordGood">>;
 export type AccountPort = Async<Pick<AccountCore, "create" | "exists" | "addIdentity" | "open" | "verifyPassword" | "check" | "alive" | "sessions" | "revoke" | "setPassword" | "authorizeDelete" | "authorizeEmailChange" | "mailAddress" | "setEmail" | "me" | "identityIds" | "export" | "erase">>;
-export type IdentityPort = Async<Pick<IdentityCore, "account" | "bind" | "use" | "erase">>;
+export type IdentityPort = Async<Pick<IdentityCore, "account" | "bind" | "claim" | "release" | "use" | "erase">>;
 
 export type OncePort = Async<{ take(until: number): boolean }>;
 
@@ -209,11 +209,16 @@ export class AccountService {
     const fresh = randomId();
     const account = this.dir.account(fresh);
     // The link is written before the account that holds it, so deleting the account cannot miss it.
-    await identity.bind(fresh);
+    // If another first sign-in of this subject got there first, this one signs into that account.
+    const holder = await identity.claim(fresh);
+    if (holder !== fresh) {
+      const r = await this.dir.account(holder).open(login);
+      return r.ok ? this.entered(r, holder) : { ok: false, why: "refused" };
+    }
     await account.create(fresh, a.typed, undefined, { id, provider });
     if (!(await a.port.bindAccount(fresh, a.typed))) {
       await account.erase();
-      await identity.erase();
+      await identity.release(fresh);
       return { ok: false, why: "refused" };
     }
     return this.entered(await account.open(login), fresh);

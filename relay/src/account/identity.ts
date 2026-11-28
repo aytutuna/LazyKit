@@ -19,6 +19,14 @@ export class Identity extends DurableObject<Cloudflare.Env> {
     return this.core.bind(...a);
   }
 
+  claim(...a: Parameters<IdentityCore["claim"]>) {
+    return this.core.claim(...a);
+  }
+
+  release(...a: Parameters<IdentityCore["release"]>) {
+    return this.core.release(...a);
+  }
+
   use(...a: Parameters<IdentityCore["use"]>) {
     return this.core.use(...a);
   }

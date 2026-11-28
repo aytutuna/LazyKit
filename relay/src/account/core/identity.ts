@@ -37,6 +37,21 @@ export class IdentityCore {
     return true;
   }
 
+  // Binds the subject to this account unless it is already bound; answers whichever account holds it.
+  async claim(account: string): Promise<string> {
+    if (this.s.account) return this.s.account;
+    this.s.account = account;
+    await this.store.put(this.s);
+    return account;
+  }
+
+  // Gives the subject up, but only if it is still this account's.
+  async release(account: string): Promise<void> {
+    if (this.s.account !== account) return;
+    this.s.account = undefined;
+    await this.store.put(this.s);
+  }
+
   async erase(): Promise<void> {
     this.s = { used: {} };
     await this.store.erase();
