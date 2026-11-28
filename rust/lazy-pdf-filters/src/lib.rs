@@ -10,6 +10,7 @@ pub mod dct;
 pub mod encode;
 mod error;
 pub mod flate;
+pub mod g4;
 pub mod jbig2;
 mod lzw;
 mod output;
