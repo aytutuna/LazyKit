@@ -18,6 +18,8 @@ const MAX_DECODED_OBJECT_STREAM_BYTES: usize = 1 << 30;
 /// streams of spaces must not inflate each of them to the full size.
 const MAX_FIRST_OBJECT_STREAM_BYTES: usize = 64 << 20;
 /// Reading an object can need another (a stream's /Length, an object stream); a longer chain is a trap.
+/// How far past a listed offset an object's header is looked for.
+const HEADER_WINDOW: usize = 128;
 const MAX_LOAD_DEPTH: usize = 32;
 const MAX_FLATTENED_NODES: usize = 4096;
 /// What parses that fail may read in all: an unclosed string runs to the end of the data, and every object listed
@@ -288,11 +290,11 @@ impl Document {
         if offset >= self.data.len() as u64 {
             return None;
         }
-        let mut lexer = Lexer::new(&self.data, offset as usize);
-        let (found, generation) = lexer.read_object_header().ok()?;
+        let (found, generation, body) = self.header_at(offset as usize)?;
         if number != 0 && found != number {
             return None;
         }
+        let mut lexer = Lexer::new(&self.data, body);
         // Spans may overlap (a header inside a string), so what parses read in all is capped: once it is spent a
         // parse stops where the next object the file lists starts, which a valid object never reaches.
         if self.parse_budget_spent() {
@@ -312,6 +314,15 @@ impl Document {
         Some((value, generation))
     }
 
+    /// The "n g obj" header at `offset`: the number, the generation and where the body starts. The look stops
+    /// after HEADER_WINDOW bytes, so a long comment or white space at a listed offset costs nothing.
+    fn header_at(&self, offset: usize) -> Option<(u32, u16, usize)> {
+        let end = offset.saturating_add(HEADER_WINDOW).min(self.data.len());
+        let mut lexer = Lexer::new(&self.data[..end], offset);
+        let (number, generation) = lexer.read_object_header().ok()?;
+        Some((number, generation, lexer.pos))
+    }
+
     fn charge_parse(&self, bytes: usize) {
         self.parsed_bytes
             .set(self.parsed_bytes.get().saturating_add(bytes));
@@ -329,9 +340,9 @@ impl Document {
                 .filter(|(number, e)| {
                     e.kind == EntryKind::InUse
                         && (e.offset as usize) < self.data.len()
-                        && Lexer::new(&self.data, e.offset as usize)
-                            .read_object_header()
-                            .is_ok_and(|(found, _)| found == **number)
+                        && self
+                            .header_at(e.offset as usize)
+                            .is_some_and(|(found, _, _)| found == **number)
                 })
                 .map(|(_, e)| e.offset)
                 .chain(

@@ -1167,3 +1167,55 @@ fn one_object_stream_that_does_not_decode_does_not_refuse_the_next() {
         document.repairs()
     );
 }
+
+#[test]
+fn entries_listed_at_a_long_comment_cost_nothing_once_the_parse_budget_is_spent() {
+    let (comment, unclosed, count) = (4usize << 20, 80u32, 20_000u32);
+    let mut out: Vec<u8> = b"%PDF-1.4\n".to_vec();
+    let mut at: Vec<(u32, usize)> = Vec::new();
+    let mut put = |out: &mut Vec<u8>, num: u32, body: &str| {
+        at.push((num, out.len()));
+        out.extend_from_slice(format!("{num} 0 obj\n{body}\nendobj\n").as_bytes());
+    };
+    put(&mut out, 1, "<</Type /Catalog /Pages 2 0 R>>");
+    put(&mut out, 2, "<</Type /Pages /Kids [3 0 R] /Count 1>>");
+    put(&mut out, 3, "<</Type /Page /Parent 2 0 R>>");
+    put(&mut out, 5, "<</V 5>>");
+    for k in 0..unclosed {
+        put(&mut out, 100 + k, "(");
+    }
+    let comment_at = out.len();
+    out.push(b'%');
+    out.resize(out.len() + comment, b'a');
+    out.push(b'\n');
+    let xref = out.len();
+    let max = 200_000 + count;
+    let mut table = vec![None; max as usize];
+    for (num, pos) in &at {
+        table[*num as usize] = Some(*pos);
+    }
+    for k in 0..count {
+        table[(200_000 + k) as usize] = Some(comment_at);
+    }
+    out.extend_from_slice(format!("xref\n0 {max}\n").as_bytes());
+    for (i, entry) in table.iter().enumerate() {
+        match entry {
+            Some(pos) => out.extend_from_slice(format!("{pos:010} 00000 n\r\n").as_bytes()),
+            None if i == 0 => out.extend_from_slice(b"0000000000 65535 f\r\n"),
+            None => out.extend_from_slice(b"0000000000 00000 f\r\n"),
+        }
+    }
+    out.extend_from_slice(
+        format!("trailer\n<</Size {max} /Root 1 0 R>>\nstartxref\n{xref}\n%%EOF\n").as_bytes(),
+    );
+    let mut document = open(out);
+    let started = Instant::now();
+    for k in 0..unclosed {
+        document.get(100 + k);
+    }
+    for k in 0..count {
+        document.get(200_000 + k);
+    }
+    assert!(document.get(5).is_some_and(|o| o.as_dict().is_some()));
+    must_finish_within(Duration::from_secs(5), started);
+}
