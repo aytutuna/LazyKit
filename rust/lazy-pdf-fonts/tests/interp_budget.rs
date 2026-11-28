@@ -71,7 +71,7 @@ fn direct_category_per_do() {
 fn soft_mask_per_q() {
     let junk: String = "1 ".repeat(200_000);
     let content: String = std::iter::once("/G1 gs\n".to_string())
-        .chain(std::iter::repeat("q Q\n".to_string()).take(200))
+        .chain(std::iter::repeat_n("q Q\n".to_string(), 200))
         .collect();
     let mut doc = page(
         content.as_bytes(),
