@@ -25,6 +25,9 @@ use tokio_tungstenite::tungstenite::protocol::CloseFrame;
 use tokio_tungstenite::tungstenite::protocol::frame::coding::CloseCode;
 use tokio_tungstenite::tungstenite::{self, Message};
 
+/// The relay, up to the version.
+pub const BASE: &str = "https://alazy.app/relay/v1";
+
 /// The largest frame the relay forwards; a larger one closes the stream.
 pub const MAX_FRAME: usize = 64 * 1024;
 /// Streams open at once in one room.
@@ -297,9 +300,19 @@ pub struct Relay {
 }
 
 impl Relay {
-    /// The relay over TLS that the system trusts (see [`TlsTransport::system`]). `base` is the
-    /// relay's address up to the version, for example `https://alazy.app/relay/v1`.
-    pub fn system(base: &str, group: &str, device: &str) -> Result<Self, RelayError> {
+    /// The relay at alazy.app over TLS that the system trusts (see [`TlsTransport::system`]).
+    pub fn system(group: &str, device: &str) -> Result<Self, RelayError> {
+        Self::system_at(BASE, group, device)
+    }
+
+    /// The same at another address, up to the version. Only the native tests (the `dev-roots`
+    /// feature) reach a relay that is not alazy.app's.
+    #[cfg(feature = "dev-roots")]
+    pub fn at(base: &str, group: &str, device: &str) -> Result<Self, RelayError> {
+        Self::system_at(base, group, device)
+    }
+
+    fn system_at(base: &str, group: &str, device: &str) -> Result<Self, RelayError> {
         let transport = TlsTransport::system().map_err(|e| RelayError::Transport(e.0))?;
         Ok(Self::new(base, group, device, Arc::new(transport)))
     }

@@ -17,7 +17,7 @@ case "$(uname -s)" in
 esac
 
 cd "$root/rust"
-cargo build --locked -p lazy-link-ffi
+cargo build --locked -p lazy-link-ffi --features dev-roots
 cp "target/debug/$lib" "$out/"
 uniffi-bindgen-cs --library "$out/$lib" --out-dir "$out"
 

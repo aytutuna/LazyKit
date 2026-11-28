@@ -70,20 +70,20 @@ class RelayTest {
 
     private inner class Person(val email: String, val device: String, val session: Session) {
         fun relay(group: String, device: String = this.device, session: Session = this.session) =
-            Relay(base, group, device, session.token, null)
+            Relay.newAt(base, group, device, session.token, null)
     }
 
     // A new account, signed up through the service with the code from the dev sink.
     private suspend fun signUp(): Person {
         val email = "${id().take(12)}@example.com"
         val device = id()
-        val account = Account(accountBase, null)
+        val account = Account.newAt(accountBase, null)
         account.signup(email, Bot.Turnstile("dev"))
         return Person(email, device, account.confirmSignup(email, codeFor(email), password, who(device)))
     }
 
     private suspend fun signIn(email: String, device: String) =
-        Account(accountBase, null).signinPassword(email, password, who(device))
+        Account.newAt(accountBase, null).signinPassword(email, password, who(device))
 
     @Test
     fun aSignedInAccountClaimsAGroupAndSeesItsAllowance() = runBlocking {
@@ -101,12 +101,12 @@ class RelayTest {
     fun wrongPasswordsAndMissingSessionsAreRefusedByName() = runBlocking {
         val person = signUp()
         try {
-            Account(accountBase, null).signinPassword(person.email, "not the password", who(id()))
+            Account.newAt(accountBase, null).signinPassword(person.email, "not the password", who(id()))
             throw AssertionError("a wrong password was accepted")
         } catch (_: AccountFailure.WrongCredentials) {
         }
         try {
-            Relay(base, id(), person.device, "", null).status()
+            Relay.newAt(base, id(), person.device, "", null).status()
             throw AssertionError("a request without a session was answered")
         } catch (_: RelayFailure.SignIn) {
         }

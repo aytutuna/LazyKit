@@ -32,7 +32,7 @@ public class RelayTests
     private sealed record Person(string Email, string Device, Session Session)
     {
         public Relay RelayFor(string group, string? device = null, Session? session = null, AppAttester? attester = null) =>
-            new(Base, group, device ?? Device, (session ?? Session).Token, attester);
+            Relay.NewAt(Base, group, device ?? Device, (session ?? Session).Token, attester);
     }
 
     // A new account, signed up through the service with the code from the dev sink.
@@ -40,14 +40,14 @@ public class RelayTests
     {
         string email = $"{NewId()[..12]}@example.com";
         string device = NewId();
-        var account = new Account(AccountBase, null);
+        var account = Account.NewAt(AccountBase, null);
         await account.Signup(email, new Bot.Turnstile("dev"));
         var session = await account.ConfirmSignup(email, await CodeFor(email), Password, Who(device));
         return new Person(email, device, session);
     }
 
     private static async Task<Session> SignIn(string email, string device) =>
-        await new Account(AccountBase, null).SigninPassword(email, Password, Who(device));
+        await Account.NewAt(AccountBase, null).SigninPassword(email, Password, Who(device));
 
     [Fact]
     public async Task ASignedInAccountClaimsAGroupAndSeesItsAllowance()
@@ -68,9 +68,9 @@ public class RelayTests
     {
         var person = await SignUp();
         await Assert.ThrowsAsync<AccountFailure.WrongCredentials>(() =>
-            new Account(AccountBase, null).SigninPassword(person.Email, "not the password", Who(NewId())));
+            Account.NewAt(AccountBase, null).SigninPassword(person.Email, "not the password", Who(NewId())));
         string group = NewId();
-        await Assert.ThrowsAsync<RelayFailure.SignIn>(() => new Relay(Base, group, person.Device, "", null).Status());
+        await Assert.ThrowsAsync<RelayFailure.SignIn>(() => Relay.NewAt(Base, group, person.Device, "", null).Status());
     }
 
     [Fact]

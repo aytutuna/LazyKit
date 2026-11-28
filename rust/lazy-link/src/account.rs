@@ -13,6 +13,9 @@ use std::fmt;
 use std::sync::Arc;
 use std::time::Duration;
 
+/// The account service, up to the version.
+pub const BASE: &str = "https://alazy.app/account/v1";
+
 /// Who is signing in: which Lazy app, which of its devices (32 lowercase hex characters, the id the
 /// relay calls need to match) and an optional name for the session list.
 #[derive(Debug, Clone)]
@@ -228,9 +231,19 @@ pub struct Account {
 }
 
 impl Account {
-    /// The service over TLS that the system trusts. `base` is its address up to the version, for
-    /// example `https://alazy.app/account/v1`.
-    pub fn system(base: &str) -> Result<Self, AccountError> {
+    /// The service at alazy.app over TLS that the system trusts.
+    pub fn system() -> Result<Self, AccountError> {
+        Self::system_at(BASE)
+    }
+
+    /// The same at another address, up to the version. Only the native tests (the `dev-roots`
+    /// feature) reach a service that is not alazy.app's.
+    #[cfg(feature = "dev-roots")]
+    pub fn at(base: &str) -> Result<Self, AccountError> {
+        Self::system_at(base)
+    }
+
+    fn system_at(base: &str) -> Result<Self, AccountError> {
         let transport = TlsTransport::system().map_err(|e| AccountError::Transport(e.0))?;
         Ok(Self::new(base, Arc::new(transport)))
     }

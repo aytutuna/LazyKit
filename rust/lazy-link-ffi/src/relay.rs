@@ -172,24 +172,53 @@ pub struct Relay {
     inner: relay::Relay,
 }
 
-// Calls run on a Tokio runtime of their own: the stream tasks need one.
-#[uniffi::export(async_runtime = "tokio")]
+// A relay at another address, up to the version. Only in the native test builds.
+#[cfg(feature = "dev-roots")]
+#[uniffi::export]
 impl Relay {
-    /// `base` is the relay's address up to the version, `https://alazy.app/relay/v1`. `session` is
-    /// the token an account sign-in gave, made for this `device`.
     #[uniffi::constructor]
-    pub fn new(
+    pub fn new_at(
         base: String,
         group: String,
         device: String,
         session: String,
         attester: Option<Arc<dyn AppAttester>>,
     ) -> Result<Arc<Self>, RelayFailure> {
-        let mut inner = relay::Relay::system(&base, &group, &device)?.with_session(&session);
+        Self::made(
+            relay::Relay::at(&base, &group, &device)?,
+            &session,
+            attester,
+        )
+    }
+}
+
+impl Relay {
+    fn made(
+        inner: relay::Relay,
+        session: &str,
+        attester: Option<Arc<dyn AppAttester>>,
+    ) -> Result<Arc<Self>, RelayFailure> {
+        let mut inner = inner.with_session(session);
         if let Some(attester) = attester {
             inner = inner.with_attester(Arc::new(ForeignAttester(attester)));
         }
         Ok(Arc::new(Self { inner }))
+    }
+}
+
+// Calls run on a Tokio runtime of their own: the stream tasks need one.
+#[uniffi::export(async_runtime = "tokio")]
+impl Relay {
+    /// The relay at alazy.app. `session` is the token an account sign-in gave, made for this
+    /// `device`.
+    #[uniffi::constructor]
+    pub fn new(
+        group: String,
+        device: String,
+        session: String,
+        attester: Option<Arc<dyn AppAttester>>,
+    ) -> Result<Arc<Self>, RelayFailure> {
+        Self::made(relay::Relay::system(&group, &device)?, &session, attester)
     }
 
     /// Makes the signed-in account the owner of this group, before its first use.

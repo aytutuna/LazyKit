@@ -169,17 +169,35 @@ pub struct Account {
     inner: account::Account,
 }
 
-#[uniffi::export(async_runtime = "tokio")]
+// A service at another address, up to the version. Only in the native test builds.
+#[cfg(feature = "dev-roots")]
+#[uniffi::export]
 impl Account {
-    /// `base` is the service's address up to the version, `https://alazy.app/account/v1`.
-    /// `session` is a token from a sign-in, for the calls that need one; sign-in calls need none.
     #[uniffi::constructor]
-    pub fn new(base: String, session: Option<String>) -> Result<Arc<Self>, AccountFailure> {
-        let mut inner = account::Account::system(&base)?;
+    pub fn new_at(base: String, session: Option<String>) -> Result<Arc<Self>, AccountFailure> {
+        Self::made(account::Account::at(&base)?, session)
+    }
+}
+
+impl Account {
+    fn made(
+        mut inner: account::Account,
+        session: Option<String>,
+    ) -> Result<Arc<Self>, AccountFailure> {
         if let Some(token) = session {
             inner = inner.with_session(&token);
         }
         Ok(Arc::new(Self { inner }))
+    }
+}
+
+#[uniffi::export(async_runtime = "tokio")]
+impl Account {
+    /// The service at alazy.app. `session` is a token from a sign-in, for the calls that need
+    /// one; sign-in calls need none.
+    #[uniffi::constructor]
+    pub fn new(session: Option<String>) -> Result<Arc<Self>, AccountFailure> {
+        Self::made(account::Account::system()?, session)
     }
 
     pub async fn nonce(&self) -> Result<String, AccountFailure> {

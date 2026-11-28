@@ -41,7 +41,7 @@ struct Person {
     let session: Session
 
     func relay(_ group: String, device: String? = nil, session: Session? = nil, attester: AppAttester? = nil) throws -> Relay {
-        try Relay(base: base, group: group, device: device ?? self.device, session: (session ?? self.session).token, attester: attester)
+        try Relay.newAt(base: base, group: group, device: device ?? self.device, session: (session ?? self.session).token, attester: attester)
     }
 }
 
@@ -49,14 +49,14 @@ struct Person {
 func signUp() async throws -> Person {
     let email = "\(newId().prefix(12))@example.com"
     let device = newId()
-    let account = try Account(base: accountBase, session: nil)
+    let account = try Account.newAt(base: accountBase, session: nil)
     try await account.signup(email: email, botCheck: .turnstile(token: "dev"))
     let session = try await account.confirmSignup(email: email, code: try await codeFor(email), password: password, who: who(device))
     return Person(email: email, device: device, session: session)
 }
 
 func signIn(_ email: String, _ device: String) async throws -> Session {
-    try await Account(base: accountBase, session: nil).signinPassword(email: email, password: password, who: who(device))
+    try await Account.newAt(base: accountBase, session: nil).signinPassword(email: email, password: password, who: who(device))
 }
 
 func claimAndStatus() async {
@@ -77,12 +77,12 @@ func refusedByName() async {
     do {
         let person = try await signUp()
         do {
-            _ = try await Account(base: accountBase, session: nil).signinPassword(email: person.email, password: "not the password", who: who(newId()))
+            _ = try await Account.newAt(base: accountBase, session: nil).signinPassword(email: person.email, password: "not the password", who: who(newId()))
             check(false, "a wrong password was accepted")
         } catch AccountFailure.WrongCredentials {
         }
         do {
-            _ = try await Relay(base: base, group: newId(), device: person.device, session: "", attester: nil).status()
+            _ = try await Relay.newAt(base: base, group: newId(), device: person.device, session: "", attester: nil).status()
             check(false, "a request without a session was answered")
         } catch RelayFailure.SignIn {
         }

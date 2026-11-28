@@ -10,7 +10,7 @@ rm -rf "$out"
 mkdir -p "$out"
 
 cd "$root/rust"
-cargo build --locked -p lazy-link-ffi
+cargo build --locked -p lazy-link-ffi --features dev-roots
 cargo run --locked -q -p uniffi-bindgen -- generate --library target/debug/liblazy_link_ffi.dylib --language swift --out-dir "$out/gen"
 
 swiftc -swift-version 5 -O \
