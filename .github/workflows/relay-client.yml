@@ -30,16 +30,9 @@ jobs:
           workspaces: rust
       - run: npm ci
         working-directory: relay
+      # The relay with the account service on a dev mail sink: tests sign up and read their codes from it.
       - name: Start the relay
-        working-directory: relay
-        run: |
-          npx wrangler dev --local --ip 127.0.0.1 --port 8787 > ../wrangler.log 2>&1 &
-          for i in $(seq 60); do
-            curl -sf "http://127.0.0.1:8787/relay/v1/group/$(printf 'a%.0s' $(seq 32))" > /dev/null && exit 0
-            sleep 1
-          done
-          cat ../wrangler.log
-          exit 1
+        run: bash relay/scripts/dev-account.sh 8787 8790
       - name: Clippy
         working-directory: rust
         run: cargo clippy --locked -p lazy-link --features relay --all-targets -- -D warnings
