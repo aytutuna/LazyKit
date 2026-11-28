@@ -3,8 +3,8 @@ mod common;
 use common::cff_builder::{self, Part};
 use common::{b, check, golden, n, outline, s};
 use lazy_pdf_fonts::{
-    Bounds, CffFont, TrueTypeFont, cff_strings, mac_glyphs, standard_encoding,
-    standard_encoding_sids,
+    Bounds, CffFont, SubsetStatus, TrueTypeFont, cff_strings, mac_glyphs, standard_encoding,
+    standard_encoding_sids, subset,
 };
 
 fn standard_names_dump() -> String {
@@ -254,4 +254,89 @@ fn true_type(data: &[u8]) -> String {
 fn true_type_is_the_golden_file() {
     let font = common::golden_bytes("programs/synthetic.ttf");
     check("programs/truetype-output.txt", &true_type(&font));
+}
+
+fn hex_lines(out: &mut String, data: &[u8]) {
+    let digits = common::hex(data);
+    let mut i = 0;
+    while i < digits.len() {
+        *out += &format!("  {}\n", &digits[i..(i + 128).min(digits.len())]);
+        i += 128;
+    }
+}
+
+fn pairs(map: &std::collections::BTreeMap<i64, i64>) -> String {
+    map.iter()
+        .map(|(k, v)| format!("{k}:{v}"))
+        .collect::<Vec<_>>()
+        .join(",")
+}
+
+fn table_offset(font: &[u8], tag: &str) -> usize {
+    let count = (usize::from(font[4]) << 8) | usize::from(font[5]);
+    for i in 0..count {
+        let at = 12 + 16 * i;
+        if &font[at..at + 4] == tag.as_bytes() {
+            return u32::from_be_bytes([font[at + 8], font[at + 9], font[at + 10], font[at + 11]])
+                as usize;
+        }
+    }
+    panic!("{tag}");
+}
+
+fn with_fs_type(font: &[u8], fs_type: u16) -> Vec<u8> {
+    let mut copy = font.to_vec();
+    let os2 = table_offset(&copy, "OS/2");
+    copy[os2 + 8..os2 + 10].copy_from_slice(&fs_type.to_be_bytes());
+    copy
+}
+
+fn subset_dump(data: &[u8]) -> String {
+    let mut out = String::new();
+    let cases: Vec<(&str, Vec<u8>, Vec<i64>)> = vec![
+        ("composite", data.to_vec(), vec![3]),
+        ("two", data.to_vec(), vec![2, 5]),
+        ("matched", data.to_vec(), vec![6]),
+        ("none", data.to_vec(), vec![]),
+        ("odd", data.to_vec(), vec![1, 99999, -4, 4]),
+        ("forbidden", with_fs_type(data, 2), vec![1]),
+        ("whole", with_fs_type(data, 0x100), vec![1]),
+        ("garbage", vec![1, 2, 3], vec![1]),
+    ];
+    for (label, font, ids) in cases {
+        let r = subset(&font, &ids, 0);
+        out += &format!(
+            "subset {label} {:?} map {} length {}\n",
+            r.status,
+            pairs(&r.glyph_map),
+            r.data.len()
+        );
+        hex_lines(&mut out, &r.data);
+        if r.status == SubsetStatus::Ok
+            && let Some(again) = TrueTypeFont::parse(&r.data, 0)
+        {
+            out += &format!(
+                "  parsed glyphs {} ps {} family {} upem {}\n",
+                again.glyph_count,
+                s(again.post_script_name().as_deref()),
+                s(again.family_name().as_deref()),
+                again.units_per_em
+            );
+            for to in r.glyph_map.values() {
+                out += &format!(
+                    "  glyph {to} advance {} box {} {}\n",
+                    again.advance(*to),
+                    bounds(again.bounds(*to)),
+                    outline(again.outline(*to).as_ref())
+                );
+            }
+        }
+    }
+    out
+}
+
+#[test]
+fn subset_is_the_golden_file() {
+    let font = common::golden_bytes("programs/synthetic.ttf");
+    check("programs/subset-output.txt", &subset_dump(&font));
 }
